@@ -34,7 +34,7 @@ Add as a git dependency in your `deps.edn`:
 
 ```clojure
 io.github.hive-agi/hive-emacs
-{:git/tag "v0.1.0" :git/sha "..."}
+{:git/tag "v0.1.0" :git/sha "94641c5d79ee80b713762569c88ca2b75eda7756"}
 ```
 
 hive-mcp's classpath scanner will auto-detect and initialize the addon.
