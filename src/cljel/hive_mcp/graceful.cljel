@@ -1,0 +1,252 @@
+(ns hive-mcp.graceful
+  "Safe failure and graceful degradation patterns.
+
+   Implements CLARITY-Y (Yield safe failure) patterns:
+   - with-fallback: Execute primary expression with fallback
+   - with-timeout: Execute body with timeout protection
+   - safe-call: Call function catching all errors
+   - retry: Retry with exponential backoff
+   - circuit-breaker: Protect against repeated failures
+   - Result type: Success/failure monad")
+
+(require 'cl-lib)
+
+;;; Customization
+
+(defgroup hive-mcp-graceful nil
+  "Graceful degradation settings for hive-mcp."
+  :group 'hive-mcp
+  :prefix "hive-mcp-graceful-")
+
+(defcustom hive-mcp-graceful-log-errors t
+  "If non-nil, log errors to *Messages* buffer."
+  :type 'boolean
+  :group 'hive-mcp-graceful)
+
+(defcustom hive-mcp-graceful-default-timeout 5000
+  "Default timeout in milliseconds."
+  :type 'integer
+  :group 'hive-mcp-graceful)
+
+(defcustom hive-mcp-graceful-default-retries 3
+  "Default number of retries."
+  :type 'integer
+  :group 'hive-mcp-graceful)
+
+(defcustom hive-mcp-graceful-default-delay 100
+  "Default initial delay in milliseconds."
+  :type 'integer
+  :group 'hive-mcp-graceful)
+
+(defcustom hive-mcp-graceful-backoff-multiplier 2.0
+  "Multiplier for exponential backoff."
+  :type 'float
+  :group 'hive-mcp-graceful)
+
+(defcustom hive-mcp-graceful-max-delay 10000
+  "Maximum delay in milliseconds between retries."
+  :type 'integer
+  :group 'hive-mcp-graceful)
+
+;;; Internal Functions
+
+(defn- log-error [context error-data]
+  "Log error with CONTEXT and ERROR-DATA if logging is enabled."
+  (when hive-mcp-graceful-log-errors
+    (message "[hive-mcp-graceful] %s: %s"
+             context
+             (error-message-string error-data))))
+
+(defn- calculate-delay [attempt base-delay]
+  "Calculate delay for ATTEMPT with BASE-DELAY using exponential backoff."
+  (let [delay (* base-delay
+                 (expt hive-mcp-graceful-backoff-multiplier
+                       (dec attempt)))]
+    (min delay hive-mcp-graceful-max-delay)))
+
+;;; Macros — vector params + list construction (Clojure backtick != Elisp backquote)
+
+(defmacro hive-mcp-with-fallback [primary-expr fallback-expr]
+  "Execute PRIMARY-EXPR, returning FALLBACK-EXPR on any error."
+  (let [err-sym (gensym "err-")]
+    (list 'condition-case err-sym
+          primary-expr
+          (list 'error
+                (list 'hive-mcp-graceful--log-error "fallback triggered" err-sym)
+                fallback-expr))))
+
+(defmacro hive-mcp-with-timeout [timeout-ms & body]
+  "Execute BODY with timeout of TIMEOUT-MS milliseconds."
+  (let [timeout-val (gensym "timeout-")]
+    (list 'let (list (list timeout-val (list '/ timeout-ms 1000.0)))
+          (list 'with-timeout
+                (list timeout-val
+                      '(progn
+                         (when hive-mcp-graceful-log-errors
+                           (message "[hive-mcp-graceful] timeout exceeded"))
+                         nil))
+                (cons 'progn body)))))
+
+;;; Functions
+
+(defn safe-call [fn & args]
+  "Call FN with ARGS, catching any errors and returning nil."
+  (condition-case err
+    (apply fn args)
+    (error
+      (hive-mcp-graceful--log-error
+        (format "safe-call %s" (if (symbolp fn) fn "lambda"))
+        err)
+      nil)))
+
+(defn retry [fn &optional max-retries delay-ms]
+  "Call FN with retries on failure using exponential backoff."
+  (let [max-attempts (or max-retries hive-mcp-graceful-default-retries)
+        base-delay (or delay-ms hive-mcp-graceful-default-delay)
+        attempt 1
+        result nil
+        success nil]
+    (while (and (not success) (<= attempt max-attempts))
+      (condition-case err
+        (do
+          (setq result (funcall fn))
+          (setq success t))
+        (error
+          (hive-mcp-graceful--log-error
+            (format "retry attempt %d/%d" attempt max-attempts)
+            err)
+          (when (< attempt max-attempts)
+            (let [delay (hive-mcp-graceful--calculate-delay attempt base-delay)]
+              (sleep-for (/ delay 1000.0))))
+          (cl-incf attempt))))
+    (if success result nil)))
+
+(cl-defun hive-mcp-retry-async (fn callback &key max-retries delay-ms on-error)
+  "Call FN asynchronously with retries, invoking CALLBACK on success."
+  (let [max-attempts (or max-retries hive-mcp-graceful-default-retries)
+        base-delay (or delay-ms hive-mcp-graceful-default-delay)]
+    (hive-mcp-retry-async--attempt fn callback on-error 1 max-attempts base-delay)))
+
+(defn- retry-async--attempt [fn callback on-error attempt max-attempts base-delay]
+  "Internal: Execute retry ATTEMPT for async retry."
+  (condition-case err
+    (let [result (funcall fn)]
+      (when callback
+        (funcall callback result)))
+    (error
+      (hive-mcp-graceful--log-error
+        (format "async retry attempt %d/%d" attempt max-attempts)
+        err)
+      (if (< attempt max-attempts)
+        (let [delay (hive-mcp-graceful--calculate-delay attempt base-delay)]
+          (run-at-time
+            (/ delay 1000.0) nil
+            #'hive-mcp-retry-async--attempt
+            fn callback on-error (inc attempt) max-attempts base-delay))
+        ;; All retries exhausted
+        (when on-error
+          (funcall on-error err))))))
+
+;;; Result Type
+
+(cl-defstruct (hive-mcp-result
+               (:constructor hive-mcp-result--create)
+               (:copier nil))
+  "Result monad - Success or Failure."
+  (ok nil :type boolean)
+  (value nil)
+  (error nil))
+
+(defn result-success [value]
+  "Create a successful result containing VALUE."
+  (hive-mcp-result--create :ok t :value value :error nil))
+
+(defn result-failure [error]
+  "Create a failed result containing ERROR."
+  (hive-mcp-result--create :ok nil :value nil :error error))
+
+(defn result-try [fn & args]
+  "Call FN with ARGS, returning an hive-mcp-result."
+  (condition-case err
+    (hive-mcp-result-success (apply fn args))
+    (error
+      (hive-mcp-result-failure err))))
+
+(defn result-map [result fn]
+  "Apply FN to RESULT's value if ok, returning a new result."
+  (if (hive-mcp-result-ok result)
+    (hive-mcp-result-try fn (hive-mcp-result-value result))
+    result))
+
+(defn result-unwrap-or [result default]
+  "Return RESULT's value if ok, otherwise DEFAULT."
+  (if (hive-mcp-result-ok result)
+    (hive-mcp-result-value result)
+    default))
+
+;;; Circuit Breaker
+
+(cl-defstruct (hive-mcp-circuit-breaker
+               (:constructor hive-mcp-circuit-breaker--create)
+               (:copier nil))
+  "Circuit breaker for protecting against repeated failures."
+  (name "default" :type string)
+  (failure-count 0 :type integer)
+  (threshold 5 :type integer)
+  (state :closed :type symbol)
+  (last-failure nil)
+  (reset-timeout 60 :type number))
+
+(defn circuit-breaker-create [name &optional threshold reset-timeout]
+  "Create a circuit breaker named NAME."
+  (hive-mcp-circuit-breaker--create
+    :name name
+    :threshold (or threshold 5)
+    :reset-timeout (or reset-timeout 60)))
+
+(defn circuit-breaker-call [breaker fn & args]
+  "Call FN with ARGS through circuit BREAKER."
+  (let [state (hive-mcp-circuit-breaker-state breaker)
+        last-fail (hive-mcp-circuit-breaker-last-failure breaker)
+        reset-time (hive-mcp-circuit-breaker-reset-timeout breaker)]
+    ;; Check if we should try to reset
+    (when (and (eq state :open)
+               last-fail
+               (> (- (float-time) last-fail) reset-time))
+      (setf (hive-mcp-circuit-breaker-state breaker) :half-open)
+      (setq state :half-open))
+
+    (cond
+      ;; Circuit is open - fail fast
+      (eq state :open)
+      (do
+        (when hive-mcp-graceful-log-errors
+          (message "[hive-mcp-graceful] circuit %s is open, failing fast"
+                   (hive-mcp-circuit-breaker-name breaker)))
+        nil)
+
+      ;; Circuit is closed or half-open - try the call
+      :else
+      (condition-case err
+        (let [result (apply fn args)]
+          ;; Success - reset breaker
+          (setf (hive-mcp-circuit-breaker-failure-count breaker) 0)
+          (setf (hive-mcp-circuit-breaker-state breaker) :closed)
+          result)
+        (error
+          ;; Failure - record and maybe open
+          (cl-incf (hive-mcp-circuit-breaker-failure-count breaker))
+          (setf (hive-mcp-circuit-breaker-last-failure breaker) (float-time))
+          (when (>= (hive-mcp-circuit-breaker-failure-count breaker)
+                    (hive-mcp-circuit-breaker-threshold breaker))
+            (setf (hive-mcp-circuit-breaker-state breaker) :open)
+            (when hive-mcp-graceful-log-errors
+              (message "[hive-mcp-graceful] circuit %s opened after %d failures"
+                       (hive-mcp-circuit-breaker-name breaker)
+                       (hive-mcp-circuit-breaker-failure-count breaker))))
+          (hive-mcp-graceful--log-error
+            (format "circuit %s" (hive-mcp-circuit-breaker-name breaker))
+            err)
+          nil)))))
+
+(provide 'hive-mcp-graceful)

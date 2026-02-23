@@ -1,0 +1,6 @@
+{:addon/id           "hive.emacs"
+ :addon/type         :native
+ :addon/init-ns      "hive-emacs.init"
+ :addon/init-fn      "init-as-addon!"
+ :addon/capabilities #{:tools :editor :health-reporting}
+ :addon/description  "Emacs vessel — IEditor, daemon management, CIDER/Magit/Projectile tools"}

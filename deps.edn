@@ -1,0 +1,23 @@
+{:paths ["src" "resources"]
+
+ :deps {org.clojure/clojure {:mvn/version "1.12.1"}
+        com.taoensso/timbre {:mvn/version "6.8.0"}
+
+        ;; DataScript for daemon store (DaemonDS)
+        datascript/datascript {:mvn/version "1.7.8"}
+        org.replikativ/persistent-sorted-set {:mvn/version "0.4.119"}
+
+        ;; hive-dsl — Result monad, rescue/guard DSL
+        io.github.hive-agi/hive-dsl
+        {:git/tag "v0.3.1" :git/sha "0e28484fa8552a5712a5c3325a8a1f2449c2b6a3"}
+
+        ;; Process execution for emacsclient subprocess
+        babashka/process {:mvn/version "0.6.25"}}
+
+ :aliases
+ {:test
+  {:extra-paths ["test"]
+   :extra-deps {io.github.cognitect-labs/test-runner
+                {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                org.clojure/test.check {:mvn/version "1.1.1"}}
+   :main-opts ["-m" "cognitect.test-runner"]}}}
