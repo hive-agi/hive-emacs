@@ -405,3 +405,5 @@ Example:
         (insert (format "  %s\n" dir)))
       (goto-char (point-min)))
     (display-buffer buf)))
+
+(provide 'hive-mcp-addons)

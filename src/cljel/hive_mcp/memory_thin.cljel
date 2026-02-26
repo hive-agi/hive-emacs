@@ -1,0 +1,785 @@
+(ns hive-mcp-memory
+  "Thin API layer for Chroma-backed memory, delegating to IMemoryStore protocol.
+
+Design principles (SOLID/CLARITY):
+- Single Responsibility: Only handles memory API surface + CIDER delegation
+- Open/Closed: Storage backend via delegate function, not hardcoded
+- Dependency Inversion: Depends on IMemoryStore protocol abstraction, not concrete impl
+- Thread-safe: All shared state in defvar with condition-case guards
+
+Previous: 919 LOC handling JSON file I/O, caching, CRUD across 8 files
+Current: Single file providing complete API + MCP delegation
+
+Storage is now delegated to Clojure MCP server -> Chroma.
+This module provides:
+  - Project ID resolution (from .hive-project.edn or path hash)
+  - Scope tag helpers (global, domain, project)
+  - Duration helpers (TTL categories, expiration calculation)
+  - Full CRUD: add, get, query, update, delete
+  - Deduplication (find-duplicate via content hash)
+  - Duration management (set-duration, promote, demote)
+  - Expiration (query-expiring, cleanup-expired)
+  - Semantic search (search via Chroma embeddings)
+  - Audit logging (log-access, helpful/unhelpful, helpfulness-ratio)
+  - Migration (migrate-project delegated to server)
+  - Convenience functions (add-note, add-snippet, etc.)
+  - Public aliases for API/workflow compatibility
+
+DEPENDENCY: Requires hive-mcp Clojure server with Chroma storage.
+DELEGATE: CIDER (nREPL) or custom storage-delegate function.")
+
+(require 'project)
+(require 'seq)
+(require 'parseedn)
+
+;; Compatibility: plistp was added in Emacs 29
+(unless (fboundp 'plistp)
+  (defun plistp (object)
+    "Return non-nil if OBJECT is a plist."
+    (and (listp object)
+         (or (null object)
+             (and (keywordp (car object))
+                  (plistp (cddr object)))))))
+
+;;; ============================================================
+;;; Customization
+;;; ============================================================
+
+(defgroup hive-mcp-memory nil
+  "Memory and persistence settings for hive-mcp."
+  :group 'hive-mcp
+  :prefix "hive-mcp-memory-")
+
+(defcustom hive-mcp-conversation-max-entries 100
+  "Maximum conversation log entries per project.
+Sent to server as configuration hint."
+  :type 'integer
+  :group 'hive-mcp-memory)
+
+(defcustom hive-mcp-project-config-file ".hive-project.edn"
+  "Filename for project-specific hive-mcp configuration.
+This file should contain an EDN map with at least :project-id key.
+Example: {:project-id \"my-project\" :aliases [\"old-name\"]}"
+  :type 'string
+  :group 'hive-mcp-memory)
+
+;;; ============================================================
+;;; Duration/Lifespan Constants
+;;; ============================================================
+
+(defconst durations '(ephemeral short medium long permanent)
+  "Valid duration categories, ordered shortest to longest.
+These correspond to Chroma metadata TTL values.")
+
+(defcustom hive-mcp-memory-duration-days
+  '((ephemeral . 1) (short . 7) (medium . 30) (long . 90) (permanent . nil))
+  "Days before expiration per duration. nil = never expires.
+Used for client-side duration display and hints."
+  :type '(alist :key-type symbol :value-type (choice integer (const nil)))
+  :group 'hive-mcp-memory)
+
+(defcustom hive-mcp-memory-default-duration 'medium
+  "Default duration for new entries."
+  :type 'symbol
+  :group 'hive-mcp-memory)
+
+;;; ============================================================
+;;; Internal Variables
+;;; ============================================================
+
+(defvar hive-mcp-memory--project-config-cache (make-hash-table :test 'equal)
+  "Cache for project config files. Maps project-root to parsed config.")
+
+(defvar hive-mcp-memory--cache (make-hash-table :test 'equal)
+  "Compatibility variable for hive-mcp-reset.
+In thin/Chroma-delegate mode this is unused; storage is server-side.
+Kept so (clrhash hive-mcp-memory--cache) in hive-mcp.el doesn't error.")
+
+(defvar hive-mcp-memory-add-hook nil
+  "Hook run after adding memory entry. Args: TYPE ENTRY PROJECT-ID.")
+
+;;; ============================================================
+;;; EDN Parser (using parseedn library)
+;;; ============================================================
+
+(defn- -parse-edn-string [str]
+  "Parse an EDN string STR into elisp using parseedn.
+Returns a hash-table for maps, vectors for vectors, etc."
+  (parseedn-read-str str))
+
+(defn- -edn-get [edn key]
+  "Get KEY from EDN hash-table or alist.
+KEY should be a keyword symbol like :project-id."
+  (cond
+    ((hash-table-p edn) (gethash key edn))
+    ((listp edn) (cdr (assoc key edn)))
+    (t nil)))
+
+;;; ============================================================
+;;; Project Configuration
+;;; ============================================================
+
+(defn- -read-project-config [&optional project-root]
+  "Read and parse .hive-project.edn from PROJECT-ROOT.
+Returns alist of config values, or nil if file doesn't exist.
+Caches result per project root."
+  (let* [root (or project-root (hive-mcp-memory---get-project-root))
+         cached (gethash root hive-mcp-memory--project-config-cache 'not-found)]
+    (if (not (eq cached 'not-found))
+        cached
+      (let* [config-path (when root
+                           (expand-file-name hive-mcp-project-config-file root))
+             config (when (and config-path (file-exists-p config-path))
+                      (condition-case nil
+                          (hive-mcp-memory---parse-edn-string
+                           (with-temp-buffer
+                             (insert-file-contents config-path)
+                             (buffer-string)))
+                        (error nil)))]
+        (puthash root config hive-mcp-memory--project-config-cache)
+        config))))
+
+(defn- -get-stable-project-id [&optional project-root]
+  "Get stable project ID from config file at PROJECT-ROOT.
+Returns the :project-id value from .hive-project.edn, or nil if not found."
+  (when-let* [config (hive-mcp-memory---read-project-config project-root)
+              project-id (hive-mcp-memory---edn-get config :project-id)]
+    (if (stringp project-id)
+        project-id
+      (symbol-name project-id))))
+
+(defn clear-config-cache []
+  "Clear the project config cache. Call after editing .hive-project.edn."
+  (interactive)
+  (clrhash hive-mcp-memory--project-config-cache)
+  (message "Cleared hive-mcp project config cache"))
+
+;;; ============================================================
+;;; Project Helpers
+;;; ============================================================
+
+(defn- -get-project-root []
+  "Get current project root, or nil if not in a project."
+  (when-let* [proj (project-current)]
+    (project-root proj)))
+
+(defn- -get-project-name []
+  "Get current project name (directory basename), or nil if not in a project."
+  (when-let* [root (hive-mcp-memory---get-project-root)]
+    (file-name-nondirectory (directory-file-name root))))
+
+(defn- -project-id [&optional project-root]
+  "Return unique ID for PROJECT-ROOT (defaults to current project).
+Resolution order:
+  1. Stable :project-id from .hive-project.edn (survives renames)
+  2. Fallback: SHA1 hash of absolute path (filesystem-safe)
+Returns \"global\" if not in a project.
+PROJECT-ROOT must be a string path or nil."
+  ;; CLARITY-I: Validate input type (fix for stringp bug from MCP)
+  (let [root (cond
+               ((stringp project-root) project-root)
+               ((null project-root) (hive-mcp-memory---get-project-root))
+               (t (progn
+                    (message "[hive-mcp] Warning: project-root not a string: %S" project-root)
+                    (hive-mcp-memory---get-project-root))))]
+    (if root
+        (or (hive-mcp-memory---get-stable-project-id root)
+            (substring (sha1 (expand-file-name root)) 0 16))
+      "global")))
+
+(defn- -project-id-hash [&optional project-root]
+  "Return SHA1 hash ID for PROJECT-ROOT (ignores config).
+Use this for migration when you need the path-based hash.
+PROJECT-ROOT must be a string path or nil."
+  ;; CLARITY-I: Validate input type (fix for stringp bug from MCP)
+  (let [root (cond
+               ((stringp project-root) project-root)
+               ((null project-root) (hive-mcp-memory---get-project-root))
+               (t (progn
+                    (message "[hive-mcp] Warning: project-root not a string: %S" project-root)
+                    (hive-mcp-memory---get-project-root))))]
+    (if root
+        (substring (sha1 (expand-file-name root)) 0 16)
+      "global")))
+
+;;; ============================================================
+;;; Scope System
+;;; ============================================================
+;;
+;; Scopes allow layered memory isolation:
+;;   scope:global         - universal (SOLID, DDD, etc.)
+;;   scope:domain:<name>  - cross-project within domain
+;;   scope:project:<name> - single project only
+;;
+;; Query behavior: returns union of applicable scopes
+
+(defn- -make-scope-tag [level &optional name]
+  "Create a scope tag for LEVEL with optional NAME.
+LEVEL is one of: global, domain, project.
+NAME is required for domain and project levels."
+  (pcase level
+    ('global "scope:global")
+    ('domain (format "scope:domain:%s" name))
+    ('project (format "scope:project:%s" name))
+    (_ (error "Invalid scope level: %s" level))))
+
+(defn- -parse-scope-tag [tag]
+  "Parse a scope TAG into (level . name) cons.
+Returns nil if TAG is not a scope tag."
+  (cond
+    ((string= tag "scope:global") '(global . nil))
+    ((string-prefix-p "scope:domain:" tag)
+     (cons 'domain (substring tag (length "scope:domain:"))))
+    ((string-prefix-p "scope:project:" tag)
+     (cons 'project (substring tag (length "scope:project:"))))
+    (t nil)))
+
+(defn- -has-scope-tag-p [tags]
+  "Return non-nil if TAGS contains any scope tag."
+  (seq-some (lambda (tag) (string-prefix-p "scope:" tag)) tags))
+
+(defn- -inject-project-scope [tags]
+  "Inject current project scope into TAGS if no scope present.
+Returns modified tags list."
+  (if (hive-mcp-memory---has-scope-tag-p tags)
+      tags  ; Already has scope
+    (if-let* [project-name (hive-mcp-memory---get-project-name)]
+        (cons (hive-mcp-memory---make-scope-tag 'project project-name) tags)
+      tags)))  ; Not in project, leave as-is (global)
+
+(defn- -applicable-scope-tags [&optional project-name domain-name]
+  "Return list of scope tags applicable to current context.
+PROJECT-NAME defaults to current project.
+DOMAIN-NAME is optional domain filter.
+Always includes scope:global."
+  (let [tags (list "scope:global")]
+    (when domain-name
+      (push (hive-mcp-memory---make-scope-tag 'domain domain-name) tags))
+    (when-let* [proj (or project-name (hive-mcp-memory---get-project-name))]
+      (push (hive-mcp-memory---make-scope-tag 'project proj) tags))
+    tags))
+
+;;; ============================================================
+;;; Duration Helpers
+;;; ============================================================
+
+(defn- -calculate-expires [duration]
+  "Calculate expiration timestamp for DURATION.
+Returns ISO 8601 timestamp or nil for permanent entries.
+Used for client-side display; actual TTL managed by Chroma."
+  (let [days (alist-get duration hive-mcp-memory-duration-days)]
+    (cond
+      ((null days) nil)  ; permanent - never expires
+      ((= days 0) (format-time-string "%FT%T%z"))  ; ephemeral
+      (t (format-time-string "%FT%T%z"
+                             (time-add (current-time)
+                                       (days-to-time days)))))))
+
+(defn- -duration-next [duration]
+  "Return next longer DURATION in hierarchy, or nil if permanent."
+  (let [pos (seq-position hive-mcp-memory-durations duration)]
+    (when (and pos (< (1+ pos) (length hive-mcp-memory-durations)))
+      (nth (1+ pos) hive-mcp-memory-durations))))
+
+(defn- -duration-prev [duration]
+  "Return next shorter DURATION in hierarchy, or nil if ephemeral."
+  (let [pos (seq-position hive-mcp-memory-durations duration)]
+    (when (and pos (> pos 0))
+      (nth (1- pos) hive-mcp-memory-durations))))
+
+;;; ============================================================
+;;; Utility Functions
+;;; ============================================================
+
+(defn- -generate-id []
+  "Generate a unique ID for memory entries.
+Note: In Chroma-delegate mode, IDs are generated server-side.
+This is provided for backwards compatibility."
+  (format "%s-%s"
+          (format-time-string "%Y%m%d%H%M%S")
+          (substring (md5 (format "%s%s" (random) (current-time))) 0 8)))
+
+(defn- -timestamp []
+  "Return current ISO 8601 timestamp."
+  (format-time-string "%FT%T%z"))
+
+(defn- -normalize-content [content]
+  "Normalize CONTENT for consistent hashing.
+Trims whitespace, collapses multiple spaces/newlines."
+  (let [text (cond
+               ((stringp content) content)
+               ((plistp content) (format "%S" content))
+               (t (format "%S" content)))]
+    (setq text (string-trim text))
+    (setq text (replace-regexp-in-string "[ \t]+" " " text))
+    (setq text (replace-regexp-in-string "\n+" "\n" text))
+    text))
+
+(defn content-hash [content]
+  "Compute SHA-256 hash of normalized CONTENT.
+Returns a 64-character hex string."
+  (secure-hash 'sha256 (hive-mcp-memory---normalize-content content)))
+
+;;; ============================================================
+;;; Backward-Compat Aliases (private --- to external --)
+;;; ============================================================
+;;
+;; cljel defn- compiles to ns---name (triple dash), but external
+;; consumers (kanban.cljel, etc.) reference hive-mcp-memory--name
+;; (double dash) from the original elisp. These aliases bridge that gap.
+
+(defalias 'hive-mcp-memory--project-id 'hive-mcp-memory---project-id)
+(defalias 'hive-mcp-memory--project-id-hash 'hive-mcp-memory---project-id-hash)
+(defalias 'hive-mcp-memory--get-project-root 'hive-mcp-memory---get-project-root)
+(defalias 'hive-mcp-memory--get-project-name 'hive-mcp-memory---get-project-name)
+(defalias 'hive-mcp-memory--make-scope-tag 'hive-mcp-memory---make-scope-tag)
+(defalias 'hive-mcp-memory--parse-scope-tag 'hive-mcp-memory---parse-scope-tag)
+(defalias 'hive-mcp-memory--has-scope-tag-p 'hive-mcp-memory---has-scope-tag-p)
+(defalias 'hive-mcp-memory--inject-project-scope 'hive-mcp-memory---inject-project-scope)
+(defalias 'hive-mcp-memory--applicable-scope-tags 'hive-mcp-memory---applicable-scope-tags)
+(defalias 'hive-mcp-memory--calculate-expires 'hive-mcp-memory---calculate-expires)
+(defalias 'hive-mcp-memory--duration-next 'hive-mcp-memory---duration-next)
+(defalias 'hive-mcp-memory--duration-prev 'hive-mcp-memory---duration-prev)
+(defalias 'hive-mcp-memory--generate-id 'hive-mcp-memory---generate-id)
+(defalias 'hive-mcp-memory--timestamp 'hive-mcp-memory---timestamp)
+(defalias 'hive-mcp-memory--normalize-content 'hive-mcp-memory---normalize-content)
+(defalias 'hive-mcp-memory--parse-edn-string 'hive-mcp-memory---parse-edn-string)
+(defalias 'hive-mcp-memory--edn-get 'hive-mcp-memory---edn-get)
+(defalias 'hive-mcp-memory--read-project-config 'hive-mcp-memory---read-project-config)
+(defalias 'hive-mcp-memory--get-stable-project-id 'hive-mcp-memory---get-stable-project-id)
+(defalias 'hive-mcp-memory--cider-delegate 'hive-mcp-memory---cider-delegate)
+(defalias 'hive-mcp-memory--build-clj-call 'hive-mcp-memory---build-clj-call)
+(defalias 'hive-mcp-memory--delegate 'hive-mcp-memory---delegate)
+
+;;; ============================================================
+;;; Public Aliases (used by API layer and workflows)
+;;; ============================================================
+;;
+;; The internal `--` prefixed functions are the implementations.
+;; These public names are what hive-mcp-api.el and hive-mcp-workflows.el call.
+
+(defalias 'hive-mcp-memory-project-id 'hive-mcp-memory---project-id)
+(defalias 'hive-mcp-memory-project-id-hash 'hive-mcp-memory---project-id-hash)
+(defalias 'hive-mcp-memory-project-get-root 'hive-mcp-memory---get-project-root)
+(defalias 'hive-mcp-memory-project-get-name 'hive-mcp-memory---get-project-name)
+
+;;; ============================================================
+;;; MCP Tool Delegation Stubs
+;;; ============================================================
+;;
+;; These functions provide the same API as the original module
+;; but signal that storage is delegated to MCP tools.
+;;
+;; IMPORTANT: After chroma-architect updates Clojure side,
+;; these can call MCP tools directly or be removed in favor
+;; of hive-mcp-api.el functions.
+
+(defvar hive-mcp-memory--storage-delegate nil
+  "Function to call for storage operations.
+Should accept (op type &rest args) and delegate to MCP.
+If nil, storage operations will error with instructions.")
+
+;;; ============================================================
+;;; CIDER-based Storage Delegate (calls Clojure MCP handlers)
+;;; ============================================================
+
+(defn- -cider-delegate [op & args]
+  "Delegate memory operation OP to Clojure MCP handlers via CIDER.
+OP is one of: add, get, query, update, delete.
+ARGS vary by operation:
+  - add: type content tags project-id duration
+  - get: id project-id
+  - query: type tags project-id limit duration scope-filter
+  - update: id updates project-id
+  - delete: id project-id
+Returns the result from Clojure or nil on failure."
+  (unless (and (featurep 'cider) (cider-connected-p))
+    (error "CIDER not connected. Memory operations require nREPL connection"))
+  (condition-case err
+      (let* [clj-code (hive-mcp-memory---build-clj-call op args)
+             response (cider-nrepl-send-sync-request
+                       (list "op" "eval"
+                             "code" clj-code
+                             "ns" "hive-mcp.tools.memory"))
+             value (nrepl-dict-get response "value")
+             err-msg (nrepl-dict-get response "err")]
+        (when err-msg
+          (message "[hive-mcp-memory] Error: %s" err-msg))
+        (when value
+          (car (read-from-string value))))
+    (error
+     (message "[hive-mcp-memory] CIDER delegate error: %s" (error-message-string err))
+     nil)))
+
+(defn- -build-clj-call [op args]
+  "Build Clojure code to call MCP handler for OP with ARGS.
+Maps elisp operations to the Clojure consolidated memory tool commands."
+  (pcase op
+    ('add
+     (let [type (nth 0 args)
+           content (nth 1 args)
+           tags (nth 2 args)
+           project-id (nth 3 args)
+           duration (nth 4 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"add\" :type %S :content %S :tags %s :directory %s :duration %s})"
+               (symbol-name type)
+               (if (stringp content) content (prin1-to-string content))
+               (if tags (format "[%s]" (mapconcat (lambda (tag) (format "%S" tag)) tags " ")) "nil")
+               (if project-id (format "\"%s\"" project-id) "nil")
+               (if duration (format "\"%s\"" (symbol-name duration)) "nil"))))
+    ('get
+     (let [id (nth 0 args)
+           project-id (nth 1 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"get\" :id %S :directory %s})"
+               id
+               (if project-id (format "\"%s\"" project-id) "nil"))))
+    ('query
+     (let [type (nth 0 args)
+           tags (nth 1 args)
+           project-id (nth 2 args)
+           limit (nth 3 args)
+           duration (nth 4 args)
+           scope-filter (nth 5 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"query\" :type %S :tags %s :directory %s :limit %s :duration %s :scope %s})"
+               (when type (symbol-name type))
+               (if tags (format "[%s]" (mapconcat (lambda (tag) (format "%S" tag)) tags " ")) "nil")
+               (if project-id (format "\"%s\"" project-id) "nil")
+               (or limit "20")
+               (if duration (format "\"%s\"" duration) "nil")
+               (if scope-filter (format "\"%s\"" scope-filter) "nil"))))
+    ('search
+     (let [query (nth 0 args)
+           project-id (nth 1 args)
+           limit (nth 2 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"search\" :query %S :directory %s :limit %s})"
+               query
+               (if project-id (format "\"%s\"" project-id) "nil")
+               (or limit "10"))))
+    ('metadata
+     (let [type (nth 0 args)
+           tags (nth 1 args)
+           project-id (nth 2 args)
+           limit (nth 3 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"metadata\" :type %S :tags %s :directory %s :limit %s :verbosity \"metadata\"})"
+               (when type (symbol-name type))
+               (if tags (format "[%s]" (mapconcat (lambda (tag) (format "%S" tag)) tags " ")) "nil")
+               (if project-id (format "\"%s\"" project-id) "nil")
+               (or limit "20"))))
+    ('update
+     (let [id (nth 0 args)
+           updates (nth 1 args)
+           _project-id (nth 2 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"tags\" :id %S :tags %s})"
+               id
+               (if updates (format "[%s]" (mapconcat (lambda (tag) (format "%S" tag)) updates " ")) "nil"))))
+    ('delete
+     (let [id (nth 0 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"expire\" :id %S})"
+               id)))
+    ('duration
+     (let [id (nth 0 args)
+           duration (nth 1 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"duration\" :id %S :duration %S})"
+               id (symbol-name duration))))
+    ('promote
+     (let [id (nth 0 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"promote\" :id %S})"
+               id)))
+    ('demote
+     (let [id (nth 0 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"demote\" :id %S})"
+               id)))
+    ('feedback
+     (let [id (nth 0 args)
+           rating (nth 1 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"feedback\" :id %S :feedback %S})"
+               id rating)))
+    ('log-access
+     (let [id (nth 0 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"log_access\" :id %S})"
+               id)))
+    ('helpfulness
+     (let [id (nth 0 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"helpfulness\" :id %S})"
+               id)))
+    ('cleanup
+     (let [project-id (nth 0 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"cleanup\" :directory %s})"
+               (if project-id (format "\"%s\"" project-id) "nil"))))
+    ('expiring
+     (let [days (nth 0 args)
+           project-id (nth 1 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"expiring\" :days %d :directory %s})"
+               (or days 7)
+               (if project-id (format "\"%s\"" project-id) "nil"))))
+    ('migrate
+     (let [old-project-id (nth 0 args)
+           new-project-id (nth 1 args)]
+       (format "(hive-mcp.tools.memory/handle-memory {:command \"migrate\" :old-project-id %S :new-project-id %S})"
+               old-project-id new-project-id)))
+    (_
+     (error "Unknown memory operation: %s" op))))
+
+(defn init-cider-delegate []
+  "Initialize the CIDER-based storage delegate.
+Call this after CIDER connects to enable memory operations."
+  (interactive)
+  (setq hive-mcp-memory--storage-delegate #'hive-mcp-memory---cider-delegate)
+  (message "hive-mcp-memory: CIDER delegate initialized"))
+
+(defn- -delegate [operation & args]
+  "Delegate OPERATION with ARGS to storage backend.
+If no delegate is set, signal an error with instructions."
+  (if hive-mcp-memory--storage-delegate
+      (apply hive-mcp-memory--storage-delegate operation args)
+    (error "hive-mcp-memory: Storage delegate not configured. \
+Use MCP tools (mcp_memory_add, mcp_memory_query) directly, \
+or set `hive-mcp-memory--storage-delegate'")))
+
+;;; ============================================================
+;;; CRUD Operations (delegate to storage backend)
+;;; ============================================================
+
+(defn add [type content &optional tags project-id duration]
+  "Add a memory entry of TYPE with CONTENT.
+TYPE is one of: note, snippet, convention, decision, conversation.
+CONTENT is a string or plist.
+TAGS is optional list of strings.
+PROJECT-ID defaults to current project or global.
+DURATION is optional lifespan symbol.
+
+STORAGE: Delegated to MCP server -> Chroma."
+  (let [tags-with-scope (hive-mcp-memory---inject-project-scope (or tags '()))
+        pid (or project-id (hive-mcp-memory---project-id))
+        dur (or duration hive-mcp-memory-default-duration)]
+    (hive-mcp-memory---delegate 'add type content tags-with-scope pid dur)))
+
+(defn get [id &optional project-id]
+  "Retrieve memory entry by ID from PROJECT-ID.
+STORAGE: Delegated to MCP server -> Chroma."
+  (hive-mcp-memory---delegate 'get id project-id))
+
+(defn query [type &optional tags project-id limit duration scope-filter]
+  "Query memories by TYPE and optional TAGS.
+PROJECT-ID specifies the project.
+LIMIT caps the number of results.
+DURATION filters by lifespan category.
+SCOPE-FILTER controls scope filtering.
+
+STORAGE: Delegated to MCP server -> Chroma."
+  (hive-mcp-memory---delegate 'query type tags project-id limit duration scope-filter))
+
+(defn update [id updates &optional project-id]
+  "Update memory entry ID with UPDATES plist.
+STORAGE: Delegated to MCP server -> Chroma."
+  (hive-mcp-memory---delegate 'update id updates project-id))
+
+(defn delete [id &optional project-id]
+  "Delete memory entry by ID.
+STORAGE: Delegated to MCP server -> Chroma."
+  (hive-mcp-memory---delegate 'delete id project-id))
+
+;;; ============================================================
+;;; Deduplication
+;;; ============================================================
+
+(defn find-duplicate [type content &optional project-id]
+  "Find existing entry with same content hash in TYPE.
+TYPE is a symbol or string: note, snippet, convention, decision.
+CONTENT is the content to check for duplicates.
+PROJECT-ID defaults to current project.
+Returns the existing entry if found, nil otherwise.
+
+STORAGE: Delegated to MCP server -> Chroma.
+Client-side hash comparison; queries server for entries of TYPE."
+  (let* [pid (or project-id (hive-mcp-memory---project-id))
+         content-hash (hive-mcp-memory-content-hash content)
+         entries (hive-mcp-memory-query type nil pid 100)]
+    (seq-find (lambda (entry)
+                (let [entry-hash (or (plist-get entry :content-hash)
+                                     (when-let* [c (plist-get entry :content)]
+                                       (hive-mcp-memory-content-hash c)))]
+                  (and entry-hash (string= entry-hash content-hash))))
+              entries)))
+
+;;; ============================================================
+;;; Duration Operations (via delegate)
+;;; ============================================================
+
+(defn set-duration [id duration &optional project-id]
+  "Set DURATION for entry ID and recalculate expiration.
+DURATION must be one of the valid duration symbols.
+PROJECT-ID is unused in delegate mode (server resolves from ID).
+STORAGE: Delegated to MCP server."
+  (ignore project-id)
+  (hive-mcp-memory---delegate 'duration id duration))
+
+(defn promote [id &optional project-id]
+  "Promote entry ID to next longer duration in the hierarchy.
+Returns the server response (updated entry or new duration).
+PROJECT-ID is unused in delegate mode.
+STORAGE: Delegated to MCP server."
+  (ignore project-id)
+  (hive-mcp-memory---delegate 'promote id))
+
+(defn demote [id &optional project-id]
+  "Demote entry ID to next shorter duration in the hierarchy.
+Returns the server response (updated entry or new duration).
+PROJECT-ID is unused in delegate mode.
+STORAGE: Delegated to MCP server."
+  (ignore project-id)
+  (hive-mcp-memory---delegate 'demote id))
+
+;;; ============================================================
+;;; Query Operations (expiring, cleanup)
+;;; ============================================================
+
+(defn query-expiring [days &optional project-id]
+  "Return entries expiring within DAYS from PROJECT-ID.
+STORAGE: Delegated to MCP server -> Chroma."
+  (hive-mcp-memory---delegate 'expiring days project-id))
+
+(defn cleanup-expired [&optional project-id]
+  "Remove expired entries from PROJECT-ID.
+Returns count of deleted entries.
+STORAGE: Delegated to MCP server -> Chroma."
+  (hive-mcp-memory---delegate 'cleanup project-id))
+
+;;; ============================================================
+;;; Semantic Search (via delegate)
+;;; ============================================================
+
+(defn search [query &optional project-id limit]
+  "Semantic search for QUERY across memory entries.
+PROJECT-ID defaults to current project.
+LIMIT caps the number of results (default 10).
+STORAGE: Delegated to MCP server -> Chroma."
+  (hive-mcp-memory---delegate 'search query project-id limit))
+
+;;; ============================================================
+;;; Audit Logging / Helpfulness (via delegate)
+;;; ============================================================
+
+(defn log-access [id &optional project-id]
+  "Log access to memory entry ID.
+Increments access-count and updates last-accessed timestamp.
+PROJECT-ID is unused in delegate mode.
+STORAGE: Delegated to MCP server."
+  (ignore project-id)
+  (hive-mcp-memory---delegate 'log-access id))
+
+(defn mark-helpful [id &optional project-id]
+  "Mark memory entry ID as helpful.
+PROJECT-ID is unused in delegate mode.
+STORAGE: Delegated to MCP server."
+  (ignore project-id)
+  (hive-mcp-memory---delegate 'feedback id "helpful"))
+
+(defn mark-unhelpful [id &optional project-id]
+  "Mark memory entry ID as unhelpful.
+PROJECT-ID is unused in delegate mode.
+STORAGE: Delegated to MCP server."
+  (ignore project-id)
+  (hive-mcp-memory---delegate 'feedback id "unhelpful"))
+
+(defn helpfulness-ratio [id &optional project-id]
+  "Calculate helpfulness ratio for memory entry ID.
+Returns helpful-count / (helpful + unhelpful), or nil if no feedback.
+PROJECT-ID is unused in delegate mode.
+STORAGE: Delegated to MCP server."
+  (ignore project-id)
+  (hive-mcp-memory---delegate 'helpfulness id))
+
+;;; ============================================================
+;;; Migration (via delegate)
+;;; ============================================================
+
+(defn migrate-project [old-project-id new-project-id &optional _update-scopes]
+  "Migrate memory from OLD-PROJECT-ID to NEW-PROJECT-ID.
+In Chroma-delegate mode, this is handled server-side.
+STORAGE: Delegated to MCP server."
+  (hive-mcp-memory---delegate 'migrate old-project-id new-project-id))
+
+;;; ============================================================
+;;; Save / Persistence (no-ops in thin mode)
+;;; ============================================================
+
+(defn save [&optional _project-id]
+  "Save memory to persistent storage.
+NO-OP in Chroma-delegate mode - storage is server-side."
+  nil)
+
+(defn save-all []
+  "Save all cached memory to persistent storage.
+NO-OP in Chroma-delegate mode - storage is server-side."
+  nil)
+
+;;; ============================================================
+;;; Convenience Functions (unchanged API)
+;;; ============================================================
+
+(defn add-note [content &optional tags]
+  "Add a note with CONTENT to current project memory.
+TAGS is an optional list of tag strings."
+  (hive-mcp-memory-add 'note content tags))
+
+(defn add-snippet [name code &optional language tags]
+  "Add a code snippet with NAME and CODE.
+LANGUAGE specifies the programming language.
+TAGS is an optional list of tag strings."
+  (hive-mcp-memory-add 'snippet
+                        (list :name name
+                              :code code
+                              :language (or language "unknown"))
+                        tags))
+
+(defn add-convention [description &optional example]
+  "Add a project convention with DESCRIPTION.
+EXAMPLE provides an optional code example."
+  (hive-mcp-memory-add 'convention
+                        (list :description description
+                              :example example)))
+
+(defn add-decision [title rationale &optional alternatives]
+  "Add an architecture decision record with TITLE and RATIONALE.
+ALTERNATIVES lists other options that were considered."
+  (hive-mcp-memory-add 'decision
+                        (list :title title
+                              :rationale rationale
+                              :alternatives alternatives)))
+
+(defn log-conversation [role content]
+  "Log a conversation entry with ROLE and CONTENT.
+ROLE should be `user' or `assistant'."
+  (hive-mcp-memory-add 'conversation
+                        (list :role (if (symbolp role) (symbol-name role) role)
+                              :content content)))
+
+;;; ============================================================
+;;; Project Context (queries via delegate)
+;;; ============================================================
+
+(defn get-project-context []
+  "Return full project context as plist for Claude.
+Includes notes, conventions, recent decisions, relevant snippets."
+  (let [pid (hive-mcp-memory---project-id)]
+    (list
+     :project-id pid
+     :project-root (hive-mcp-memory---get-project-root)
+     :notes (hive-mcp-memory-query 'note nil pid 10)
+     :conventions (hive-mcp-memory-query 'convention nil pid)
+     :recent-decisions (hive-mcp-memory-query 'decision nil pid 5)
+     :snippets (hive-mcp-memory-query 'snippet nil pid 20))))
+
+;;; ============================================================
+;;; Initialization
+;;; ============================================================
+
+(defn init []
+  "Initialize memory system.
+In Chroma-delegate mode, this just clears caches."
+  (clrhash hive-mcp-memory--project-config-cache)
+  (clrhash hive-mcp-memory--cache)
+  (message "hive-mcp-memory initialized (Chroma-delegate mode)"))
+
+(provide 'hive-mcp-memory)

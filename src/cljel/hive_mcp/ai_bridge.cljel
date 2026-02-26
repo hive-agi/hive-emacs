@@ -1,0 +1,399 @@
+(ns hive-mcp.ai-bridge
+  "Anti-corruption layer between Emacs AI packages and hive services.
+
+   Provides shared utilities for integrating with various Emacs AI packages
+   (gptel, aidermacs, ellama, org-ai). All addons share these core functions:
+
+   - Context injection: Add memory to any AI prompt
+   - Response storage:  Store AI output to memory
+   - Interaction logging: Audit trail for AI interactions
+   - Swarm dispatch:    Delegate tasks to swarm agents
+   - Rate limiting:     Throttle external API calls
+
+   Architecture:
+                 +----------------------------------+
+                 |      hive-mcp-ai-bridge          |
+                 |                                  |
+                 |  +----------+  +-------------+   |
+                 |  | Memory   |  |   Swarm     |   |
+                 |  | Bridge   |  |   Bridge    |   |
+                 |  +----+-----+  +------+------+   |
+                 |       |               |          |
+                 +-------+---------------+----------+
+                         |               |
+         +---------------+---------------+---------------+
+         |               |               |               |
+         v               v               v               v
+   +-----------+   +-----------+   +-----------+   +-----------+
+   |  gptel    |   | aidermacs |   |  ellama   |   |  org-ai   |
+   +-----------+   +-----------+   +-----------+   +-----------+
+
+   Ported from hive-mcp/elisp/hive-mcp-ai-bridge.el to cljel.")
+
+(require 'cl-lib)
+(require 'subr-x)
+
+;; Soft dependencies on hive-mcp modules
+(declare-function hive-mcp-memory-query "hive-mcp-memory")
+(declare-function hive-mcp-memory-add "hive-mcp-memory")
+(declare-function hive-mcp-memory-search-semantic "hive-mcp-memory")
+(declare-function hive-mcp-swarm-dispatch "hive-mcp-swarm")
+(declare-function hive-mcp-swarm-status "hive-mcp-swarm")
+
+;; ============================================================================
+;; Customization
+;; ============================================================================
+
+(defgroup hive-mcp-ai-bridge nil
+  "Universal AI integration bridge."
+  :group 'hive-mcp
+  :prefix "hive-mcp-ai-")
+
+(defcustom hive-mcp-ai-context-conventions-limit 5
+  "Maximum number of conventions to inject into AI context."
+  :type 'integer
+  :group 'hive-mcp-ai-bridge)
+
+(defcustom hive-mcp-ai-context-decisions-limit 3
+  "Maximum number of decisions to inject into AI context."
+  :type 'integer
+  :group 'hive-mcp-ai-bridge)
+
+(defcustom hive-mcp-ai-context-semantic-limit 3
+  "Maximum number of semantic search results to inject."
+  :type 'integer
+  :group 'hive-mcp-ai-bridge)
+
+(defcustom hive-mcp-ai-store-notable-responses t
+  "If non-nil, automatically store notable AI responses to memory."
+  :type 'boolean
+  :group 'hive-mcp-ai-bridge)
+
+(defcustom hive-mcp-ai-notable-min-length 200
+  "Minimum length for a response to be considered notable."
+  :type 'integer
+  :group 'hive-mcp-ai-bridge)
+
+(defcustom hive-mcp-ai-log-interactions t
+  "If non-nil, log AI interactions for audit trail."
+  :type 'boolean
+  :group 'hive-mcp-ai-bridge)
+
+;; ============================================================================
+;; Rate Limiting
+;; ============================================================================
+
+(defvar hive-mcp-ai--rate-limit-table (make-hash-table :test 'equal)
+  "Hash table tracking last call timestamps per source for rate limiting.
+Keys are source strings, values are float-time timestamps.")
+
+(defcustom hive-mcp-ai-rate-limit-interval 1.0
+  "Minimum seconds between external API calls per source."
+  :type 'float
+  :group 'hive-mcp-ai-bridge)
+
+(defn- -rate-limit-check [source]
+  "Check if SOURCE is within rate limit.
+Returns t if the call is allowed, nil if throttled."
+  (let [last-call (gethash source hive-mcp-ai--rate-limit-table 0.0)
+        now (float-time)
+        elapsed (- now last-call)]
+    (if (>= elapsed hive-mcp-ai-rate-limit-interval)
+      (do
+        (puthash source now hive-mcp-ai--rate-limit-table)
+        t)
+      nil)))
+
+;; ============================================================================
+;; Memory Bridge
+;; ============================================================================
+
+(defn- -memory-available-p []
+  "Check if memory system is available."
+  (and (require 'hive-mcp-memory nil t)
+       (fboundp 'hive-mcp-memory-query)))
+
+(defn ai-get-conventions [& limit]
+  "Get conventions from memory, formatted for AI context.
+LIMIT overrides `hive-mcp-ai-context-conventions-limit'."
+  (when (hive-mcp-ai-bridge--memory-available-p)
+    (let [n (or limit hive-mcp-ai-context-conventions-limit)
+          entries (hive-mcp-memory-query 'convention nil nil n)]
+      (when entries
+        (mapconcat
+          (lambda (e)
+            (format "- %s" (plist-get e :content)))
+          entries
+          "\n")))))
+
+(defn ai-get-decisions [& limit]
+  "Get recent decisions from memory, formatted for AI context.
+LIMIT overrides `hive-mcp-ai-context-decisions-limit'."
+  (when (hive-mcp-ai-bridge--memory-available-p)
+    (let [n (or limit hive-mcp-ai-context-decisions-limit)
+          entries (hive-mcp-memory-query 'decision nil nil n)]
+      (when entries
+        (mapconcat
+          (lambda (e)
+            (let [created (plist-get e :created)]
+              (format "- [%s] %s"
+                      (if created (substring created 0 10) "?")
+                      (plist-get e :content))))
+          entries
+          "\n")))))
+
+(defn ai-semantic-search [query & limit]
+  "Search memory semantically for QUERY.
+LIMIT overrides `hive-mcp-ai-context-semantic-limit'.
+Returns formatted context string or nil."
+  (when (and (hive-mcp-ai-bridge--memory-available-p)
+             (fboundp 'hive-mcp-memory-search-semantic))
+    (let [n (or limit hive-mcp-ai-context-semantic-limit)
+          results (hive-mcp-memory-search-semantic query n)]
+      (when results
+        (mapconcat
+          (lambda (r)
+            (format "- [%s] %s"
+                    (plist-get r :type)
+                    (plist-get r :content)))
+          results
+          "\n")))))
+
+;; ============================================================================
+;; Context Building
+;; ============================================================================
+
+(defn ai-build-context [& prompt]
+  "Build AI context from memory.
+If PROMPT is provided, includes semantic search results.
+Returns formatted context string suitable for injection."
+  (let [sections nil]
+    ;; Conventions
+    (when-let [convs (hive-mcp-ai-bridge-ai-get-conventions)]
+      (push (format "## Team Conventions\n%s" convs) sections))
+
+    ;; Recent decisions
+    (when-let [decs (hive-mcp-ai-bridge-ai-get-decisions)]
+      (push (format "## Recent Decisions\n%s" decs) sections))
+
+    ;; Semantic search (if prompt provided)
+    (when prompt
+      (when-let [semantic (hive-mcp-ai-bridge-ai-semantic-search prompt)]
+        (push (format "## Related Context\n%s" semantic) sections)))
+
+    (when sections
+      (concat "# Project Knowledge\n\n"
+              (mapconcat #'identity (nreverse sections) "\n\n")))))
+
+(defn ai-inject-context [prompt & include-semantic]
+  "Inject memory context into PROMPT.
+If INCLUDE-SEMANTIC is non-nil, includes semantic search results.
+Returns the augmented prompt string."
+  (let [context (hive-mcp-ai-bridge-ai-build-context
+                  (when include-semantic prompt))]
+    (if context
+      (concat context "\n\n---\n\n" prompt)
+      prompt)))
+
+;; ============================================================================
+;; Response Storage
+;; ============================================================================
+
+(defn ai-response-notable-p [response]
+  "Check if RESPONSE is notable enough to store.
+Returns non-nil if response should be stored."
+  (and response
+       (stringp response)
+       (>= (length response) hive-mcp-ai-notable-min-length)
+       ;; Contains code or structured content
+       (or (string-match-p "```" response)
+           (string-match-p "^[-*] " response)
+           (string-match-p "^[0-9]+\\. " response))))
+
+(defn ai-store-response [response source & tags]
+  "Store RESPONSE to memory if notable.
+SOURCE is the AI package name (e.g., \"gptel\").
+TAGS is optional list of additional tags.
+Rate-limited: only stores if not throttled for SOURCE."
+  (when (and hive-mcp-ai-store-notable-responses
+             (hive-mcp-ai-bridge--memory-available-p)
+             (hive-mcp-ai-bridge-ai-response-notable-p response)
+             (hive-mcp-ai-bridge--rate-limit-check (concat "store:" source)))
+    (let [truncated (if (> (length response) 2000)
+                      (concat (substring response 0 1997) "...")
+                      response)
+          all-tags (append (list source "ai-response") tags)]
+      (hive-mcp-memory-add 'snippet truncated all-tags)
+      (message "[ai-bridge] Stored notable response from %s" source))))
+
+;; ============================================================================
+;; Interaction Logging
+;; ============================================================================
+
+(defvar hive-mcp-ai--interaction-log nil
+  "Log of recent AI interactions for audit.")
+
+(defn ai-log-interaction [source action & details]
+  "Log an AI interaction.
+SOURCE is the AI package, ACTION is what happened.
+DETAILS is optional plist of additional info."
+  (when hive-mcp-ai-log-interactions
+    (push (list :timestamp (format-time-string "%FT%T%z")
+                :source source
+                :action action
+                :details details)
+          hive-mcp-ai--interaction-log)
+    ;; Keep last 100 entries
+    (when (> (length hive-mcp-ai--interaction-log) 100)
+      (setq hive-mcp-ai--interaction-log
+            (seq-take hive-mcp-ai--interaction-log 100)))))
+
+(defn ai-get-interaction-log [& limit]
+  "Get recent interaction log entries.
+LIMIT defaults to 20."
+  (seq-take hive-mcp-ai--interaction-log (or limit 20)))
+
+;; ============================================================================
+;; Swarm Bridge
+;; ============================================================================
+
+(defn- -swarm-available-p []
+  "Check if swarm system is available."
+  (and (require 'hive-mcp-swarm nil t)
+       (fboundp 'hive-mcp-swarm-dispatch)))
+
+(defn ai-dispatch-to-swarm [task & rest kwargs]
+  "Dispatch TASK to swarm agent.
+Keyword args:
+  :preset   - agent preset (e.g., \"code-review\")
+  :slave-id - optionally target a specific slave
+  :callback - reserved for future async result handling
+  :source   - identifies the calling AI package
+
+Rate-limited per source. Returns task-id on success, nil on failure."
+  (let [preset (plist-get kwargs :preset)
+        slave-id (plist-get kwargs :slave-id)
+        source (plist-get kwargs :source)]
+    (when (and (hive-mcp-ai-bridge--swarm-available-p)
+               (hive-mcp-ai-bridge--rate-limit-check (or source "ai-bridge")))
+      (hive-mcp-ai-bridge-ai-log-interaction
+        (or source "ai-bridge")
+        "swarm-dispatch"
+        (list :task task :preset preset))
+      (let [target (or slave-id
+                       ;; Find or spawn appropriate slave
+                       (hive-mcp-ai-bridge--get-or-spawn-slave preset))]
+        (when target
+          (hive-mcp-swarm-dispatch target task))))))
+
+(defn- -get-or-spawn-slave [preset]
+  "Get an idle slave with PRESET or spawn one.
+Returns slave-id or nil."
+  (when (hive-mcp-ai-bridge--swarm-available-p)
+    (let [status (hive-mcp-swarm-status)
+          slaves (plist-get status :slaves-detail)
+          ;; Find idle slave with matching preset
+          matching (cl-find-if
+                     (lambda (s)
+                       (and (eq (plist-get s :status) 'idle)
+                            (member preset (plist-get s :presets))))
+                     slaves)]
+      (if matching
+        (plist-get matching :slave-id)
+        ;; Spawn new slave with preset
+        (when (fboundp 'hive-mcp-swarm-spawn)
+          (hive-mcp-swarm-spawn
+            (or preset "ai-worker")
+            :presets (list preset)))))))
+
+;; ============================================================================
+;; Format Adapters
+;; ============================================================================
+
+(defn ai-format-context-for [package context]
+  "Format CONTEXT for specific AI PACKAGE.
+Returns appropriately formatted string."
+  (pcase package
+    ('gptel
+      ;; gptel uses markdown
+      context)
+    ('aider
+      ;; Aider expects specific format
+      (replace-regexp-in-string "^# " "## " context))
+    ('ellama
+      ;; ellama uses llm.el format
+      context)
+    ('org-ai
+      ;; org-ai uses org-mode format
+      (replace-regexp-in-string "^## " "** "
+                                (replace-regexp-in-string "^# " "* " context)))
+    (_
+      context)))
+
+;; ============================================================================
+;; Hooks Infrastructure
+;; ============================================================================
+
+(defvar hive-mcp-ai-pre-request-hook nil
+  "Hook run before any AI request.
+Functions receive (source prompt) arguments.")
+
+(defvar hive-mcp-ai-post-response-hook nil
+  "Hook run after AI response.
+Functions receive (source response) arguments.")
+
+(defn ai-run-pre-request-hooks [source prompt]
+  "Run pre-request hooks for SOURCE with PROMPT.
+Returns possibly modified prompt."
+  (let [result prompt]
+    (dolist [fn hive-mcp-ai-pre-request-hook]
+      (when-let [modified (funcall fn source result)]
+        (setq result modified)))
+    result))
+
+(defn ai-run-post-response-hooks [source response]
+  "Run post-response hooks for SOURCE with RESPONSE."
+  (dolist [fn hive-mcp-ai-post-response-hook]
+    (funcall fn source response)))
+
+;; ============================================================================
+;; Channel Events (for push-based updates)
+;; ============================================================================
+
+(declare-function hive-mcp-channel-connected-p "hive-mcp-channel")
+(declare-function hive-mcp-channel-send "hive-mcp-channel")
+
+(defn- -channel-available-p []
+  "Check if channel is available for push events."
+  (and (require 'hive-mcp-channel nil t)
+       (fboundp 'hive-mcp-channel-connected-p)
+       (hive-mcp-channel-connected-p)))
+
+(defn ai-emit-event [event-type data]
+  "Emit AI bridge EVENT-TYPE with DATA through channel.
+All CIDER eval calls wrapped in condition-case for safety."
+  (when (hive-mcp-ai-bridge--channel-available-p)
+    (condition-case err
+      (hive-mcp-channel-send
+        (append
+          (list (cons "type" (concat "ai-bridge:" event-type))
+                (cons "timestamp" (float-time)))
+          data))
+      (error
+        (message "[ai-bridge] Channel emit error: %s" (error-message-string err))))))
+
+;; ============================================================================
+;; API
+;; ============================================================================
+
+(defn ai-bridge-status []
+  "Get AI bridge status."
+  (list :memory-available (hive-mcp-ai-bridge--memory-available-p)
+        :swarm-available (hive-mcp-ai-bridge--swarm-available-p)
+        :channel-available (hive-mcp-ai-bridge--channel-available-p)
+        :log-entries (length hive-mcp-ai--interaction-log)
+        :settings (list :conventions-limit hive-mcp-ai-context-conventions-limit
+                        :decisions-limit hive-mcp-ai-context-decisions-limit
+                        :store-notable hive-mcp-ai-store-notable-responses)))
+
+(provide 'hive-mcp-ai-bridge)

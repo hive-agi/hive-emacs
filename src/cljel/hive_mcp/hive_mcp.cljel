@@ -1,0 +1,181 @@
+(ns hive-mcp
+  "Entry point for hive-mcp Emacs integration.
+
+   Pure configuration and mode definition layer. Delegates all
+   substantive work to submodules:
+     - hive-mcp-memory:    Persistent memory system
+     - hive-mcp-kanban:    Kanban task management
+     - hive-mcp-context:   Buffer/project/git context gathering
+     - hive-mcp-triggers:  Hook and keybinding triggers
+     - hive-mcp-workflows: Multi-step workflow orchestration
+     - hive-mcp-api:       API surface for Claude eval_elisp calls
+     - hive-mcp-addons:    Lazy-loaded addon system
+     - hive-mcp-channel:   Bidirectional channel to Clojure server
+     - hive-mcp-hivemind:  Swarm coordinator UI
+
+   Quick start:
+     (require 'hive-mcp)
+     (hive-mcp-mode 1)
+
+   Ported from hive-mcp/elisp/hive-mcp.el to cljel.")
+
+(require 'json)
+(require 'project)
+
+;; ============================================================================
+;; Customization
+;; ============================================================================
+
+(defgroup hive-mcp nil
+  "Emacs integration for Claude MCP."
+  :group 'tools
+  :prefix "hive-mcp-")
+
+(defcustom hive-mcp-auto-initialize t
+  "Automatically initialize hive-mcp on mode enable."
+  :type 'boolean
+  :group 'hive-mcp)
+
+(defcustom hive-mcp-load-builtin-workflows t
+  "Load built-in example workflows on initialization."
+  :type 'boolean
+  :group 'hive-mcp)
+
+(defcustom hive-mcp-auto-enable nil
+  "Automatically enable `hive-mcp-mode' when Emacs starts.
+Set this to t in your config to have hive-mcp ready on startup."
+  :type 'boolean
+  :group 'hive-mcp)
+
+(defcustom hive-mcp-setup-addons t
+  "Set up addon system during initialization.
+When non-nil, loads addons from `hive-mcp-addon-always-load'
+and enables auto-loading for feature-triggered addons."
+  :type 'boolean
+  :group 'hive-mcp)
+
+;; ============================================================================
+;; Require submodules
+;; ============================================================================
+
+(require 'hive-mcp-memory)
+(require 'hive-mcp-kanban)
+(require 'hive-mcp-context)
+(require 'hive-mcp-triggers)
+(require 'hive-mcp-workflows)
+(require 'hive-mcp-api)
+(require 'hive-mcp-addons)
+(require 'hive-mcp-channel)
+(require 'hive-mcp-hivemind)
+
+;; Forward declaration for byte-compiler
+(declare-function hive-mcp-addons-setup "hive-mcp-addons")
+
+;; Optional: transient menus
+(when (require 'transient nil t)
+  (require 'hive-mcp-transient))
+
+;; ============================================================================
+;; Initialization
+;; ============================================================================
+
+(defvar hive-mcp--initialized nil
+  "Non-nil if hive-mcp has been initialized.")
+
+(defn initialize []
+  "Initialize hive-mcp system.
+Re-entrant safe: only runs once unless reset via `hive-mcp-reset'."
+  (interactive)
+  (unless hive-mcp--initialized
+    ;; Initialize memory system
+    (hive-mcp-memory-init)
+
+    ;; Load saved workflows
+    (hive-mcp-workflow--load)
+
+    ;; Register built-in workflows
+    (when hive-mcp-load-builtin-workflows
+      (hive-mcp-workflow--register-builtins))
+
+    ;; Set up keybindings
+    (hive-mcp-setup-keybindings)
+
+    ;; Set up hooks
+    (hive-mcp-setup-hooks)
+
+    ;; Set up addons (always-load + auto-load triggers)
+    (when hive-mcp-setup-addons
+      (hive-mcp-addons-setup))
+
+    ;; Connect to bidirectional channel (if server is running)
+    (when (fboundp 'hive-mcp-channel-setup-auto-connect)
+      (hive-mcp-channel-setup-auto-connect))
+
+    (setq hive-mcp--initialized t)
+    (message "Emacs-mcp initialized (C-c m for menu)")))
+
+(defn reset []
+  "Reset hive-mcp state (for debugging).
+Clears all caches and registries so `hive-mcp-initialize' can run again."
+  (interactive)
+  (setq hive-mcp--initialized nil)
+  (clrhash hive-mcp-memory--cache)
+  (clrhash hive-mcp-workflow-registry)
+  (clrhash hive-mcp-trigger-registry)
+  (message "Emacs-mcp reset"))
+
+;; ============================================================================
+;; Minor Mode
+;; ============================================================================
+
+(define-minor-mode hive-mcp-mode
+  "Minor mode for hive-mcp integration with Claude.
+
+Provides persistent memory, context gathering, workflows, and
+keybindings for AI-assisted development.
+
+\\{hive-mcp-command-map}"
+  :global t
+  :lighter " MCP"
+  :keymap (let [map (make-sparse-keymap)]
+            (when hive-mcp-keymap-prefix
+              (define-key map hive-mcp-keymap-prefix hive-mcp-command-map))
+            map)
+  (if hive-mcp-mode
+    (when hive-mcp-auto-initialize
+      (hive-mcp-initialize))
+    (message "Emacs-mcp mode disabled")))
+
+;; ============================================================================
+;; Convenience aliases
+;; ============================================================================
+
+(defalias 'hive-mcp-note #'hive-mcp-add-note-interactive
+  "Add a note to project memory.")
+
+(defalias 'hive-mcp-snippet #'hive-mcp-add-snippet-interactive
+  "Save region as a snippet.")
+
+(defalias 'hive-mcp-context #'hive-mcp-show-context
+  "Show current context.")
+
+(defalias 'hive-mcp-memory #'hive-mcp-show-memory
+  "Show project memory.")
+
+(defalias 'hive-mcp-workflow #'hive-mcp-workflow-run-interactive
+  "Run a workflow.")
+
+;; ============================================================================
+;; Auto-enable support
+;; ============================================================================
+
+(defn- -maybe-auto-enable []
+  "Maybe enable `hive-mcp-mode' automatically.
+Controlled by `hive-mcp-auto-enable'.
+To use, add to your init file:
+  (setq hive-mcp-auto-enable t)
+  (add-hook 'after-init-hook #'hive-mcp--maybe-auto-enable)"
+  (when hive-mcp-auto-enable
+    (hive-mcp-mode 1)))
+
+(provide 'hive-mcp)
