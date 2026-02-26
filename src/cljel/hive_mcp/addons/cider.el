@@ -107,5 +107,416 @@
   :group 'hive-mcp-cider
   :type 'integer)
 
+(defun hive-mcp-cider---find-available-port ()
+  "Find the next available port for a new session."
+  (let* ((port hive-mcp-cider-session-port-base)
+        (used-ports (mapcar (lambda (name)
+    (plist-get (gethash name hive-mcp-cider--sessions) :port)) (hash-table-keys hive-mcp-cider--sessions))))
+    (while (and (<= port hive-mcp-cider-session-port-max) (or (member port used-ports) (-port-open-p port)))
+    (setq port (1+ port)))
+    (if (<= port hive-mcp-cider-session-port-max) port (error "No available ports in range %d-%d" hive-mcp-cider-session-port-base hive-mcp-cider-session-port-max))))
+
+(defun hive-mcp-cider-spawn-session (name &optional project-dir agent-id)
+  "Spawn a new named CIDER session.\nNAME is the session identifier (e.g., \"agent-1\", \"task-render\").\nPROJECT-DIR is the directory to start nREPL in (default: current project).\nAGENT-ID optionally links this session to a swarm agent."
+  (interactive "sSession name: ")
+  (when (gethash name hive-mcp-cider--sessions)
+    (error "Session '%s' already exists" name))
+  (let* ((port (-find-available-port))
+        (dir (or project-dir (-project-dir)))
+        (default-directory dir)
+        (buf-name (format "*nREPL-%s*" name))
+        (process (start-process (format "nrepl-%s" name) buf-name "clojure" "-M:nrepl" "-p" (number-to-string port)))
+        (timer (run-with-timer 2 1 (lambda (_x)
+    (condition-case err
+    (-try-connect-session name)
+  (error (message "[cider] Timer error connecting session %s: %s" name (error-message-string err))))))))
+    (puthash name (list :port port :process process :buffer buf-name :agent-id agent-id :project-dir dir :status 'starting :cider-buffer nil :timer timer) hive-mcp-cider--sessions)
+    (message "hive-mcp-cider: Spawning session '%s' on port %d..." name port)
+    (list :name name :port port :status "starting")))
+
+(defun hive-mcp-cider---cancel-session-timer (name)
+  "Cancel the auto-connect timer for session NAME."
+  (when-let-star (list session (gethash name hive-mcp-cider--sessions) timer (plist-get session :timer)) (when (timerp timer)
+    (cancel-timer timer)) (puthash name (plist-put session :timer nil) hive-mcp-cider--sessions)))
+
+(defun hive-mcp-cider---try-connect-session (name)
+  "Try to connect CIDER to session NAME."
+  (let* ((session (gethash name hive-mcp-cider--sessions))
+        (port (plist-get session :port))
+        (status (plist-get session :status)))
+    (when (and session (eq status 'starting))
+    (if (-port-open-p port) (condition-case err
+    (let* ((conn (cider-connect-clj (list :host "localhost" :port port))))
+    (-cancel-session-timer name)
+    (puthash name (plist-put (plist-put session :status 'connected) :cider-buffer (buffer-name conn)) hive-mcp-cider--sessions)
+    (message "hive-mcp-cider: Session '%s' connected on port %d" name port))
+  (error (-cancel-session-timer name)
+      (puthash name (plist-put session :status 'error) hive-mcp-cider--sessions)
+      (message "hive-mcp-cider: Session '%s' connection failed: %s" name (error-message-string err)))) (let* ((attempts (or (plist-get session :attempts) 0)))
+    (if (< attempts 30) (puthash name (plist-put session :attempts (1+ attempts)) hive-mcp-cider--sessions) (-cancel-session-timer name)))))))
+
+(defun hive-mcp-cider-list-sessions ()
+  "List all active CIDER sessions.\nReturns a vector (for JSON array encoding) of session plists."
+  (interactive)
+  (let* ((sessions '()))
+    (maphash (lambda (name props)
+    (let* ((status (plist-get props :status)))
+    (push (list :name name :port (plist-get props :port) :status (if (symbolp status) (symbol-name status) status) :agent-id (plist-get props :agent-id) :cider-buffer (plist-get props :cider-buffer)) sessions))) hive-mcp-cider--sessions)
+    (let* ((result (vconcat sessions)))
+    (if (called-interactively-p 'any) (message "Sessions: %s" (json-encode result)) result))))
+
+(defun hive-mcp-cider-get-session (name)
+  "Get session info for NAME."
+  (gethash name hive-mcp-cider--sessions))
+
+(defun hive-mcp-cider-kill-session (name)
+  "Kill the CIDER session NAME."
+  (interactive (list (completing-read "Kill session: " (hash-table-keys hive-mcp-cider--sessions))))
+  (let* ((session (gethash name hive-mcp-cider--sessions)))
+    (when session
+    (-cancel-session-timer name)
+    (let* ((process (plist-get session :process))
+        (cider-buf (plist-get session :cider-buffer)))
+    (when (and cider-buf (get-buffer cider-buf))
+    (with-current-buffer cider-buf
+    (when (fboundp 'cider-quit)
+    (cider-quit))))
+    (when (and process (process-live-p process))
+    (kill-process process)))
+    (remhash name hive-mcp-cider--sessions)
+    (message "hive-mcp-cider: Session '%s' killed" name))))
+
+(defun hive-mcp-cider-eval-in-session (name code)
+  "Evaluate CODE in the CIDER session NAME.\nUses async evaluation with heartbeat polling."
+  (let* ((session (gethash name hive-mcp-cider--sessions))
+        (cider-buf (plist-get session :cider-buffer)))
+    (unless session
+    (error "Session '%s' not found" name))
+    (unless (eq (plist-get session :status) 'connected)
+    (error "Session '%s' not connected (status: %s)" name (plist-get session :status)))
+    (with-current-buffer cider-buf
+    (-eval-with-heartbeat code))))
+
+(defun hive-mcp-cider-kill-all-sessions ()
+  "Kill all CIDER sessions."
+  (interactive)
+  (maphash (lambda (name _props)
+    (kill-session name)) hive-mcp-cider--sessions)
+  (clrhash hive-mcp-cider--sessions)
+  (message "hive-mcp-cider: All sessions killed"))
+
+(defun hive-mcp-cider---find-connected-session ()
+  "Find first connected session from registry.\nReturns session name (string) or nil."
+  (let* ((result nil))
+    (maphash (lambda (name props)
+    (when (and (not result) (eq (plist-get props :status) 'connected))
+    (setq result name))) hive-mcp-cider--sessions)
+    result))
+
+(defun hive-mcp-cider---switch-to-session (name)
+  "Switch to the CIDER session NAME, making it the default connection.\nReturns t if successful, nil otherwise."
+  (let* ((session (gethash name hive-mcp-cider--sessions))
+        (cider-buf (plist-get session :cider-buffer)))
+    (when (and cider-buf (get-buffer cider-buf))
+    (with-current-buffer cider-buf
+    (when (fboundp 'cider-make-connection-default)
+    (cider-make-connection-default (current-buffer))
+    t)))))
+
+(defun hive-mcp-cider---ensure-connected ()
+  "Ensure CIDER is connected, reusing existing session or spawning new.\nReturns t if connected, signals error otherwise.\nPriority: 1) Already connected 2) Reuse registry session 3) Connect to port 4) Spawn new."
+  (cond
+  (((and (featurep 'cider) (cider-connected-p)) t) ((when-let-star (list session-name (-find-connected-session)) (message "hive-mcp-cider: Reusing session '%s'" session-name) (-switch-to-session session-name) t)))
+  (((-port-open-p hive-mcp-cider-nrepl-port) (message "hive-mcp-cider: Auto-connecting to port %d" hive-mcp-cider-nrepl-port) (condition-case nil
+    (progn
+  (cider-connect-clj (list :host "localhost" :port hive-mcp-cider-nrepl-port))
+  t)
+  (error nil))) (t (let* ((auto-session (gethash "auto" hive-mcp-cider--sessions)))
+    (when (and auto-session (memq (plist-get auto-session :status) '(error timeout)))
+    (kill-session "auto")
+    (setq auto-session nil))
+    (unless auto-session
+    (message "hive-mcp-cider: Spawning new session 'auto'")
+    (spawn-session "auto"))
+    (let* ((attempts 0)
+        (max-attempts 30))
+    (while (and (< attempts max-attempts) (not (cider-connected-p)))
+    (sleep-for 0.5)
+    (setq attempts (1+ attempts)))
+    (cider-connected-p)))))))
+
+(defun hive-mcp-cider---project-dir ()
+  "Get the project directory for nREPL."
+  (or hive-mcp-cider-project-dir (when (fboundp 'project-root)
+    (when-let-star (list proj (project-current)) (project-root proj))) default-directory))
+
+(defun hive-mcp-cider---port-open-p (port)
+  "Check if PORT is accepting connections."
+  (condition-case nil
+    (let* ((proc (make-network-process :name "nrepl-check" :host "localhost" :service port :nowait nil)))
+    (delete-process proc)
+    t)
+  (error nil)))
+
+(defun hive-mcp-cider---start-nrepl-async ()
+  "Start nREPL server asynchronously in background.\nDoes not block Emacs startup.  Uses the port from `hive-mcp-cider-nrepl-port'."
+  (let* ((default-directory (-project-dir))
+        (port (number-to-string hive-mcp-cider-nrepl-port))
+        (buf-name "*nREPL-server*"))
+    (message "hive-mcp-cider: Starting nREPL on port %s in %s..." port default-directory)
+    (setq hive-mcp-cider--nrepl-process (start-process "nrepl-server" buf-name "clojure" "-M:dev" "-m" "nrepl.cmdline" "--port" port "--middleware" "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"))))
+
+(defun hive-mcp-cider---try-connect ()
+  "Try to connect CIDER to nREPL.  Returns t if successful."
+  (when (and (featurep 'cider) (fboundp 'cider-connect-clj) (not (cider-connected-p)) (-port-open-p hive-mcp-cider-nrepl-port))
+    (condition-case err
+    (progn
+  (cider-connect-clj (list :host "localhost" :port hive-mcp-cider-nrepl-port))
+  (when (fboundp 'hive-mcp-memory-init-cider-delegate)
+    (hive-mcp-memory-init-cider-delegate))
+  (message "hive-mcp-cider: Connected to nREPL on port %d" hive-mcp-cider-nrepl-port)
+  t)
+  (error (message "hive-mcp-cider: Connection failed: %s" (error-message-string err))
+      nil))))
+
+(defun hive-mcp-cider---auto-connect-tick ()
+  "Timer callback for auto-connect attempts."
+  (condition-case err
+    (progn
+  (setq hive-mcp-cider--connect-attempts (1+ hive-mcp-cider--connect-attempts))
+  (cond
+  (((and (featurep 'cider) (cider-connected-p)) (-stop-auto-connect) (when (fboundp 'hive-mcp-memory-init-cider-delegate)
+    (hive-mcp-memory-init-cider-delegate)) (message "hive-mcp-cider: Already connected")) ((-try-connect) (-stop-auto-connect)))))
+  (error (message "[cider] Auto-connect tick error: %s" (error-message-string err)))))
+
+(defun hive-mcp-cider---start-auto-connect ()
+  "Start the auto-connect timer."
+  (unless hive-mcp-cider--connect-timer
+    (setq hive-mcp-cider--connect-attempts 0)
+    (setq hive-mcp-cider--connect-timer (run-with-timer hive-mcp-cider-connect-retry-interval hive-mcp-cider-connect-retry-interval #'-auto-connect-tick))
+    (message "hive-mcp-cider: Auto-connect started (checking every %.1fs)" hive-mcp-cider-connect-retry-interval)))
+
+(defun hive-mcp-cider---stop-auto-connect ()
+  "Stop the auto-connect timer."
+  (when hive-mcp-cider--connect-timer
+    (cancel-timer hive-mcp-cider--connect-timer)
+    (setq hive-mcp-cider--connect-timer nil)))
+
+(defun hive-mcp-cider-start-nrepl ()
+  "Start nREPL server and auto-connect CIDER.\nNon-blocking - runs in background."
+  (interactive)
+  (-start-nrepl-async)
+  (when hive-mcp-cider-auto-connect
+    (-start-auto-connect)))
+
+(defun hive-mcp-cider-auto-connect ()
+  "Start polling for nREPL and connect when available.\nUse this when nREPL is started externally."
+  (interactive)
+  (-start-auto-connect))
+
+(defun hive-mcp-cider-stop-nrepl ()
+  "Stop the auto-started nREPL server."
+  (interactive)
+  (-stop-auto-connect)
+  (when (and hive-mcp-cider--nrepl-process (process-live-p hive-mcp-cider--nrepl-process))
+    (kill-process hive-mcp-cider--nrepl-process)
+    (setq hive-mcp-cider--nrepl-process nil)
+    (message "hive-mcp-cider: nREPL server stopped")))
+
+(defun hive-mcp-cider---get-clojure-context ()
+  "Get Clojure-specific context for MCP."
+  (when (and (featurep 'cider) (fboundp 'cider-current-connection) (cider-current-connection))
+    (list :clojure (list :namespace (when (fboundp 'cider-current-ns)
+    (cider-current-ns)) :connected t :repl-type (when (boundp 'cider-repl-type)
+    cider-repl-type)))))
+
+(defun hive-mcp-cider-save-last-result ()
+  "Save the last REPL result to memory."
+  (interactive)
+  (if hive-mcp-cider--last-eval (let* ((expr (plist-get hive-mcp-cider--last-eval :expr))
+        (result (plist-get hive-mcp-cider--last-eval :result))
+        (ns (plist-get hive-mcp-cider--last-eval :ns))
+        (tags (split-string (clel-read-string "Tags (comma-separated): " "clojure,repl") "," t " "))
+        (content (format "Namespace: %s\nExpression: %s\nResult: %s" ns expr result)))
+    (hive-mcp-api-memory-add "snippet" content tags)
+    (message "Saved REPL result to memory")) (message "No recent REPL result to save")))
+
+(defun hive-mcp-cider-save-defun ()
+  "Save the current function definition to memory."
+  (interactive)
+  (let* ((bounds (bounds-of-thing-at-point 'defun))
+        (defun-text (when bounds
+    (buffer-substring-no-properties (car bounds) (cdr bounds))))
+        (ns (when (fboundp 'cider-current-ns)
+    (cider-current-ns)))
+        (tags (split-string (clel-read-string "Tags (comma-separated): " "clojure,function") "," t " ")))
+    (if defun-text (let* ((content (format "Namespace: %s\n\n%s" ns defun-text)))
+    (hive-mcp-api-memory-add "snippet" content tags)
+    (message "Saved function to memory")) (message "No function at point"))))
+
+(defun hive-mcp-cider-query-solutions (query)
+  "Query memory for Clojure solutions matching QUERY."
+  (interactive "sSearch for: ")
+  (let* ((results (hive-mcp-api-memory-query "snippet" '("clojure") 20))
+        (buf (get-buffer-create "*MCP Clojure Solutions*")))
+    (with-current-buffer buf
+    (erase-buffer)
+    (clojure-mode)
+    (insert ";; === Clojure Solutions from Memory ===\n\n")
+    (if (equal (length results) 0) (insert ";; No solutions found\n") (cl-dotimes (i (length results))
+    (let* ((entry (aref results i))
+        (content (alist-get 'content entry))
+        (tags (alist-get 'tags entry)))
+    (insert (format ";; --- Entry %d [%s] ---\n" (1+ i) (mapconcat #'identity tags ", ")))
+    (insert content)
+    (insert "\n\n"))))
+    (goto-char (point-min)))
+    (display-buffer buf)))
+
+(defun hive-mcp-cider-eval-with-context ()
+  "Evaluate expression with MCP context injected as comment."
+  (interactive)
+  (when (fboundp 'cider-interactive-eval)
+    (let* ((ctx (hive-mcp-api-get-context))
+        (ctx-comment (format ";; Context: %s @ %s\n" (plist-get (plist-get ctx :buffer) :name) (plist-get (plist-get ctx :project) :name)))
+        (expr (when (fboundp 'cider-last-sexp)
+    (cider-last-sexp))))
+    (setq hive-mcp-cider--last-eval (list :expr expr :ns (when (fboundp 'cider-current-ns)
+    (cider-current-ns)) :context ctx))
+    (cider-interactive-eval expr))))
+
+(defun hive-mcp-cider---after-eval-advice (orig-fun &rest args)
+  "Advice around ORIG-FUN with ARGS to capture eval results for saving."
+  (let* ((result (apply orig-fun args)))
+    (when (and hive-mcp-cider-auto-log-results result (> (length (format "%s" result)) hive-mcp-cider-log-threshold))
+    (setq hive-mcp-cider--last-eval (list :expr (car args) :result result :ns (when (fboundp 'cider-current-ns)
+    (cider-current-ns)))))
+    result))
+
+(transient-define-prefix hive-mcp-cider-transient (nil) "MCP integration menu for CIDER." (list "hive-mcp + CIDER" (list "nREPL Server" ("n" "Start nREPL (async)" hive-mcp-cider-start-nrepl) ("N" "Stop nREPL" hive-mcp-cider-stop-nrepl) ("c" "Auto-connect" hive-mcp-cider-auto-connect)) (list "Evaluate" ("e" "Eval with context" hive-mcp-cider-eval-with-context)) (list "Memory" ("s" "Save last result" hive-mcp-cider-save-last-result) ("d" "Save defun" hive-mcp-cider-save-defun) ("q" "Query solutions" hive-mcp-cider-query-solutions)) (list "Settings" ("L" "Toggle auto-log" hive-mcp-cider-toggle-auto-log))))
+
+(defun hive-mcp-cider-toggle-auto-log ()
+  "Toggle automatic logging of REPL results."
+  (interactive)
+  (setq hive-mcp-cider-auto-log-results (not hive-mcp-cider-auto-log-results))
+  (message "Auto-log %s" (if hive-mcp-cider-auto-log-results "enabled" "disabled")))
+
+(defun hive-mcp-cider-eval-silent (code)
+  "Evaluate CODE via CIDER silently, return result.\nAuto-connects if not connected, reusing existing session if available.\nUses async evaluation with heartbeat polling."
+  (unless (-ensure-connected)
+    (error "CIDER could not connect - no nREPL available"))
+  (-eval-with-heartbeat code))
+
+(defun hive-mcp-cider---eval-with-heartbeat (code)
+  "Evaluate CODE asynchronously with heartbeat polling.\nReturns result when ready or signals error on timeout."
+  (setq hive-mcp-cider--async-result nil hive-mcp-cider--async-done nil hive-mcp-cider--async-error nil)
+  (cider-nrepl-request:eval code (lambda (response)
+    (let* ((value (nrepl-dict-get response "value"))
+        (err (nrepl-dict-get response "err"))
+        (out (nrepl-dict-get response "out"))
+        (status (nrepl-dict-get response "status")))
+    (when value
+    (setq hive-mcp-cider--async-result value))
+    (when err
+    (setq hive-mcp-cider--async-error err))
+    (when (and out (not hive-mcp-cider--async-result))
+    (setq hive-mcp-cider--async-result out))
+    (when (member "done" status)
+    (setq hive-mcp-cider--async-done t)))))
+  (let* ((start-time (float-time))
+        (timeout hive-mcp-cider-eval-timeout)
+        (interval hive-mcp-cider-poll-interval))
+    (while (and (not hive-mcp-cider--async-done) (< (- (float-time) start-time) timeout))
+    (accept-process-output nil interval))
+    (cond
+  (((not hive-mcp-cider--async-done) (error "Eval timed out after %d seconds (heartbeat polling)" timeout)) (hive-mcp-cider--async-error hive-mcp-cider--async-error))
+  ((hive-mcp-cider--async-result hive-mcp-cider--async-result) (t "nil")))))
+
+(defun hive-mcp-cider-eval-explicit (code)
+  "Evaluate CODE via CIDER interactively.\nAuto-connects if not connected, reusing existing session if available.\nShows output in REPL buffer for collaborative debugging."
+  (unless (-ensure-connected)
+    (error "CIDER could not connect - no nREPL available"))
+  (cider-interactive-eval code)
+  (format "Sent to REPL: %s" (truncate-string-to-width code 50 nil nil "...")))
+
+(defun hive-mcp-cider-status ()
+  "Return CIDER connection status as JSON-compatible plist."
+  (list :connected (and (featurep 'cider) (cider-connected-p)) :repl-buffer (when (and (featurep 'cider) (cider-connected-p))
+    (buffer-name (car (cider-repl-buffers)))) :namespace (when (and (featurep 'cider) (cider-connected-p))
+    (cider-current-ns)) :repl-type (when (and (featurep 'cider) (boundp 'cider-repl-type))
+    cider-repl-type)))
+
+(defun hive-mcp-cider-doc (symbol-name)
+  "Get documentation for SYMBOL-NAME using CIDER.\nReturns a plist with :doc, :arglists, :ns, :name."
+  (if (and (featurep 'cider) (cider-connected-p)) (let* ((info (cider-var-info symbol-name))
+        (doc (nrepl-dict-get info "doc"))
+        (arglists (nrepl-dict-get info "arglists"))
+        (ns (nrepl-dict-get info "ns"))
+        (name (nrepl-dict-get info "name"))
+        (file (nrepl-dict-get info "file"))
+        (line (nrepl-dict-get info "line")))
+    (list :doc (or doc "No documentation available") :arglists (or arglists "") :ns (or ns "") :name (or name symbol-name) :file (or file "") :line (or line 0))) (error "CIDER not connected")))
+
+(defun hive-mcp-cider-apropos (pattern &optional docs-p)
+  "Search for symbols matching PATTERN using CIDER.\nIf DOCS-P is non-nil, also search in docstrings.\nReturns a vector of matching symbols with their info."
+  (if (and (featurep 'cider) (cider-connected-p)) (let* ((ns (cider-current-ns))
+        (response (cider-nrepl-send-sync-request (list "op" "apropos" "query" pattern "ns" ns "docs?" (when docs-p "t") "privates?" "t" "case-sensitive?" nil)))
+        (apropos-matches (nrepl-dict-get response "apropos-matches")))
+    (if apropos-matches (vconcat (mapcar (lambda (match)
+    (list :name (nrepl-dict-get match "name") :type (nrepl-dict-get match "type") :doc (or (nrepl-dict-get match "doc") ""))) apropos-matches)) (list ))) (error "CIDER not connected")))
+
+(defun hive-mcp-cider-info (symbol-name)
+  "Get full semantic info for SYMBOL-NAME via CIDER's info op.\nReturns comprehensive information including source location, spec, etc."
+  (if (and (featurep 'cider) (cider-connected-p)) (let* ((info (cider-var-info symbol-name)))
+    (if info (let* ((result '()))
+    (dolist (key '("name" "ns" "doc" "arglists" "file" "line" "column" "resource" "macro" "special-form" "protocol" "spec" "see-also" "added" "deprecated"))
+    (let* ((val (nrepl-dict-get info key)))
+    (when val
+    (setq result (plist-put result (intern (clel-concat ":" key)) val)))))
+    result) (list :error (format "No info found for '%s'" symbol-name)))) (error "CIDER not connected")))
+
+(defun hive-mcp-cider-complete (prefix)
+  "Get completions for PREFIX using CIDER.\nReturns a vector of completion candidates."
+  (if (and (featurep 'cider) (cider-connected-p)) (let* ((ns (cider-current-ns))
+        (context (cider-completion-get-context))
+        (response (cider-nrepl-send-sync-request (list "op" "complete" "ns" ns "prefix" prefix "context" context)))
+        (completions (nrepl-dict-get response "completions")))
+    (if completions (vconcat (mapcar (lambda (c)
+    (list :candidate (nrepl-dict-get c "candidate") :type (nrepl-dict-get c "type") :ns (nrepl-dict-get c "ns"))) completions)) (list ))) (error "CIDER not connected")))
+
+(defun hive-mcp-cider---addon-init ()
+  "Synchronous init for cider addon.\nSets up keybindings and loads required features.\nDoes nothing if cider is not available."
+  (if (not (featurep 'cider)) (message "hive-mcp-cider: cider package not found, addon disabled") (require 'hive-mcp-api nil t)))
+
+(defun hive-mcp-cider---addon-async-init ()
+  "Asynchronous init for cider addon.\nStarts nREPL server in background if configured.\nReturns the process object for lifecycle tracking."
+  (when hive-mcp-cider-auto-start-nrepl
+    (-start-nrepl-async)
+    (when hive-mcp-cider-auto-connect
+    (-start-auto-connect)
+    (when hive-mcp-cider--connect-timer
+    (when (fboundp 'hive-mcp-addon-register-timer)
+    (hive-mcp-addon-register-timer 'cider hive-mcp-cider--connect-timer))))
+    hive-mcp-cider--nrepl-process))
+
+(defun hive-mcp-cider---addon-shutdown ()
+  "Shutdown function for cider addon.\nStops nREPL server and cleans up timers."
+  (-stop-auto-connect)
+  (when (and hive-mcp-cider--nrepl-process (process-live-p hive-mcp-cider--nrepl-process))
+    (kill-process hive-mcp-cider--nrepl-process)
+    (setq hive-mcp-cider--nrepl-process nil))
+  (message "hive-mcp-cider: shutdown complete"))
+
+(define-minor-mode hive-mcp-cider-mode
+  "Minor mode for hive-mcp integration with CIDER.\n\nProvides:\n- Save REPL results to memory\n- Query past solutions\n- Clojure-aware context\n\nNote: nREPL auto-start is handled by addon lifecycle hooks.\nSet `hive-mcp-cider-auto-start-nrepl' to t and load the addon."
+  :init-value nil
+  :lighter " MCP-Clj"
+  :global t
+  :group 'hive-mcp-cider
+  (if hive-mcp-cider-mode (message "hive-mcp-cider mode enabled") (message "hive-mcp-cider mode disabled")))
+
+(with-eval-after-load 'hive-mcp-addons
+  (hive-mcp-addon-register 'cider :version "0.2.0" :description "Integration with CIDER (Clojure IDE) - async nREPL startup" :requires '(cider hive-mcp-api) :provides '(hive-mcp-cider-mode hive-mcp-cider-transient) :init #'-addon-init :async-init #'-addon-async-init :shutdown #'-addon-shutdown))
+
 (provide 'hive-mcp-cider)
 ;;; hive-mcp-cider.el ends here

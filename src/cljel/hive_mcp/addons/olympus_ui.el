@@ -168,5 +168,193 @@
     (clel-concat top-border "\n" (apply 'concat (mapcar (lambda (_)
     (clel-concat empty-line "\n")) (number-sequence 1 (- height 2)))) bottom-border)))
 
+(defun olympus-ui--render-header (state)
+  "Render the grid header with status summary."
+  (let* ((ling-count (or (plist-get state :ling-count) 0))
+        (layout (plist-get state :layout))
+        (layout-mode (or (plist-get state :layout-mode) :auto))
+        (active-tab (or (plist-get state :active-tab) 0))
+        (tabs (plist-get layout :tabs))
+        (lings-data (plist-get state :lings))
+        (working-count 0)
+        (blocked-count 0)
+        (error-count 0))
+    (when lings-data
+    (maphash (lambda (_id data)
+    (let* ((status (plist-get data :status)))
+    (pcase status
+  ('working (setq working-count (1+ working-count)))
+  ('blocked (setq blocked-count (1+ blocked-count)))
+  ('error (setq error-count (1+ error-count)))))) lings-data))
+    (clel-concat (propertize "╔══════════════════════════════════════════════════════════════╗\n" 'face 'olympus-ui-header) (propertize "║                     OLYMPUS GRID                             ║\n" 'face 'olympus-ui-header) (propertize "╠══════════════════════════════════════════════════════════════╣\n" 'face 'olympus-ui-header) (format "║ Lings: %d  │  " ling-count) (propertize (format "●Working: %d  " working-count) 'face 'olympus-ui-status-working) (propertize (format "◐Blocked: %d  " blocked-count) 'face 'olympus-ui-status-blocked) (propertize (format "✗Error: %d" error-count) 'face 'olympus-ui-status-error) (if tabs (format "  │  Tab: %d/%d" (1+ active-tab) tabs) "") "\n" (propertize "╚══════════════════════════════════════════════════════════════╝\n\n" 'face 'olympus-ui-header))))
+
+(defun olympus-ui--render-grid (state)
+  "Render the full grid based on STATE.\nSTATE contains :layout, :positions, :lings."
+  (let* ((layout (plist-get state :layout))
+        (positions (plist-get state :positions))
+        (lings-data (plist-get state :lings))
+        (active-tab (plist-get state :active-tab))
+        (rows (or (plist-get layout :rows) 1))
+        (cols (or (plist-get layout :cols) 1))
+        (empty-cells (or (plist-get layout :empty-cells) '()))
+        (width olympus-ui-cell-width)
+        (height olympus-ui-cell-height))
+    (apply 'concat (cl-loop for row from 0 below rows collect (let* ((row-lines nil))
+    (cl-loop for col from 0 below cols do (let* ((ling-id nil)
+        (cell-str nil))
+    (maphash (lambda (id pos)
+    (when (and (equal (plist-get pos :row) row) (equal (plist-get pos :col) col) (or (null (plist-get pos :tab)) (equal (plist-get pos :tab) active-tab)))
+    (setq ling-id id))) positions)
+    (if ling-id (let* ((ling-info (gethash ling-id lings-data)))
+    (setq cell-str (olympus-ui--render-cell (list :id ling-id :name (plist-get ling-info :name) :status (plist-get ling-info :status) :task (plist-get ling-info :current-task)) width height (equal ling-id olympus-ui--focused-ling)))) (if (member (list row col) empty-cells) (setq cell-str (olympus-ui--render-empty-cell width height)) (setq cell-str (olympus-ui--render-empty-cell width height))))
+    (push cell-str row-lines)))
+    (let* ((cells (reverse row-lines))
+        (merged-lines nil))
+    (cl-dotimes (line-idx height)
+    (let* ((line-parts nil))
+    (dolist (cell cells)
+    (let* ((lines (split-string cell "\n")))
+    (push (nth line-idx lines) line-parts)))
+    (push (string-join (reverse line-parts) "  ") merged-lines)))
+    (clel-concat (string-join (reverse merged-lines) "\n") "\n\n")))))))
+
+(defun olympus-ui--render-keybindings ()
+  "Render keybinding help at bottom."
+  (clel-concat "\n" (propertize "──────────────────────────────────────────────────────────────────\n" 'face 'olympus-ui-cell-border) "  [r] Refresh  [a] Arrange  [f] Focus  [u] Unfocus  [n/p] Tab nav  [q] Quit\n" (propertize "──────────────────────────────────────────────────────────────────\n" 'face 'olympus-ui-cell-border)))
+
+(defun olympus-ui--ensure-buffer ()
+  "Ensure the Olympus buffer exists and return it."
+  (let* ((buf (get-buffer-create olympus-ui--buffer-name)))
+    (with-current-buffer buf
+    (unless (eq major-mode 'olympus-ui-mode)
+    (olympus-ui-mode)))
+    buf))
+
+(defun olympus-ui-refresh ()
+  "Refresh the Olympus grid display."
+  (interactive)
+  (let* ((state (olympus-ui--fetch-status)))
+    (when state
+    (setq olympus-ui--current-state state)
+    (with-current-buffer (olympus-ui--ensure-buffer)
+    (let* ((inhibit-read-only t)
+        (pos (point)))
+    (erase-buffer)
+    (insert (olympus-ui--render-header state))
+    (insert (olympus-ui--render-grid state))
+    (insert (olympus-ui--render-keybindings))
+    (goto-char (cl-min pos (point-max))))))))
+
+(defun olympus-ui-show ()
+  "Show the Olympus grid buffer."
+  (interactive)
+  (let* ((buf (olympus-ui--ensure-buffer)))
+    (olympus-ui-refresh)
+    (display-buffer buf)
+    (when (and (> olympus-ui-refresh-interval 0) (null olympus-ui--refresh-timer))
+    (setq olympus-ui--refresh-timer (run-with-timer olympus-ui-refresh-interval olympus-ui-refresh-interval #'olympus-ui-refresh)))))
+
+(defun olympus-ui-hide ()
+  "Hide the Olympus grid buffer and stop auto-refresh."
+  (interactive)
+  (when olympus-ui--refresh-timer
+    (cancel-timer olympus-ui--refresh-timer)
+    (setq olympus-ui--refresh-timer nil))
+  (when-let ((buf (get-buffer olympus-ui--buffer-name)))
+    (delete-windows-on buf)))
+
+(defun olympus-ui-focus-ling (ling-id)
+  "Focus/maximize a specific ling by LING-ID."
+  (interactive (list (completing-read "Focus ling: " (when olympus-ui--current-state
+    (hash-table-keys (plist-get olympus-ui--current-state :lings))))))
+  (when (olympus-ui--ensure-api)
+    (hive-mcp-api-call "olympus" (list :command "focus" :ling-id ling-id))
+    (setq olympus-ui--focused-ling ling-id)
+    (olympus-ui-refresh)))
+
+(defun olympus-ui-unfocus ()
+  "Restore grid view (unfocus)."
+  (interactive)
+  (when (olympus-ui--ensure-api)
+    (hive-mcp-api-call "olympus" (list :command "focus" :restore t))
+    (setq olympus-ui--focused-ling nil)
+    (olympus-ui-refresh)))
+
+(defun olympus-ui-arrange (mode)
+  "Arrange grid with MODE (:auto, :manual, :stacked)."
+  (interactive (list (intern (completing-read "Arrange mode: " '("auto" "manual" "stacked")))))
+  (when (olympus-ui--ensure-api)
+    (hive-mcp-api-call "olympus" (list :command "arrange" :mode mode))
+    (olympus-ui-refresh)))
+
+(defun olympus-ui-next-tab ()
+  "Navigate to next tab."
+  (interactive)
+  (when (olympus-ui--ensure-api)
+    (hive-mcp-api-call "olympus" (list :command "tab" :direction "next"))
+    (olympus-ui-refresh)))
+
+(defun olympus-ui-prev-tab ()
+  "Navigate to previous tab."
+  (interactive)
+  (when (olympus-ui--ensure-api)
+    (hive-mcp-api-call "olympus" (list :command "tab" :direction "prev"))
+    (olympus-ui-refresh)))
+
+(defun olympus-ui--on-hivemind-event (event)
+  "Handle incoming hivemind event for real-time updates.\nEVENT is a plist with :agent-id, :event-type, :message."
+  (let* ((event-type (plist-get event :event-type)))
+    (when (member event-type '(:started :progress :completed :error :blocked))
+    (when (get-buffer-window olympus-ui--buffer-name)
+    (olympus-ui-refresh)))))
+
+(defun olympus-ui-subscribe-to-events ()
+  "Subscribe to hivemind events for real-time updates."
+  (interactive)
+  (when (olympus-ui--ensure-api)
+    (when (fboundp 'hive-mcp-api-subscribe-hivemind)
+    (setq olympus-ui--ws-subscription (hive-mcp-api-subscribe-hivemind #'olympus-ui--on-hivemind-event))
+    (message "Olympus: subscribed to hivemind events"))))
+
+(defun olympus-ui-unsubscribe-from-events ()
+  "Unsubscribe from hivemind events."
+  (interactive)
+  (when olympus-ui--ws-subscription
+    (when (fboundp 'hive-mcp-api-unsubscribe-hivemind)
+    (hive-mcp-api-unsubscribe-hivemind olympus-ui--ws-subscription))
+    (setq olympus-ui--ws-subscription nil)
+    (message "Olympus: unsubscribed from events")))
+
+(defvar olympus-ui-mode-map (let* ((map (make-sparse-keymap)))
+    (define-key map "r" #'olympus-ui-refresh)
+    (define-key map "g" #'olympus-ui-refresh)
+    (define-key map "a" #'olympus-ui-arrange)
+    (define-key map "f" #'olympus-ui-focus-ling)
+    (define-key map "u" #'olympus-ui-unfocus)
+    (define-key map "n" #'olympus-ui-next-tab)
+    (define-key map "p" #'olympus-ui-prev-tab)
+    (define-key map "q" #'olympus-ui-hide)
+    (define-key map "s" #'olympus-ui-subscribe-to-events)
+    map)
+  "Keymap for olympus-ui-mode.")
+
+(define-derived-mode olympus-ui-mode special-mode "Olympus" "Major mode for Olympus grid display.\n\n\\{olympus-ui-mode-map}" (setq buffer-read-only t) (setq truncate-lines t) (olympus-ui-subscribe-to-events))
+
+(defun olympus-ui-cleanup ()
+  "Clean up Olympus UI resources."
+  (interactive)
+  (olympus-ui-hide)
+  (olympus-ui-unsubscribe-from-events)
+  (setq olympus-ui--current-state nil)
+  (when-let ((buf (get-buffer olympus-ui--buffer-name)))
+    (kill-buffer buf)))
+
+(defun olympus-ui-olympus ()
+  "Open the Olympus grid UI."
+  (interactive)
+  (olympus-ui-show))
+
+(provide 'olympus-ui)
+
 (provide 'olympus-ui)
 ;;; olympus-ui.el ends here

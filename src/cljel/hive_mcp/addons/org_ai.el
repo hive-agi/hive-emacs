@@ -131,5 +131,150 @@
     (hive-mcp-api-memory-add "conversation" content tags)
     (message "Saved conversation to memory"))))
 
+(defun hive-mcp-org-ai-query-conversations ()
+  "Query previous org-ai conversations from memory."
+  (interactive)
+  (-ensure-available)
+  (let* ((query (clel-read-string "Search for: " nil))
+        (results (hive-mcp-api-memory-query "conversation" '("org-ai") 10))
+        (buf (get-buffer-create "*MCP Org-AI Conversations*")))
+    (with-current-buffer buf
+    (erase-buffer)
+    (org-mode)
+    (insert "#+TITLE: Org-AI Conversation History\n\n")
+    (if (equal (length results) 0) (insert "No conversations found.\n") (cl-dotimes (i (length results))
+    (let* ((entry (aref results i))
+        (content (alist-get 'content entry))
+        (created (alist-get 'created entry))
+        (tags (alist-get 'tags entry)))
+    (insert (format "* Conversation %d\n" (1+ i)))
+    (insert (format ":PROPERTIES:\n"))
+    (insert (format ":CREATED: %s\n" created))
+    (when (and tags (> (length tags) 0))
+    (insert (format ":TAGS: %s\n" (mapconcat #'identity tags ", "))))
+    (insert ":END:\n\n")
+    (insert content)
+    (insert "\n\n"))))
+    (goto-char (point-min)))
+    (display-buffer buf)))
+
+(defun hive-mcp-org-ai-save-to-memory ()
+  "Save selected text or region to hive-mcp memory."
+  (interactive)
+  (-ensure-available)
+  (let* ((text (if (use-region-p) (buffer-substring-no-properties (region-beginning) (region-end)) (clel-read-string "Content: ")))
+        (type (completing-read "Type: " '("note" "snippet" "decision" "convention") nil t))
+        (tags (split-string (clel-read-string "Tags (comma-separated): " "org-ai") "," t " ")))
+    (hive-mcp-api-memory-add type text tags)
+    (message "Saved to memory as %s" type)))
+
+(defun hive-mcp-org-ai-query-memory ()
+  "Query hive-mcp memory and insert results."
+  (interactive)
+  (-ensure-available)
+  (let* ((type (completing-read "Query type: " '("note" "snippet" "decision" "convention") nil t "note"))
+        (results (hive-mcp-api-memory-query type nil 5)))
+    (if (equal (length results) 0) (message "No %s entries found" type) (let* ((buf (get-buffer-create "*MCP Memory Results*")))
+    (with-current-buffer buf
+    (erase-buffer)
+    (org-mode)
+    (insert (format "#+TITLE: Memory: %s\n\n" type))
+    (cl-dotimes (i (length results))
+    (let* ((entry (aref results i))
+        (content (alist-get 'content entry))
+        (tags (alist-get 'tags entry)))
+    (insert (format "* Entry %d\n" (1+ i)))
+    (when (and tags (> (length tags) 0))
+    (insert (format "Tags: %s\n\n" (mapconcat #'identity tags ", "))))
+    (insert content)
+    (insert "\n\n")))
+    (goto-char (point-min)))
+    (display-buffer buf)))))
+
+(defun hive-mcp-org-ai-run-workflow ()
+  "Select and run an hive-mcp workflow."
+  (interactive)
+  (-ensure-available)
+  (let* ((workflows (hive-mcp-api-list-workflows))
+        (names (mapcar (lambda (w)
+    (alist-get 'name w)) workflows))
+        (selected (completing-read "Run workflow: " names nil t)))
+    (hive-mcp-api-run-workflow selected)
+    (message "Workflow '%s' executed" selected)))
+
+(defun hive-mcp-org-ai-show-context ()
+  "Show current hive-mcp context in a buffer."
+  (interactive)
+  (-ensure-available)
+  (let* ((ctx (hive-mcp-api-get-context))
+        (formatted (-format-context-smart ctx))
+        (buf (get-buffer-create "*MCP Context*")))
+    (with-current-buffer buf
+    (erase-buffer)
+    (org-mode)
+    (insert "#+TITLE: Current MCP Context\n\n")
+    (insert formatted)
+    (insert "\n\n* Full JSON\n\n")
+    (insert "#+BEGIN_SRC json\n")
+    (insert (json-encode ctx))
+    (insert "\n#+END_SRC\n")
+    (goto-char (point-min)))
+    (display-buffer buf)))
+
+(transient-define-prefix hive-mcp-org-ai-transient (nil) "MCP integration menu for org-ai." (list "hive-mcp + org-ai" (list "Context" ("c" "Show context" hive-mcp-org-ai-show-context) ("i" "Insert context" hive-mcp-org-ai-insert-context)) (list "Memory" ("s" "Save conversation" hive-mcp-org-ai-save-conversation) ("m" "Save to memory" hive-mcp-org-ai-save-to-memory) ("q" "Query memory" hive-mcp-org-ai-query-memory) ("h" "Query conversations" hive-mcp-org-ai-query-conversations)) (list "Workflows" ("w" "Run workflow" hive-mcp-org-ai-run-workflow)) (list "Settings" ("C" "Toggle auto-context" hive-mcp-org-ai-toggle-auto-context) ("L" "Toggle logging" hive-mcp-org-ai-toggle-logging) ("M" "Toggle memory inclusion" hive-mcp-org-ai-toggle-memory))))
+
+(defun hive-mcp-org-ai-toggle-auto-context ()
+  "Toggle automatic context injection."
+  (interactive)
+  (setq hive-mcp-org-ai-auto-context (not hive-mcp-org-ai-auto-context))
+  (message "Auto-context %s" (if hive-mcp-org-ai-auto-context "enabled" "disabled")))
+
+(defun hive-mcp-org-ai-toggle-logging ()
+  "Toggle conversation logging."
+  (interactive)
+  (setq hive-mcp-org-ai-log-conversations (not hive-mcp-org-ai-log-conversations))
+  (message "Conversation logging %s" (if hive-mcp-org-ai-log-conversations "enabled" "disabled")))
+
+(defun hive-mcp-org-ai-toggle-memory ()
+  "Toggle memory inclusion in context."
+  (interactive)
+  (setq hive-mcp-org-ai-include-memory (not hive-mcp-org-ai-include-memory))
+  (message "Memory inclusion %s" (if hive-mcp-org-ai-include-memory "enabled" "disabled")))
+
+(defun hive-mcp-org-ai---maybe-add-context (text)
+  "Maybe add context to TEXT if auto-context is enabled."
+  (if (and hive-mcp-org-ai-auto-context (-available-p)) (let* ((ctx (-get-context-string)))
+    (if (and ctx (not (string-empty-p ctx))) (format "%s\n\n%s" ctx text) text)) text))
+
+(defun hive-mcp-org-ai---log-conversation (prompt response)
+  "Log PROMPT and RESPONSE to conversation memory if logging is enabled."
+  (when (and hive-mcp-org-ai-log-conversations (-available-p))
+    (ignore-errors (let* ((content (format "** User\n%s\n\n** Assistant\n%s" prompt response)))
+    (setq hive-mcp-org-ai--last-conversation content)
+    (hive-mcp-api-conversation-log "org-ai" content)))))
+
+(defvar hive-mcp-org-ai-block-map (let* ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c m") 'hive-mcp-org-ai-insert-context)
+    (define-key map (kbd "C-c C-c s") 'hive-mcp-org-ai-save-conversation)
+    (define-key map (kbd "C-c C-c q") 'hive-mcp-org-ai-query-memory)
+    (define-key map (kbd "C-c C-c h") 'hive-mcp-org-ai-query-conversations)
+    (define-key map (kbd "C-c C-c w") 'hive-mcp-org-ai-run-workflow)
+    (define-key map (kbd "C-c C-c M") 'hive-mcp-org-ai-transient)
+    map)
+  "Keymap for org-ai blocks with MCP integration.")
+
+(define-minor-mode hive-mcp-org-ai-mode
+  "Minor mode for hive-mcp integration with org-ai.\n\nWhen enabled, provides:\n- Context injection for AI prompts\n- Memory persistence integration\n- Conversation history\n- Workflow access\n\nKey bindings in org-ai blocks (see `hive-mcp-org-ai-block-map'):\n  \\[hive-mcp-org-ai-insert-context] - Insert context\n  \\[hive-mcp-org-ai-save-conversation] - Save conversation\n  \\[hive-mcp-org-ai-query-memory] - Query memory\n  \\[hive-mcp-org-ai-transient] - Open transient menu\n\nRequires `org-ai' package to be installed."
+  :init-value nil
+  :lighter " MCP-AI"
+  :global t
+  :group 'hive-mcp-org-ai
+  (if hive-mcp-org-ai-mode (if (not (featurep 'org-ai)) (progn
+  (setq hive-mcp-org-ai-mode nil)
+  (message "hive-mcp-org-ai: org-ai not available, addon disabled")) (require 'hive-mcp-api nil t)) (message "Emacs-mcp-org-ai disabled")))
+
+(with-eval-after-load 'hive-mcp-addons
+  (hive-mcp-addon-register 'org-ai :version "0.1.0" :description "Integration with org-ai (AI chat in org-mode)" :requires '(org-ai hive-mcp-api) :provides '(hive-mcp-org-ai-mode hive-mcp-org-ai-transient)))
+
 (provide 'hive-mcp-org-ai)
 ;;; hive-mcp-org-ai.el ends here

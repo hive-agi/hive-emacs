@@ -177,5 +177,62 @@
     (goto-char (point-min)))
     (display-buffer buf)) (message "Not in a projectile project")))
 
+(defun hive-mcp-projectile-list-projects ()
+  "Display all known projects."
+  (interactive)
+  (let* ((projects (api-list-projects))
+        (buf (get-buffer-create "*MCP Known Projects*")))
+    (with-current-buffer buf
+    (erase-buffer)
+    (insert "=== Known Projectile Projects ===\n\n")
+    (if (equal (length projects) 0) (insert "No projects found.\n") (cl-dotimes (i (length projects))
+    (let* ((proj (aref projects i)))
+    (insert (format "%d. %s\n   Root: %s\n   Exists: %s\n\n" (1+ i) (plist-get proj :name) (plist-get proj :root) (if (plist-get proj :exists) "yes" "NO")))))))
+    (goto-char (point-min))
+    (display-buffer buf)))
+
+(defun hive-mcp-projectile-search-interactive (pattern)
+  "Search project for PATTERN and display results."
+  (interactive "sSearch pattern: ")
+  (if (-in-project-p) (let* ((results (api-search pattern))
+        (buf (get-buffer-create "*MCP Project Search*")))
+    (with-current-buffer buf
+    (erase-buffer)
+    (insert (format "=== Search Results for '%s' ===\n\n" pattern))
+    (insert (format "Found: %d matches\n\n" (length results)))
+    (if (equal (length results) 0) (insert "No matches found.\n") (cl-dotimes (i (length results))
+    (let* ((match (aref results i)))
+    (insert (format "%s:%d: %s\n" (plist-get match :file) (plist-get match :line) (plist-get match :content))))))
+    (goto-char (point-min))
+    (grep-mode))
+    (display-buffer buf)) (message "Not in a projectile project")))
+
+(defun hive-mcp-projectile-transient ()
+  "MCP Projectile menu."
+  (interactive)
+  (if (require 'transient nil t) (progn
+  (transient-define-prefix hive-mcp-projectile--menu (nil) "MCP Projectile menu." (list "hive-mcp + Projectile" (list "Info" ("i" "Project info" hive-mcp-projectile-show-info) ("p" "List projects" hive-mcp-projectile-list-projects)) (list "Search" ("s" "Search" hive-mcp-projectile-search-interactive))))
+  (hive-mcp-projectile--menu)) (message "Transient not available")))
+
+(defun hive-mcp-projectile---addon-init ()
+  "Initialize projectile addon.\nDoes nothing if projectile is not available."
+  (if (not (featurep 'projectile)) (message "hive-mcp-projectile: projectile package not found, addon disabled") (require 'hive-mcp-api nil t)))
+
+(defun hive-mcp-projectile---addon-shutdown ()
+  "Shutdown projectile addon."
+  (setq hive-mcp-projectile--initialized nil)
+  (message "hive-mcp-projectile: shutdown"))
+
+(define-minor-mode hive-mcp-projectile-mode
+  "Minor mode for Projectile integration."
+  :init-value nil
+  :lighter " MCP-Proj"
+  :global t
+  :group 'hive-mcp-projectile
+  (if hive-mcp-projectile-mode (-addon-init) (message "hive-mcp-projectile disabled")))
+
+(with-eval-after-load 'hive-mcp-addons
+  (hive-mcp-addon-register 'projectile :version "0.1.0" :description "Projectile project management integration" :requires '(projectile hive-mcp-api) :provides '(hive-mcp-projectile-mode hive-mcp-projectile-transient) :init #'-addon-init :shutdown #'-addon-shutdown))
+
 (provide 'hive-mcp-projectile)
 ;;; hive-mcp-projectile.el ends here

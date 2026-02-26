@@ -216,5 +216,339 @@
 
 (defalias 'hive-mcp-swarm--emit-auto-error 'hive-mcp-swarm-events-emit-auto-error)
 
+(defun hive-mcp-swarm---sync-state-from-hivemind (event-data)
+  "Sync swarm slave state from hivemind EVENT-DATA.\nCalled via hooks when hivemind receives shout events.\nMaps agent-id to slave-id and updates status accordingly.\n\nAlso records shout timestamp for Layer 2 idle detection."
+  (let* ((agent-id (plist-get event-data :agent-id))
+        (event-type (plist-get event-data :event-type))
+        (slave (gethash agent-id hive-mcp-swarm--slaves)))
+    (if (not slave) (when (and agent-id (not (string-empty-p agent-id)))
+    (message "[swarm-sync] Agent '%s' not found (event: %s). Known slaves: %s" agent-id event-type (mapconcat #'identity (hash-table-keys hive-mcp-swarm--slaves) ", "))) (when (fboundp 'hive-mcp-swarm-terminal--record-shout)
+    (hive-mcp-swarm-terminal--record-shout agent-id)))))
+
+(defun hive-mcp-swarm---get-terminal-type (slave)
+  "Get terminal type for SLAVE plist."
+  (or (plist-get slave :terminal) hive-mcp-swarm-terminal))
+
+(defun hive-mcp-swarm-start-auto-approve ()
+  "Start the auto-approve watcher timer."
+  (interactive)
+  (hive-mcp-swarm-prompts-start-watcher hive-mcp-swarm--slaves #'-get-terminal-type)
+  (message "[swarm] Auto-approve watcher started"))
+
+(defun hive-mcp-swarm-stop-auto-approve ()
+  "Stop the auto-approve watcher timer."
+  (interactive)
+  (hive-mcp-swarm-prompts-stop-watcher)
+  (message "[swarm] Auto-approve watcher stopped"))
+
+(defun hive-mcp-swarm---on-task-completion (_buffer slave-id duration-secs &optional status error-type error-preview)
+  "Callback when task completion is auto-detected.\nBUFFER is the terminal buffer, SLAVE-ID identifies the ling,\nDURATION-SECS is how long the task took.\nSTATUS is \"completed\" or \"error\" (default: \"completed\").\nERROR-TYPE and ERROR-PREVIEW are set when STATUS is \"error\".\n\nThis function:\n1. Updates slave status based on completion type\n2. Increments appropriate counter (tasks-completed or tasks-failed)\n3. Emits state-changed event if status changed\n\nNote: Event emission (auto-completed/auto-error) is now handled by\nthe completion watcher tick function directly."
+  (when-let-star (list slave (gethash slave-id hive-mcp-swarm--slaves)) (let* ((old-status (plist-get slave :status))
+        (is-error (string= status "error")))
+    (plist-put slave :status 'idle)
+    (plist-put slave :current-task nil)
+    (plist-put slave :last-activity (format-time-string "%FT%T%z"))
+    (if is-error (progn
+  (plist-put slave :tasks-failed (1+ (or (plist-get slave :tasks-failed) 0)))
+  (plist-put slave :last-error (list :type error-type :preview error-preview :timestamp (format-time-string "%FT%T%z")))) (plist-put slave :tasks-completed (1+ (or (plist-get slave :tasks-completed) 0))))
+    (unless (eq old-status 'idle)
+    (hive-mcp-swarm--emit-state-changed slave-id old-status 'idle))
+    (if is-error (message "[swarm] Task error: %s (%s, %.1fs)" slave-id (or error-type "unknown") (or duration-secs 0)) (message "[swarm] Task completed: %s (%.1fs)" slave-id (or duration-secs 0))))))
+
+(defun hive-mcp-swarm-start-completion-watcher ()
+  "Start the auto-shout completion watcher timer.\nAlso starts Layer 2 idle detection watcher."
+  (interactive)
+  (when (fboundp 'hive-mcp-swarm-terminal-start-completion-watcher)
+    (hive-mcp-swarm-terminal-start-completion-watcher #'-on-task-completion))
+  (when (fboundp 'hive-mcp-swarm-terminal-start-idle-watcher)
+    (hive-mcp-swarm-terminal-start-idle-watcher))
+  (message "[swarm] Completion + idle watchers started (auto-shout + Layer 2)"))
+
+(defun hive-mcp-swarm-stop-completion-watcher ()
+  "Stop the auto-shout completion watcher timer.\nAlso stops Layer 2 idle detection watcher."
+  (interactive)
+  (when (fboundp 'hive-mcp-swarm-terminal-stop-completion-watcher)
+    (hive-mcp-swarm-terminal-stop-completion-watcher))
+  (when (fboundp 'hive-mcp-swarm-terminal-stop-idle-watcher)
+    (hive-mcp-swarm-terminal-stop-idle-watcher))
+  (when (fboundp 'hive-mcp-swarm-terminal-reset-idle-state)
+    (hive-mcp-swarm-terminal-reset-idle-state))
+  (message "[swarm] Completion + idle watchers stopped"))
+
+(defalias 'hive-mcp-swarm--update-prompts-buffer 'hive-mcp-swarm-prompts-update-buffer)
+
+(defalias 'hive-mcp-swarm-respond 'hive-mcp-swarm-prompts-respond)
+
+(defalias 'hive-mcp-swarm-approve 'hive-mcp-swarm-prompts-approve)
+
+(defalias 'hive-mcp-swarm-deny 'hive-mcp-swarm-prompts-deny)
+
+(defalias 'hive-mcp-swarm-list-prompts 'hive-mcp-swarm-prompts-list)
+
+(defalias 'hive-mcp-swarm-reload-presets 'hive-mcp-swarm-presets-reload)
+
+(defalias 'hive-mcp-swarm-list-presets 'hive-mcp-swarm-presets-list)
+
+(defalias 'hive-mcp-swarm--build-system-prompt 'hive-mcp-swarm-presets-build-system-prompt)
+
+(defalias 'hive-mcp-swarm-add-custom-presets-dir 'hive-mcp-swarm-presets-add-custom-dir)
+
+(defalias 'hive-mcp-swarm--role-to-presets 'hive-mcp-swarm-presets-role-to-presets)
+
+(defalias 'hive-mcp-swarm-spawn 'hive-mcp-swarm-slaves-spawn)
+
+(defalias 'hive-mcp-swarm-kill 'hive-mcp-swarm-slaves-kill)
+
+(defalias 'hive-mcp-swarm-kill-all 'hive-mcp-swarm-slaves-kill-all)
+
+(defalias 'hive-mcp-swarm--generate-slave-id 'hive-mcp-swarm-slaves-generate-id)
+
+(defalias 'hive-mcp-swarm--depth-label 'hive-mcp-swarm-slaves--depth-label)
+
+(defalias 'hive-mcp-swarm-dispatch 'hive-mcp-swarm-tasks-dispatch)
+
+(defalias 'hive-mcp-swarm-collect 'hive-mcp-swarm-tasks-collect)
+
+(defalias 'hive-mcp-swarm-broadcast 'hive-mcp-swarm-tasks-broadcast)
+
+(defalias 'hive-mcp-swarm--slave-matches-filter 'hive-mcp-swarm-tasks--slave-matches-filter)
+
+(defun hive-mcp-swarm---get-slave-status-name (slave)
+  "Get status name string from SLAVE plist, defaulting to \"unknown\"."
+  (symbol-name (or (plist-get slave :status) 'unknown)))
+
+(defun hive-mcp-swarm---get-presets-or-empty (slave)
+  "Get presets from SLAVE plist, defaulting to empty vector for JSON."
+  (or (plist-get slave :presets) (list )))
+
+(defun hive-mcp-swarm---format-slave-detail (id slave)
+  "Format SLAVE with ID as alist for status API response.\nReturns an alist suitable for JSON serialization as an object.\nIncludes cwd for bootstrap sync to derive project-id (ADR-001 Phase 2)."
+  (clel-seq (clel-concat (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/slave-id) (clojure-core-list '.) (clojure-core-list 'user/id)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/name) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/slave) (clojure-core-list :name))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/status) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/-get-slave-status-name) (clojure-core-list 'user/slave))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/depth) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/slave) (clojure-core-list :depth))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/parent-id) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/slave) (clojure-core-list :parent-id))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/cwd) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/slave) (clojure-core-list :cwd))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/current-task) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/slave) (clojure-core-list :current-task))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/tasks-completed) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/slave) (clojure-core-list :tasks-completed))))))))))
+
+(defun hive-mcp-swarm---format-ling-data (id slave)
+  "Format SLAVE with ID as alist for lings list API response.\nReturns an alist with slave-id, name, presets, cwd, and status."
+  (clel-seq (clel-concat (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/slave-id) (clojure-core-list '.) (clojure-core-list 'user/id)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/name) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/slave) (clojure-core-list :name))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/presets) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/-get-presets-or-empty) (clojure-core-list 'user/slave))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/cwd) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/slave) (clojure-core-list :cwd))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/status) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/-get-slave-status-name) (clojure-core-list 'user/slave))))))))))
+
+(defun hive-mcp-swarm---format-orphan-detail (orphan)
+  "Format ORPHAN plist as alist for status API response.\nIncludes orphan marker and discovery method."
+  (clel-seq (clel-concat (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/slave-id) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/orphan) (clojure-core-list :slave-id))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/name) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/orphan) (clojure-core-list :name))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/status) (clojure-core-list '.) (clojure-core-list "orphan")))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/depth) (clojure-core-list '.) (clojure-core-list 'nil)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/parent-id) (clojure-core-list '.) (clojure-core-list 'nil)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/current-task) (clojure-core-list '.) (clojure-core-list 'nil)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/tasks-completed) (clojure-core-list '.) (clojure-core-list 'nil)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/orphan) (clojure-core-list '.) (clojure-core-list 'user/t)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/discovered-via) (clojure-core-list '.) (clojure-core-list "buffer-introspection")))))))
+
+(defun hive-mcp-swarm---format-orphan-ling (orphan)
+  "Format ORPHAN plist as alist for lings list API response."
+  (clel-seq (clel-concat (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/slave-id) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/orphan) (clojure-core-list :slave-id))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/name) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/orphan) (clojure-core-list :name))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/presets) (clojure-core-list '.) (clojure-core-list (apply clojure-core-vector (clel-seq (clel-concat))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/cwd) (clojure-core-list '.) (clojure-core-list 'nil)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/status) (clojure-core-list '.) (clojure-core-list "orphan")))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/orphan) (clojure-core-list '.) (clojure-core-list 'user/t)))))))
+
+(defun hive-mcp-swarm---count-slaves-by-status (slaves-hash)
+  "Count slaves in SLAVES-HASH by status.\nReturns plist with :total, :idle, :working, :error counts."
+  (let* ((total 0)
+        (idle 0)
+        (working 0)
+        (error-count 0))
+    (maphash (lambda (_id slave)
+    (cl-incf total)
+    (pcase (plist-get slave :status)
+  ((quote idle) (cl-incf idle))
+  ((quote working) (cl-incf working))
+  ((quote error) (cl-incf error-count)))) slaves-hash)
+    (list :total total :idle idle :working working :error error-count)))
+
+(defun hive-mcp-swarm---collect-slave-details (slaves-hash)
+  "Collect formatted details from all slaves in SLAVES-HASH.\nReturns list of alists suitable for JSON serialization."
+  (let* ((details '()))
+    (maphash (lambda (id slave)
+    (push (-format-slave-detail id slave) details)) slaves-hash)
+    details))
+
+(defun hive-mcp-swarm---format-pending-prompt (prompt)
+  "Format PROMPT plist for API response with ISO timestamp."
+  (clel-seq (clel-concat (clojure-core-list :slave-id) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/prompt) (clojure-core-list :slave-id)))) (clojure-core-list :prompt) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/prompt) (clojure-core-list :prompt)))) (clojure-core-list :timestamp) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/format-time-string) (clojure-core-list "%Y-%m-%dT%H:%M:%S") (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/prompt) (clojure-core-list :timestamp))))))))))
+
+(defun hive-mcp-swarm---introspect-terminal-buffers ()
+  "Introspect all swarm terminal buffers to find potentially unregistered lings.\nReturns a list of buffer-info plists for buffers not in `hive-mcp-swarm--slaves'.\n\nThis catches lings that may have been spawned but failed to register properly,\nor whose registration was lost due to hash table issues.\n\nCLARITY: Y - Yield safe failure with fallback discovery."
+  (let* ((orphan-buffers '())
+        (registered-buffers (make-hash-table :test 'equal)))
+    (maphash (lambda (_id slave)
+    (when-let-star (list buf (plist-get slave :buffer)) (when (buffer-live-p buf)
+    (puthash (buffer-name buf) t registered-buffers)))) hive-mcp-swarm--slaves)
+    (dolist (buf (buffer-list))
+    (let* ((name (buffer-name buf)))
+    (when (and (string-prefix-p hive-mcp-swarm-buffer-prefix name) (buffer-live-p buf) (not (gethash name registered-buffers)))
+    (let* ((prefix-len (length hive-mcp-swarm-buffer-prefix))
+        (raw-name (substring name prefix-len))
+        (slave-name (if (string-suffix-p "*" raw-name) (substring raw-name 0 -1) raw-name))
+        (synthetic-id (format "swarm-%s-orphan" slave-name)))
+    (push (list :slave-id synthetic-id :name slave-name :buffer buf :status 'unknown :orphan t :discovered-via "buffer-introspection") orphan-buffers)))))
+    orphan-buffers))
+
+(defun hive-mcp-swarm-status (&optional slave-id)
+  "Get swarm status.\nIf SLAVE-ID is provided, get that slave's status.\nOtherwise return aggregate status.\n\nUses terminal buffer introspection as fallback to discover any lings\nthat may have been spawned but not properly registered in the hash table.\n\nCLARITY: Y - Yield safe failure with fallback discovery.\nCLARITY: L - Bottom-up reading via extracted helpers."
+  (interactive)
+  (if slave-id (gethash slave-id hive-mcp-swarm--slaves) (let* ((counts (-count-slaves-by-status hive-mcp-swarm--slaves))
+        (total (plist-get counts :total))
+        (idle (plist-get counts :idle))
+        (working (plist-get counts :working))
+        (error-count (plist-get counts :error))
+        (orphans (-introspect-terminal-buffers))
+        (orphan-count (length orphans))
+        (slaves-detail (-collect-slave-details hive-mcp-swarm--slaves)))
+    (dolist (orphan orphans)
+    (push (-format-orphan-detail orphan) slaves-detail))
+    (cl-incf total orphan-count)
+    (let* ((status-result (-build-status-response total idle working error-count orphan-count (vconcat (nreverse slaves-detail)))))
+    (when (called-interactively-p 'any)
+    (message "Swarm: %d slaves (%d idle, %d working%s), %d tasks" total idle working (if (> orphan-count 0) (format ", %d orphan" orphan-count) "") (hash-table-count hive-mcp-swarm--tasks)))
+    status-result))))
+
+(defun hive-mcp-swarm---build-status-response (total idle working error-count orphan-count slaves-detail)
+  "Build the complete status response plist.\nArguments are counts and SLAVES-DETAIL is a vector of slave alists.\nSLAVES-DETAIL must be a vector for consistent JSON array encoding."
+  (clel-seq (clel-concat (clojure-core-list :session-id) (clojure-core-list 'user/hive-mcp-swarm--session-id) (clojure-core-list :status) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'if) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/>) (clojure-core-list 'user/total) (clojure-core-list 0)))) (clojure-core-list "active") (clojure-core-list "inactive")))) (clojure-core-list :current-depth) (clojure-core-list 'user/hive-mcp-swarm--current-depth) (clojure-core-list :safeguards) (clojure-core-list (clel-seq (clel-concat (clojure-core-list :max-depth) (clojure-core-list 'user/hive-mcp-swarm-max-depth) (clojure-core-list :max-slaves) (clojure-core-list 'user/hive-mcp-swarm-max-slaves) (clojure-core-list :rate-limit) (clojure-core-list (clel-seq (clel-concat (clojure-core-list :window-seconds) (clojure-core-list 'user/hive-mcp-swarm-rate-limit-window) (clojure-core-list :max-spawns) (clojure-core-list 'user/hive-mcp-swarm-rate-limit-max-spawns) (clojure-core-list :recent-spawns) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/length) (clojure-core-list 'user/hive-mcp-swarm--spawn-timestamps)))))))))) (clojure-core-list :slaves) (clojure-core-list (clel-seq (clel-concat (clojure-core-list :total) (clojure-core-list 'user/total) (clojure-core-list :idle) (clojure-core-list 'user/idle) (clojure-core-list :working) (clojure-core-list 'user/working) (clojure-core-list :error) (clojure-core-list 'user/error-count) (clojure-core-list :orphan) (clojure-core-list 'user/orphan-count)))) (clojure-core-list :tasks) (clojure-core-list (clel-seq (clel-concat (clojure-core-list :total) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/hash-table-count) (clojure-core-list 'user/hive-mcp-swarm--tasks))))))) (clojure-core-list :slaves-detail) (clojure-core-list 'user/slaves-detail))))
+
+(defun hive-mcp-swarm-list-lings ()
+  "List all lings (spawned slaves) with their metadata.\nReturns a vector of alists suitable for JSON encoding.\nUsed by Clojure's query-elisp-lings fallback when registry is empty.\n\nUses terminal buffer introspection as fallback to discover any lings\nthat may exist as buffers but weren't registered in the hash table.\n\nEach ling alist contains:\n- slave-id: Unique identifier\n- name: Display name\n- presets: List of applied presets\n- cwd: Working directory\n- status: Current status (idle/working/error/orphan)\n\nCLARITY: Y - Yield safe failure with fallback discovery.\nCLARITY: L - Bottom-up reading via extracted helpers."
+  (let* ((lings (-collect-ling-data hive-mcp-swarm--slaves)))
+    (dolist (orphan (-introspect-terminal-buffers))
+    (push (-format-orphan-ling orphan) lings))
+    (vconcat (nreverse lings))))
+
+(defun hive-mcp-swarm---collect-ling-data (slaves-hash)
+  "Collect formatted ling data from all slaves in SLAVES-HASH.\nReturns list of alists suitable for JSON serialization."
+  (let* ((lings '()))
+    (maphash (lambda (id slave)
+    (push (-format-ling-data id slave) lings)) slaves-hash)
+    lings))
+
+(defun hive-mcp-swarm-show-slave (slave-id)
+  "Switch to buffer for SLAVE-ID."
+  (interactive (list (completing-read "Show slave: " (hash-table-keys hive-mcp-swarm--slaves))))
+  (when-let-star (list slave (gethash slave-id hive-mcp-swarm--slaves) buffer (plist-get slave :buffer)) (if (buffer-live-p buffer) (switch-to-buffer buffer) (message "Slave buffer is dead: %s" slave-id))))
+
+(defun hive-mcp-swarm-api-spawn (name presets &optional cwd terminal kanban-task-id context-file)
+  "API: Spawn slave NAME with PRESETS in CWD using TERMINAL backend.\nKANBAN-TASK-ID optionally links this ling to a kanban task for lifecycle tracking.\nCONTEXT-FILE is an optional path to a temp file containing pre-generated\ncatchup context to inject into the system prompt (Architecture > LLM behavior).\nThe file is read and deleted after use.\nReturns slave-id on success, or error plist on failure."
+  (let* ((valid-cwd (when (stringp cwd)
+    cwd))
+        (valid-kanban-id (when (stringp kanban-task-id)
+    kanban-task-id))
+        (injected-context (when (and context-file (stringp context-file) (file-exists-p context-file))
+    (prog1 (with-temp-buffer
+    (insert-file-contents context-file)
+    (buffer-string)) (ignore-errors (delete-file context-file))))))
+    (hive-mcp-with-fallback (hive-mcp-swarm-spawn name :presets presets :cwd valid-cwd :terminal (when (and terminal (stringp terminal))
+    (intern terminal)) :kanban-task-id valid-kanban-id :injected-context injected-context) (clel-seq (clel-concat (clojure-core-list :error) (clojure-core-list "spawn-failed") (clojure-core-list :name) (clojure-core-list 'clojure.core/name) (clojure-core-list :reason) (clojure-core-list "unknown"))))))
+
+(defun hive-mcp-swarm-api-dispatch (slave-id prompt &optional timeout-ms)
+  "API: Dispatch PROMPT to SLAVE-ID with TIMEOUT-MS.\nReturns structured response plist:\n  - :status \"dispatched\" - prompt sent, :task-id included\n  - :status \"queued\" - terminal not ready, dispatch queued for retry\n  - :status \"error\" - dispatch failed, :error included"
+  (hive-mcp-with-fallback (hive-mcp-swarm-dispatch slave-id prompt :timeout timeout-ms) (clel-seq (clel-concat (clojure-core-list :status) (clojure-core-list "error") (clojure-core-list :error) (clojure-core-list "dispatch-failed") (clojure-core-list :slave-id) (clojure-core-list 'user/slave-id) (clojure-core-list :reason) (clojure-core-list "unknown")))))
+
+(defun hive-mcp-swarm-api-status ()
+  "API: Get swarm status as JSON-serializable plist."
+  (status))
+
+(defalias 'hive-mcp-swarm--check-task-completion 'hive-mcp-swarm-tasks-check-completion)
+
+(defun hive-mcp-swarm-api-collect (task-id &optional timeout-ms)
+  "API: Collect result for TASK-ID - NON-BLOCKING with graceful fallback.\nReturns immediately with current status:\n- :status \"completed\" with :result if done\n- :status \"polling\" if still running (client should poll again)\n- :status \"timeout\" if task timed out\n- :status \"error\" if task failed\n\nTIMEOUT-MS is used to check if task has exceeded its timeout,\nbut this function never blocks. Wraps implementation in graceful\nfallback to ensure MCP clients never receive errors."
+  (hive-mcp-with-fallback (let* ((task (gethash task-id hive-mcp-swarm--tasks))
+        (slave-id (and task (plist-get task :slave-id)))
+        (slave (and slave-id (gethash slave-id hive-mcp-swarm--slaves)))
+        (dispatched-at (and task (plist-get task :dispatched-at)))
+        (task-timeout (or timeout-ms (plist-get task :timeout) hive-mcp-swarm-default-timeout))
+        (elapsed-ms (when dispatched-at
+    (* 1000 (- (float-time) (float-time (date-to-time dispatched-at)))))))
+    (cond
+  (((not task) (clel-seq (clel-concat (clojure-core-list :task-id) (clojure-core-list 'user/task-id) (clojure-core-list :status) (clojure-core-list "error") (clojure-core-list :error) (clojure-core-list "Task not found")))) ((eq (plist-get task :status) 'completed) (clel-seq (clel-concat (clojure-core-list :task-id) (clojure-core-list 'user/task-id) (clojure-core-list :status) (clojure-core-list "completed") (clojure-core-list :result) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/task) (clojure-core-list :result))))))))
+  (((eq (plist-get task :status) 'timeout) (clel-seq (clel-concat (clojure-core-list :task-id) (clojure-core-list 'user/task-id) (clojure-core-list :status) (clojure-core-list "timeout") (clojure-core-list :error) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/task) (clojure-core-list :error))))))) ((and elapsed-ms (> elapsed-ms task-timeout)) (plist-put task :status 'timeout) (plist-put task :error (format "Timed out after %dms" elapsed-ms)) (when slave
+    (plist-put slave :status 'idle)
+    (plist-put slave :current-task nil)
+    (plist-put slave :tasks-failed (1+ (or (plist-get slave :tasks-failed) 0)))) (hive-mcp-swarm--emit-task-failed task-id slave-id (format "Timed out after %dms" elapsed-ms)) (clel-seq (clel-concat (clojure-core-list :task-id) (clojure-core-list 'user/task-id) (clojure-core-list :status) (clojure-core-list "timeout") (clojure-core-list :error) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/format) (clojure-core-list "Timed out after %dms") (clojure-core-list 'user/elapsed-ms)))) (clojure-core-list :elapsed-ms) (clojure-core-list 'user/elapsed-ms))))))) (clel-seq (clel-concat (clojure-core-list :task-id) (clojure-core-list 'user/task-id) (clojure-core-list :status) (clojure-core-list "error") (clojure-core-list :result) (clojure-core-list 'nil) (clojure-core-list :error) (clojure-core-list "collection-failed")))))
+
+(defun hive-mcp-swarm-api-list-presets ()
+  "API: List available presets."
+  (hive-mcp-swarm-list-presets))
+
+(defun hive-mcp-swarm-api-kill (slave-id)
+  "API: Kill SLAVE-ID.\nReturns result plist. Never fails.\n\nBUG FIX: Now checks return value from kill function.\nKill may be blocked if buffer fails safety validation\n(prevents accidentally killing coordinator)."
+  (hive-mcp-with-fallback (if (hive-mcp-swarm-kill slave-id) (clel-seq (clel-concat (clojure-core-list :killed) (clojure-core-list 'user/slave-id) (clojure-core-list :success) (clojure-core-list 'user/t))) (clel-seq (clel-concat (clojure-core-list :error) (clojure-core-list "kill-blocked") (clojure-core-list :slave-id) (clojure-core-list 'user/slave-id) (clojure-core-list :reason) (clojure-core-list "buffer-safety-validation-failed") (clojure-core-list :message) (clojure-core-list "Buffer did not pass safety checks (may have been coordinator or invalid target)")))) (clel-seq (clel-concat (clojure-core-list :error) (clojure-core-list "kill-failed") (clojure-core-list :slave-id) (clojure-core-list 'user/slave-id)))))
+
+(defun hive-mcp-swarm-api-kill-all ()
+  "API: Kill all slaves.\nReturns result plist. Never fails."
+  (hive-mcp-with-fallback (let* ((count (hash-table-count hive-mcp-swarm--slaves)))
+    (hive-mcp-swarm-kill-all)
+    (clel-seq (clel-concat (clojure-core-list :killed-count) (clojure-core-list 'clojure.core/count)))) (clel-seq (clel-concat (clojure-core-list :error) (clojure-core-list "kill-all-failed") (clojure-core-list :killed-count) (clojure-core-list 0)))))
+
+(defun hive-mcp-swarm-api-pending-prompts ()
+  "API: Get list of pending prompts awaiting human decision.\nReturns list of prompts with slave-id, prompt text, and timestamp.\nCLARITY: L - Uses extracted helper for formatting."
+  (hive-mcp-with-fallback (let* ((pending (hive-mcp-swarm-prompts-get-pending))
+        (prompts (mapcar #'-format-pending-prompt pending)))
+    (clel-seq (clel-concat (clojure-core-list :count) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/length) (clojure-core-list 'user/prompts)))) (clojure-core-list :prompts) (clojure-core-list 'user/prompts) (clojure-core-list :mode) (clojure-core-list 'user/hive-mcp-swarm-prompts-mode)))) (clel-seq (clel-concat (clojure-core-list :error) (clojure-core-list "pending-prompts-failed") (clojure-core-list :count) (clojure-core-list 0) (clojure-core-list :prompts) (clojure-core-list 'nil)))))
+
+(defun hive-mcp-swarm-api-respond-prompt (slave-id response)
+  "API: Send RESPONSE to the pending prompt from SLAVE-ID.\nReturns result plist indicating success or failure."
+  (hive-mcp-with-fallback (if (hive-mcp-swarm-prompts-respond-to slave-id response) (clel-seq (clel-concat (clojure-core-list :success) (clojure-core-list 'user/t) (clojure-core-list :slave-id) (clojure-core-list 'user/slave-id) (clojure-core-list :response) (clojure-core-list 'user/response))) (clel-seq (clel-concat (clojure-core-list :success) (clojure-core-list 'nil) (clojure-core-list :error) (clojure-core-list "no-pending-prompt") (clojure-core-list :slave-id) (clojure-core-list 'user/slave-id)))) (clel-seq (clel-concat (clojure-core-list :error) (clojure-core-list "respond-prompt-failed") (clojure-core-list :slave-id) (clojure-core-list 'user/slave-id)))))
+
+(require 'transient nil t)
+
+(when (featurep 'transient)
+    (transient-define-prefix hive-mcp-swarm-transient (nil) "Swarm orchestration menu." (list "hive-mcp Swarm" (list "Slaves" ("s" "Spawn slave" hive-mcp-swarm-spawn) ("k" "Kill slave" hive-mcp-swarm-kill) ("K" "Kill all" hive-mcp-swarm-kill-all) ("v" "View slave" hive-mcp-swarm-show-slave)) (list "Tasks" ("d" "Dispatch" hive-mcp-swarm-dispatch) ("c" "Collect" hive-mcp-swarm-collect) ("b" "Broadcast" hive-mcp-swarm-broadcast)) (list "Prompts (human mode)" ("y" "Approve next" hive-mcp-swarm-approve) ("n" "Deny next" hive-mcp-swarm-deny) ("p" "Respond custom" hive-mcp-swarm-respond) ("l" "List pending" hive-mcp-swarm-list-prompts)) (list "Info" ("?" "Status" hive-mcp-swarm-status) ("P" "List presets" hive-mcp-swarm-list-presets) ("r" "Reload presets" hive-mcp-swarm-reload-presets) ("a" "Add presets dir" hive-mcp-swarm-add-custom-presets-dir)))))
+
+(defvar hive-mcp-swarm-mode-map (let* ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c M-s") #'hive-mcp-swarm-transient)
+    map)
+  "Keymap for `hive-mcp-swarm-mode'.")
+
+(define-minor-mode hive-mcp-swarm-mode
+  "Minor mode for Claude swarm orchestration.\n\n\\{hive-mcp-swarm-mode-map}"
+  :init-value nil
+  :lighter " Swarm"
+  :keymap hive-mcp-swarm-mode-map
+  :global t
+  :group 'hive-mcp-swarm
+  (if hive-mcp-swarm-mode (progn
+  (setq hive-mcp-swarm--session-id (format "session-%s-%04x" (format-time-string "%Y%m%d") (random 65535)))
+  (hive-mcp-swarm-hooks-init)
+  (hive-mcp-swarm-events-init hive-mcp-swarm--session-id)
+  (hive-mcp-swarm-presets-init)
+  (hive-mcp-swarm-prompts-init)
+  (-register-hivemind-sync-hooks)
+  (when hive-mcp-swarm-auto-approve
+    (start-auto-approve))
+  (start-completion-watcher)
+  (message "hive-mcp-swarm enabled (session: %s, auto-approve: %s, auto-shout: on)" hive-mcp-swarm--session-id (if hive-mcp-swarm-auto-approve "on" "off"))) (stop-auto-approve)))
+
+(defun hive-mcp-swarm---register-hivemind-sync-hooks ()
+  "Register sync handler with all hivemind event types."
+  (dolist (event-type '(:hivemind-started :hivemind-progress :hivemind-completed :hivemind-error :hivemind-blocked))
+    (hive-mcp-swarm-hooks-register event-type #'-sync-state-from-hivemind)))
+
+(defun hive-mcp-swarm---unregister-hivemind-sync-hooks ()
+  "Unregister sync handler from all hivemind event types."
+  (dolist (event-type '(:hivemind-started :hivemind-progress :hivemind-completed :hivemind-error :hivemind-blocked))
+    (hive-mcp-swarm-hooks-unregister event-type #'-sync-state-from-hivemind)))
+
+(defun hive-mcp-swarm---addon-init ()
+  "Initialize swarm addon."
+  (setq hive-mcp-swarm--session-id (format "session-%s-%04x" (format-time-string "%Y%m%d") (random 65535)))
+  (hive-mcp-swarm-hooks-init)
+  (hive-mcp-swarm-events-init hive-mcp-swarm--session-id)
+  (hive-mcp-swarm-presets-init)
+  (hive-mcp-swarm-prompts-init)
+  (-register-hivemind-sync-hooks)
+  (when hive-mcp-swarm-auto-approve
+    (start-auto-approve))
+  (start-completion-watcher))
+
+(defun hive-mcp-swarm---addon-shutdown ()
+  "Shutdown swarm addon - kill all slaves."
+  (stop-auto-approve)
+  (stop-completion-watcher)
+  (hive-mcp-swarm-kill-all)
+  (-unregister-hivemind-sync-hooks)
+  (hive-mcp-swarm-hooks-shutdown)
+  (hive-mcp-swarm-prompts-shutdown)
+  (hive-mcp-swarm-presets-shutdown)
+  (hive-mcp-swarm-events-shutdown)
+  (setq hive-mcp-swarm--session-id nil))
+
+(with-eval-after-load 'hive-mcp-addons
+  (hive-mcp-addon-register 'swarm :version "0.1.0" :description "Claude swarm orchestration for parallel task execution" :requires '() :provides '(hive-mcp-swarm-mode hive-mcp-swarm-transient) :init #'-addon-init :shutdown #'-addon-shutdown))
+
 (provide 'hive-mcp-swarm)
 ;;; hive-mcp-swarm.el ends here

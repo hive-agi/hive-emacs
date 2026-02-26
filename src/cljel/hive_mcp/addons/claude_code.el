@@ -121,5 +121,120 @@
     (hive-mcp-api-memory-add type text tags)
     (message "Saved to project memory as %s" type)))
 
+(defun hive-mcp-claude-code-query-memory ()
+  "Query project memory and display results."
+  (interactive)
+  (hive-mcp-claude-code--ensure-available)
+  (let* ((type (completing-read "Query type: " '("note" "snippet" "convention" "decision" "conversation") nil t "note"))
+        (results (hive-mcp-api-memory-query type nil 10))
+        (buf (get-buffer-create "*MCP Memory*")))
+    (with-current-buffer buf
+    (erase-buffer)
+    (insert (format "=== Project Memory: %s ===\n\n" type))
+    (if (equal (length results) 0) (insert "No entries found.\n") (cl-dotimes (i (length results))
+    (let* ((entry (aref results i))
+        (content (alist-get 'content entry))
+        (created (alist-get 'created entry))
+        (tags (alist-get 'tags entry)))
+    (insert (format "--- Entry %d ---\n" (1+ i)))
+    (insert (format "Created: %s\n" created))
+    (when (and tags (> (length tags) 0))
+    (insert (format "Tags: %s\n" (mapconcat #'identity tags ", "))))
+    (insert (format "\n%s\n\n" content)))))
+    (goto-char (point-min)))
+    (display-buffer buf)))
+
+(defun hive-mcp-claude-code-run-workflow ()
+  "Select and run an hive-mcp workflow."
+  (interactive)
+  (hive-mcp-claude-code--ensure-available)
+  (let* ((workflows (hive-mcp-api-list-workflows))
+        (names (mapcar (lambda (w)
+    (alist-get 'name w)) workflows))
+        (selected (completing-read "Run workflow: " names nil t)))
+    (hive-mcp-api-run-workflow selected)
+    (message "Workflow '%s' executed" selected)))
+
+(defun hive-mcp-claude-code-show-capabilities ()
+  "Show hive-mcp capabilities and status."
+  (interactive)
+  (if (hive-mcp-claude-code--available-p) (let* ((caps (hive-mcp-api-capabilities)))
+    (message "Emacs-mcp v%s: %s" (plist-get caps :version) (mapconcat #'symbol-name (plist-get caps :capabilities) ", "))) (message "Emacs-mcp is not loaded")))
+
+(defun hive-mcp-claude-code-get-context ()
+  "Get and display current hive-mcp context."
+  (interactive)
+  (hive-mcp-claude-code--ensure-available)
+  (let* ((ctx (hive-mcp-api-get-context))
+        (formatted (hive-mcp-claude-code--format-context-smart ctx))
+        (buf (get-buffer-create "*MCP Context*")))
+    (with-current-buffer buf
+    (erase-buffer)
+    (insert "=== Current Context ===\n\n")
+    (insert formatted)
+    (insert "\n\n=== Full JSON ===\n\n")
+    (insert (json-encode ctx))
+    (goto-char (point-min))
+    (when (fboundp 'json-mode)
+    (json-mode)))
+    (display-buffer buf)))
+
+(transient-define-prefix hive-mcp-claude-code-transient (nil) "MCP integration menu for Claude Code." (list "hive-mcp Integration" (list "Context & Memory" ("c" "Show context" hive-mcp-claude-code-get-context) ("s" "Send with context" hive-mcp-claude-code-send-with-context) ("m" "Save to memory" hive-mcp-claude-code-save-to-memory) ("q" "Query memory" hive-mcp-claude-code-query-memory)) (list "Workflows & Status" ("w" "Run workflow" hive-mcp-claude-code-run-workflow) ("?" "Show capabilities" hive-mcp-claude-code-show-capabilities)) (list "Settings" ("C" "Toggle auto-context" hive-mcp-claude-code-toggle-auto-context) ("L" "Toggle conversation logging" hive-mcp-claude-code-toggle-logging))))
+
+(defun hive-mcp-claude-code-toggle-auto-context ()
+  "Toggle automatic context injection."
+  (interactive)
+  (setq hive-mcp-claude-code-auto-context (not hive-mcp-claude-code-auto-context))
+  (message "Auto-context %s" (if hive-mcp-claude-code-auto-context "enabled" "disabled")))
+
+(defun hive-mcp-claude-code-toggle-logging ()
+  "Toggle conversation logging."
+  (interactive)
+  (setq hive-mcp-claude-code-log-conversations (not hive-mcp-claude-code-log-conversations))
+  (message "Conversation logging %s" (if hive-mcp-claude-code-log-conversations "enabled" "disabled")))
+
+(defun hive-mcp-claude-code---maybe-add-context (cmd)
+  "Maybe add context to CMD if auto-context is enabled."
+  (if (and hive-mcp-claude-code-auto-context (hive-mcp-claude-code--available-p)) (let* ((ctx (hive-mcp-claude-code--get-context-string)))
+    (if ctx (format "%s\n\n[Context: %s]" cmd ctx) cmd)) cmd))
+
+(defun hive-mcp-claude-code---log-command (cmd)
+  "Log CMD to conversation memory if logging is enabled."
+  (when (and hive-mcp-claude-code-log-conversations (hive-mcp-claude-code--available-p))
+    (ignore-errors (hive-mcp-api-conversation-log "user" cmd))))
+
+(defun hive-mcp-claude-code---notification-function (title message)
+  "Use hive-mcp for notifications if available.\nTITLE and MESSAGE are passed to the notification."
+  (if (and hive-mcp-claude-code-notify-on-complete (hive-mcp-claude-code--available-p)) (hive-mcp-api-notify (format "%s: %s" title message) "info") (claude-code-default-notification title message)))
+
+(defun hive-mcp-claude-code---advise-send-command (orig-fun cmd)
+  "Advice for `claude-code--do-send-command' to add context and logging.\nORIG-FUN is the original function, CMD is the command."
+  (let* ((enhanced-cmd (hive-mcp-claude-code--maybe-add-context cmd)))
+    (hive-mcp-claude-code--log-command cmd)
+    (funcall orig-fun enhanced-cmd)))
+
+(defvar hive-mcp-claude-code-command-map (let* ((map (make-sparse-keymap)))
+    (define-key map (kbd "c") #'hive-mcp-claude-code-get-context)
+    (define-key map (kbd "s") #'hive-mcp-claude-code-send-with-context)
+    (define-key map (kbd "m") #'hive-mcp-claude-code-save-to-memory)
+    (define-key map (kbd "q") #'hive-mcp-claude-code-query-memory)
+    (define-key map (kbd "w") #'hive-mcp-claude-code-run-workflow)
+    (define-key map (kbd "M") #'hive-mcp-claude-code-transient)
+    map)
+  "Keymap for hive-mcp-claude-code commands.")
+
+(define-minor-mode hive-mcp-claude-code-mode
+  "Minor mode for hive-mcp integration with claude-code.el.\n\nWhen enabled, provides:\n- Context injection for Claude commands\n- Memory persistence integration\n- Workflow access\n- Conversation logging\n\nKey bindings under `C-c c m' prefix (customizable).\n\nRequires `claude-code' package to be installed."
+  :init-value nil
+  :lighter " MCP"
+  :global t
+  :group 'hive-mcp-claude-code
+  (if hive-mcp-claude-code-mode (if (not (featurep 'claude-code)) (progn
+  (setq hive-mcp-claude-code-mode nil)
+  (message "hive-mcp-claude-code: claude-code not available, addon disabled")) (advice-add 'claude-code--do-send-command :around #'hive-mcp-claude-code--advise-send-command)) (advice-remove 'claude-code--do-send-command #'hive-mcp-claude-code--advise-send-command)))
+
+(with-eval-after-load 'hive-mcp-addons
+  (hive-mcp-addon-register 'claude-code :version "0.1.0" :description "Integration with claude-code.el (Claude Code CLI)" :requires '(claude-code hive-mcp-api) :provides '(hive-mcp-claude-code-mode hive-mcp-claude-code-transient)))
+
 (provide 'hive-mcp-claude-code)
 ;;; hive-mcp-claude-code.el ends here

@@ -123,5 +123,161 @@
   (((eq status 'error) t) ((memq status '(spawning starting)) nil))
   ((buffer (not (buffer-live-p buffer))) (t t))))))
 
+(defun hive-mcp-swarm-tasks---process-queue-entry (entry)
+  "Process a single queue ENTRY, dispatching if terminal ready.\nReturns:\n  :success - dispatch succeeded\n  :retry   - terminal not ready, should retry\n  :failed  - max retries exceeded or slave dead"
+  (let* ((slave-id (plist-get entry :slave-id))
+        (prompt (plist-get entry :prompt))
+        (retries (plist-get entry :retries))
+        (timeout (plist-get entry :timeout))
+        (priority (plist-get entry :priority))
+        (context (plist-get entry :context))
+        (queued-at (plist-get entry :queued-at))
+        (slave (gethash slave-id hive-mcp-swarm--slaves)))
+    (cond
+  (((-slave-truly-dead-p slave) (message "[swarm-tasks] Queue: %s slave dead, dropping dispatch" slave-id) (-notify-dispatch-dropped slave-id "slave-dead" prompt retries queued-at) :failed) ((>= retries hive-mcp-swarm-dispatch-max-retries) (message "[swarm-tasks] Queue: %s max retries (%d) exceeded, dropping" slave-id retries) (-notify-dispatch-dropped slave-id "max-retries-exceeded" prompt retries queued-at) :failed))
+  (((-slave-ready-p slave-id) (condition-case err
+    (let* ((result (hive-mcp-swarm-tasks-dispatch-immediate slave-id prompt :timeout timeout :priority priority :context context)))
+    (if (equal (plist-get result :status) "dispatched") (progn
+  (message "[swarm-tasks] Queue: %s dispatched after %d retries (task: %s)" slave-id retries (plist-get result :task-id))
+  :success) (message "[swarm-tasks] Queue: %s dispatch failed: %s" slave-id (plist-get result :error))))
+  (error (message "[swarm-tasks] Queue: %s dispatch error: %s" slave-id (error-message-string err))
+      (-notify-dispatch-dropped slave-id "dispatch-error" prompt retries queued-at)
+      :failed))) (t (message "[swarm-tasks] Queue: %s not ready (retry %d/%d)" slave-id (1+ retries) hive-mcp-swarm-dispatch-max-retries) :retry)))))
+
+(defun hive-mcp-swarm-tasks-process-queue ()
+  "Process all ready entries in the dispatch queue.\nCalled periodically by the queue timer."
+  (condition-case err
+    (when hive-mcp-swarm-dispatch-queue
+    (let* ((current-queue hive-mcp-swarm-dispatch-queue)
+        (new-queue '()))
+    (setq hive-mcp-swarm-dispatch-queue nil)
+    (dolist (entry current-queue)
+    (pcase (-process-queue-entry entry)
+  ('retry (plist-put entry :retries (1+ (plist-get entry :retries))) (push entry new-queue))
+  ('success nil)
+  ('failed nil)))
+    (setq hive-mcp-swarm-dispatch-queue (nreverse new-queue))
+    (when (null hive-mcp-swarm-dispatch-queue)
+    (hive-mcp-swarm-tasks-stop-queue-processor))))
+  (error (message "[swarm-tasks] Queue processor tick error: %s" (error-message-string err)))))
+
+(defun hive-mcp-swarm-tasks-start-queue-processor ()
+  "Start the queue processor timer if not already running."
+  (unless hive-mcp-swarm-dispatch-queue-timer
+    (setq hive-mcp-swarm-dispatch-queue-timer (run-with-timer hive-mcp-swarm-dispatch-queue-interval hive-mcp-swarm-dispatch-queue-interval #'hive-mcp-swarm-tasks-process-queue))
+    (message "[swarm-tasks] Queue processor started (interval: %.1fs)" hive-mcp-swarm-dispatch-queue-interval)))
+
+(defun hive-mcp-swarm-tasks-stop-queue-processor ()
+  "Stop the queue processor timer."
+  (when hive-mcp-swarm-dispatch-queue-timer
+    (cancel-timer hive-mcp-swarm-dispatch-queue-timer)
+    (setq hive-mcp-swarm-dispatch-queue-timer nil)
+    (message "[swarm-tasks] Queue processor stopped")))
+
+(defun hive-mcp-swarm-tasks-clear-queue ()
+  "Clear all pending dispatches from the queue.\nUse with caution - dispatches will be lost."
+  (interactive)
+  (let* ((count (length hive-mcp-swarm-dispatch-queue)))
+    (setq hive-mcp-swarm-dispatch-queue nil)
+    (hive-mcp-swarm-tasks-stop-queue-processor)
+    (message "[swarm-tasks] Cleared %d queued dispatches" count)))
+
+(defun hive-mcp-swarm-tasks-queue-status ()
+  "Return queue status as a plist for diagnostics."
+  (list :depth (length hive-mcp-swarm-dispatch-queue) :processor-running (not (null hive-mcp-swarm-dispatch-queue-timer)) :entries (mapcar (lambda (e)
+    (list :slave-id (plist-get e :slave-id) :retries (plist-get e :retries) :queued-at (plist-get e :queued-at))) hive-mcp-swarm-dispatch-queue)))
+
+(cl-defun hive-mcp-swarm-tasks-dispatch-immediate (slave-id prompt &key timeout priority context)
+  "Dispatch PROMPT to SLAVE-ID (NON-BLOCKING).\nTIMEOUT is milliseconds, PRIORITY is critical/high/normal/low.\nReturns structured response plist."
+  (interactive (list (completing-read "Slave: " (hash-table-keys hive-mcp-swarm--slaves)) (clel-read-string "Prompt: ")))
+  (let* ((slave (gethash slave-id hive-mcp-swarm--slaves))
+        (buffer (and slave (plist-get slave :buffer))))
+    (unless slave
+    (cl-return-from hive-mcp-swarm-tasks-dispatch-immediate (list :status "error" :slave-id slave-id :error "slave-not-found")))
+    (unless (buffer-live-p buffer)
+    (cl-return-from hive-mcp-swarm-tasks-dispatch-immediate (list :status "error" :slave-id slave-id :error "buffer-dead")))
+    (let* ((task-id (hive-mcp-swarm-slaves-generate-task-id slave-id))
+        (send-error nil))
+    (puthash task-id (list :task-id task-id :slave-id slave-id :prompt prompt :status 'dispatched :priority (or priority 'normal) :timeout (or timeout hive-mcp-swarm-default-timeout) :context context :dispatched-at (format-time-string "%FT%T%z") :completed-at nil :result nil :error nil) hive-mcp-swarm--tasks)
+    (plist-put slave :status 'working)
+    (plist-put slave :current-task task-id)
+    (plist-put slave :last-activity (format-time-string "%FT%T%z"))
+    (plist-put slave :task-start-point (with-current-buffer buffer
+    (point-max)))
+    (condition-case err
+    (hive-mcp-swarm-terminal-send buffer prompt (or (plist-get slave :terminal) hive-mcp-swarm-terminal))
+  (error (setq send-error (error-message-string err))
+      (message "[swarm-tasks] Dispatch error: %s" send-error)
+      (remhash task-id hive-mcp-swarm--tasks)
+      (plist-put slave :status 'idle)
+      (plist-put slave :current-task nil)))
+    (when (called-interactively-p 'any)
+    (message (if send-error "Failed to dispatch to %s: %s" "Dispatched task %s to %s") (if send-error slave-id task-id) (if send-error send-error slave-id)))
+    (if send-error (list :status "error" :slave-id slave-id :error send-error) (list :status "dispatched" :task-id task-id :slave-id slave-id)))))
+
+(cl-defun hive-mcp-swarm-tasks-dispatch (slave-id prompt &key timeout priority context)
+  "Dispatch PROMPT to SLAVE-ID with ACID queue support.\nReturns structured response plist."
+  (interactive (list (completing-read "Slave: " (hash-table-keys hive-mcp-swarm--slaves)) (clel-read-string "Prompt: ")))
+  (if (and hive-mcp-swarm-dispatch-queue-enabled (not (hive-mcp-swarm-tasks--slave-ready-p slave-id))) (let* ((entry (hive-mcp-swarm-tasks-enqueue-dispatch slave-id prompt timeout priority context)))
+    (message "[swarm-tasks] Terminal not ready, queuing dispatch for %s" slave-id)
+    (list :status "queued" :slave-id slave-id :queue-position (length hive-mcp-swarm-dispatch-queue) :queued-at (plist-get entry :queued-at) :message "Dispatch queued - terminal not ready")) (hive-mcp-swarm-tasks-dispatch-immediate slave-id prompt :timeout timeout :priority priority :context context)))
+
+(defun hive-mcp-swarm-tasks-collect (task-id &optional timeout-ms)
+  "Collect response for TASK-ID (BLOCKING).\nTIMEOUT-MS defaults to 5000.  Returns task plist with :result."
+  (interactive (list (completing-read "Task: " (hash-table-keys hive-mcp-swarm--tasks))))
+  (let* ((task (or (gethash task-id hive-mcp-swarm--tasks) (error "Task not found: %s" task-id)))
+        (slave (gethash (plist-get task :slave-id) hive-mcp-swarm--slaves))
+        (buffer (plist-get slave :buffer))
+        (timeout (/ (or timeout-ms 5000) 1000.0))
+        (start-time (float-time))
+        (result nil))
+    (while (and (< (- (float-time) start-time) timeout) (not result))
+    (setq result (-extract-response buffer (plist-get task :prompt)))
+    (unless result
+    (sleep-for 0.5)))
+    (if result (progn
+  (plist-put task :status 'completed)
+  (plist-put task :result result)
+  (plist-put task :completed-at (format-time-string "%FT%T%z"))
+  (plist-put slave :status 'idle)
+  (plist-put slave :current-task nil)
+  (plist-put slave :tasks-completed (1+ (plist-get slave :tasks-completed)))) (plist-put task :status 'timeout))
+    (when (called-interactively-p 'any)
+    (message (if result "Collected result (%d chars)" "Collection timed out") (length (or result ""))))
+    task))
+
+(defun hive-mcp-swarm-tasks-broadcast (prompt &optional slave-filter)
+  "Send PROMPT to all slaves matching SLAVE-FILTER (:role, :status).\nReturns list of dispatch results for each slave."
+  (let* ((results '())
+        (target-count 0))
+    (maphash (lambda (slave-id slave)
+    (when (or (not slave-filter) (-slave-matches-filter slave slave-filter))
+    (cl-incf target-count)
+    (condition-case err
+    (let* ((result (hive-mcp-swarm-tasks-dispatch slave-id prompt)))
+    (push result results))
+  (error (message "[swarm-tasks] Broadcast to %s failed: %s" slave-id (error-message-string err))
+      (push (list :status "error" :slave-id slave-id :error (error-message-string err)) results))))) hive-mcp-swarm--slaves)
+    (when (zerop target-count)
+    (message "[swarm-tasks] Broadcast: no slaves available (hash-table count: %d)" (hash-table-count hive-mcp-swarm--slaves)))
+    (nreverse results)))
+
+(defun hive-mcp-swarm-tasks-check-completion (task-id)
+  "Check if TASK-ID has completed (NON-BLOCKING).\nReturns result string if complete, nil if still running."
+  (when-let-star (list task (gethash task-id hive-mcp-swarm--tasks) slave (gethash (plist-get task :slave-id) hive-mcp-swarm--slaves) buffer (plist-get slave :buffer)) (-extract-response buffer (plist-get task :prompt))))
+
+(defun hive-mcp-swarm-tasks-init ()
+  "Initialize tasks module."
+  (setq hive-mcp-swarm-dispatch-queue nil)
+  (message "[swarm-tasks] Tasks module initialized (ACID queue: %s)" (if hive-mcp-swarm-dispatch-queue-enabled "enabled" "disabled")))
+
+(defun hive-mcp-swarm-tasks-shutdown ()
+  "Shutdown tasks module."
+  (hive-mcp-swarm-tasks-stop-queue-processor)
+  (let* ((dropped (length hive-mcp-swarm-dispatch-queue)))
+    (setq hive-mcp-swarm-dispatch-queue nil)
+    (when (> dropped 0)
+    (message "[swarm-tasks] Warning: dropped %d queued dispatches on shutdown" dropped))))
+
 (provide 'hive-mcp-swarm-tasks)
 ;;; hive-mcp-swarm-tasks.el ends here

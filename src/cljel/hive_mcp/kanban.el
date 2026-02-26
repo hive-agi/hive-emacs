@@ -96,5 +96,40 @@
         (entries (hive-mcp-memory-query 'note (list "kanban" status) project-id nil nil scope-filter)))
     (seq-filter #'-is-kanban-entry-p entries)))
 
+(defun hive-mcp-kanban-stats (&optional project-id)
+  "Return task counts by status.\nPROJECT-ID specifies the project (defaults to current).\nReturns plist with :todo, :doing, :review counts."
+  (let* ((all-tasks (hive-mcp-kanban-list-all project-id))
+        (counts (list :todo 0 :doing 0 :review 0)))
+    (dolist (task all-tasks)
+    (let* ((content (plist-get task :content))
+        (status (plist-get content :status))
+        (key (intern (clel-concat ":" status))))
+    (plist-put counts key (1+ (plist-get counts key)))))
+    counts))
+
+(defun hive-mcp-kanban-task-update (task-id &optional title priority context project-id)
+  "Update task TASK-ID with new TITLE, PRIORITY, or CONTEXT.\nOnly provided fields are updated.\nPROJECT-ID specifies the project (defaults to current).\nReturns the updated entry."
+  (let* ((entry (hive-mcp-memory-get task-id project-id)))
+    (unless entry
+    (error "Task not found: %s" task-id))
+    (unless (hive-mcp-kanban--is-kanban-entry-p entry)
+    (error "Entry is not a kanban task: %s" task-id))
+    (let* ((content (copy-sequence (plist-get entry :content)))
+        (current-status (plist-get content :status))
+        (new-priority (or priority (plist-get content :priority))))
+    (when priority
+    (unless (member priority hive-mcp-kanban-priorities)
+    (error "Invalid priority: %s" priority)))
+    (when title
+    (setq content (plist-put content :title title)))
+    (when priority
+    (setq content (plist-put content :priority priority)))
+    (when context
+    (setq content (plist-put content :context context)))
+    (let* ((existing-scope (hive-mcp-kanban--extract-scope entry))
+        (new-tags (if existing-scope (append (hive-mcp-kanban--build-tags current-status new-priority) (list existing-scope)) (hive-mcp-kanban--build-tags-with-scope current-status new-priority project-id))))
+    (hive-mcp-memory-update task-id (list :content content :tags new-tags) project-id))
+    (hive-mcp-memory-get task-id project-id))))
+
 (provide 'hive-mcp-kanban)
 ;;; hive-mcp-kanban.el ends here
