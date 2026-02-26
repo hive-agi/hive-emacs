@@ -47,18 +47,18 @@
   :group 'hive-mcp-log
   :type 'integer)
 
-(defvar hive-mcp-log-hive-mcp-log--history nil)
+(defvar hive-mcp-log--history nil)
 
-(defvar hive-mcp-log-hive-mcp-log--level-priority '((debug . 0) (info . 1) (warn . 2) (error . 3))
+(defvar hive-mcp-log--level-priority '((debug . 0) (info . 1) (warn . 2) (error . 3))
   "Priority mapping for log levels.")
 
-(defvar hive-mcp-log-hive-mcp-log--level-labels '((debug . "DEBUG") (info . "INFO ") (warn . "WARN ") (error . "ERROR"))
+(defvar hive-mcp-log--level-labels '((debug . "DEBUG") (info . "INFO ") (warn . "WARN ") (error . "ERROR"))
   "Display labels for log levels.")
 
-(defvar hive-mcp-log-hive-mcp-log--buffer-name "*hive-mcp-log*"
+(defvar hive-mcp-log--buffer-name "*hive-mcp-log*"
   "Name of the dedicated log buffer.")
 
-(defvar hive-mcp-log-hive-mcp-log--mcp-call-stats nil)
+(defvar hive-mcp-log--mcp-call-stats nil)
 
 (defun hive-mcp-log--ensure-history ()
   "Ensure the log history ring buffer exists."
@@ -187,7 +187,7 @@
     (hive-mcp-log-mode)))
     (display-buffer buf)))
 
-(defvar hive-mcp-log-hive-mcp-log-mode-map (make-sparse-keymap)
+(defvar hive-mcp-log-mode-map (make-sparse-keymap)
   "Keymap for hive-mcp-log-mode.")
 
 (defun hive-mcp-log-mcp-call-start (tool-name)

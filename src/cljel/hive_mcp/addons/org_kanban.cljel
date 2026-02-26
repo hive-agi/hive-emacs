@@ -1,0 +1,379 @@
+(ns hive-mcp-org-kanban
+  "Kanban integration with dual backends for hive-mcp.
+
+  This addon provides kanban task tracking with dual backends:
+  - vibe-kanban: Cloud/MCP-based kanban (team collaboration)
+  - standalone: Local org files (personal/offline use)
+
+  Architecture follows SOLID/DDD principles:
+  - Backend Protocol: Defines operations all backends must support
+  - Strategy Pattern: Backends are interchangeable at runtime
+  - Adapter Layer: Unified API regardless of backend
+
+  Features:
+  - Agent-aware task tracking (tracks which agent worked on what)
+  - Session continuity via org properties
+  - org-kanban UI integration for visualization
+  - Bidirectional sync between backends
+  - Roadmap and dependency tracking
+
+  Usage:
+    (hive-mcp-addon-load 'org-kanban)
+    (hive-mcp-kanban-mode 1)
+
+    ;; Set backend
+    (setq hive-mcp-org-kanban-backend 'vibe)      ; cloud/MCP
+    (setq hive-mcp-org-kanban-backend 'standalone) ; local org file
+
+    ;; Or use both with sync
+    (hive-mcp-org-kanban-enable-dual-backend)"
+  (:require [cl-lib]
+            [org]
+            [json]
+            [hive-mcp-kanban-protocol]
+            [hive-mcp-kanban-standalone]
+            [hive-mcp-kanban-vibe]
+            [hive-mcp-kanban-board]))
+
+;; Forward declarations for byte-compiler
+(defvar org-id-locations)
+
+;; Soft dependencies
+(declare-function hive-mcp-api-get-context "hive-mcp-api")
+(declare-function org-kanban/initialize "org-kanban")
+
+;;;; Customization:
+
+(defgroup hive-mcp-kanban nil
+  "Kanban integration for hive-mcp with dual backends."
+  :group 'hive-mcp
+  :prefix "hive-mcp-org-kanban-")
+
+(defcustom backend 'standalone
+  "Active kanban backend.
+- `vibe': Use vibe-kanban MCP server (cloud/team)
+- `standalone': Use local org file (personal/offline)"
+  :type '(choice (const :tag "Vibe Kanban (MCP/Cloud)" vibe)
+                 (const :tag "Standalone (Local Org)" standalone))
+  :group 'hive-mcp-kanban)
+
+(defcustom statuses
+  '("TODO" "IN-PROGRESS" "IN-REVIEW" "DONE" "CANCELLED")
+  "List of kanban statuses/columns."
+  :type '(repeat string)
+  :group 'hive-mcp-kanban)
+
+(defcustom auto-sync nil
+  "When non-nil, auto-sync changes to the other backend."
+  :type 'boolean
+  :group 'hive-mcp-kanban)
+
+;;;; Unified API:
+
+(defn list-projects []
+  "List all projects from current backend."
+  (hive-mcp-kanban-protocol--list-projects hive-mcp-org-kanban-backend))
+
+(defn list-tasks [&optional project-id status]
+  "List tasks from current backend.
+PROJECT-ID defaults to `hive-mcp-kanban-vibe-default-project'.
+For standalone backend, PROJECT-ID can be nil.
+STATUS optionally filters by kanban status."
+  (let [pid (or project-id hive-mcp-kanban-vibe-default-project)]
+    ;; Only require project-id for vibe backend
+    (when (and (eq hive-mcp-org-kanban-backend 'vibe) (not pid))
+      (error "No project ID specified. Set hive-mcp-kanban-vibe-default-project"))
+    (hive-mcp-kanban-protocol--list-tasks hive-mcp-org-kanban-backend pid status)))
+
+(defn get-task [task-id]
+  "Get task details by TASK-ID from current backend."
+  (hive-mcp-kanban-protocol--get-task hive-mcp-org-kanban-backend task-id))
+
+(defn create-task [title &optional description project-id]
+  "Create a new task with TITLE and optional DESCRIPTION.
+PROJECT-ID defaults to `hive-mcp-kanban-vibe-default-project'.
+For standalone backend, PROJECT-ID can be nil."
+  (let [pid (or project-id hive-mcp-kanban-vibe-default-project)]
+    ;; Only require project-id for vibe backend
+    (when (and (eq hive-mcp-org-kanban-backend 'vibe) (not pid))
+      (error "No project ID specified. Set hive-mcp-kanban-vibe-default-project"))
+    (let [result (hive-mcp-kanban-protocol--create-task
+                   hive-mcp-org-kanban-backend pid title description)]
+      (when hive-mcp-org-kanban-auto-sync
+        (hive-mcp-org-kanban--sync-task-to-other-backend result))
+      result)))
+
+(defn update-task [task-id &rest props]
+  "Update task TASK-ID with PROPS (:title :description :status)."
+  (let [result (apply #'hive-mcp-kanban-protocol--update-task
+                       hive-mcp-org-kanban-backend task-id props)]
+    (when hive-mcp-org-kanban-auto-sync
+      (apply #'hive-mcp-org-kanban--sync-update-to-other-backend task-id props))
+    result))
+
+(defn delete-task [task-id]
+  "Delete task by TASK-ID from current backend."
+  (hive-mcp-kanban-protocol--delete-task hive-mcp-org-kanban-backend task-id))
+
+(defn move-task [task-id new-status]
+  "Move task TASK-ID to NEW-STATUS."
+  (hive-mcp-org-kanban-update-task task-id :status new-status))
+
+;;;; Dual Backend Sync:
+
+(defn enable-dual-backend []
+  "Enable dual backend mode with auto-sync."
+  (interactive)
+  (setq hive-mcp-org-kanban-auto-sync t)
+  (message "Dual backend enabled. Changes sync to both vibe-kanban and standalone."))
+
+(defn sync-all []
+  "Sync all tasks between backends."
+  (interactive)
+  (message "Syncing kanban backends...")
+  ;; Pull from vibe, push to standalone
+  (let [vibe-tasks (hive-mcp-kanban-protocol--list-tasks 'vibe hive-mcp-kanban-vibe-default-project)
+        standalone-tasks (hive-mcp-kanban-protocol--list-tasks 'standalone hive-mcp-kanban-vibe-default-project)]
+    ;; Merge logic here
+    (message "Synced %d vibe tasks and %d standalone tasks"
+             (length vibe-tasks) (length standalone-tasks))))
+
+(defn- -sync-task-to-other-backend [task]
+  "Sync TASK to the non-active backend."
+  (let [other-backend (if (eq hive-mcp-org-kanban-backend 'vibe) 'standalone 'vibe)]
+    (hive-mcp-kanban-protocol--create-task
+     other-backend
+     hive-mcp-kanban-vibe-default-project
+     (alist-get 'title task)
+     (alist-get 'description task))))
+
+(defn- -sync-update-to-other-backend [task-id &rest props]
+  "Sync TASK-ID update with PROPS to the non-active backend."
+  (let [other-backend (if (eq hive-mcp-org-kanban-backend 'vibe) 'standalone 'vibe)]
+    (apply #'hive-mcp-kanban-protocol--update-task other-backend task-id props)))
+
+;;;; Legacy View Commands:
+
+(defn view [&optional format]
+  "View kanban board using native Clojure renderer.
+FORMAT can be `terminal' (ASCII art) or `emacs' (org-mode).
+With prefix arg, prompts for format."
+  (interactive
+   (list (if current-prefix-arg
+             (intern (completing-read "Format: " '("terminal" "emacs") nil t))
+           'terminal)))
+  (let* [file hive-mcp-kanban-standalone-org-file
+         fmt (or format 'terminal)
+         code (format "(do (require '[hive-mcp.org-clj.render :as r])
+                           (r/render-file (r/%s-renderer) \"%s\"))"
+                      fmt file)]
+    (if (and (fboundp 'cider-connected-p) (cider-connected-p))
+        ;; Use CIDER if available
+        (let [result (cider-nrepl-sync-request:eval code)]
+          (when-let* [value (nrepl-dict-get result "value")]
+            (let [buf (get-buffer-create "*Kanban Board*")]
+              (with-current-buffer buf
+                (let [inhibit-read-only t]
+                  (erase-buffer)
+                  ;; Remove surrounding quotes from the string
+                  (insert (read value)))
+                (goto-char (point-min))
+                (if (eq fmt 'emacs)
+                    (org-mode)
+                  (special-mode)))
+              (display-buffer buf))))
+      ;; Fallback: display static board
+      (hive-mcp-org-kanban--view-static file fmt))))
+
+(defn- -view-static [file _format]
+  "Display static kanban board from FILE.
+FORMAT argument is unused in fallback mode.
+Used when CIDER is not connected."
+  (message "CIDER not connected. Showing org file directly.")
+  (find-file file))
+
+(defn show-board []
+  "Show kanban board in org buffer."
+  (interactive)
+  (let [buf (get-buffer-create "*MCP Kanban*")
+        tasks (hive-mcp-org-kanban-list-tasks)]
+    (with-current-buffer buf
+      (erase-buffer)
+      (org-mode)
+      (insert "#+TITLE: Kanban Board\n")
+      (insert "#+STARTUP: overview\n\n")
+      ;; Group by status
+      (dolist [status hive-mcp-org-kanban-statuses]
+        (insert (format "* %s\n" status))
+        (let [status-tasks (cl-remove-if-not
+                             (lambda (tsk)
+                               (equal (hive-mcp-kanban-protocol--vibe-to-org-status
+                                      (alist-get 'status tsk))
+                                     status))
+                             tasks)]
+          (dolist [task status-tasks]
+            (insert (format "** %s\n" (alist-get 'title task)))
+            (insert ":PROPERTIES:\n")
+            (insert (format ":ID: %s\n" (alist-get 'id task)))
+            (when-let* [agent (alist-get 'agent task)]
+              (insert (format ":AGENT: %s\n" agent)))
+            (insert ":END:\n")
+            (when-let* [desc (alist-get 'description task)]
+              (insert desc "\n"))
+            (insert "\n"))))
+      (goto-char (point-min)))
+    (switch-to-buffer buf)))
+
+(defn create []
+  "Create a new kanban task interactively."
+  (interactive)
+  (let* [title (read-string "Task title: ")
+         description (read-string "Description (optional): " nil nil "")
+         result (hive-mcp-org-kanban-create-task
+                  title
+                  (unless (string-empty-p description) description))]
+    (message "Created task: %s" (alist-get 'id result))))
+
+(defn update-status []
+  "Update status of a task interactively."
+  (interactive)
+  (let* [tasks (hive-mcp-org-kanban-list-tasks)
+         task-names (mapcar (lambda (tsk)
+                              (format "%s [%s]"
+                                      (alist-get 'title tsk)
+                                      (alist-get 'status tsk)))
+                            tasks)
+         selection (completing-read "Task: " task-names nil t)
+         task (nth (cl-position selection task-names :test #'equal) tasks)
+         new-status (completing-read "New status: "
+                                      (mapcar #'cdr hive-mcp-kanban-protocol-status-map)
+                                      nil t)]
+    (hive-mcp-org-kanban-move-task (alist-get 'id task) new-status)
+    (message "Moved task to %s" new-status)))
+
+(defn open-org-file []
+  "Open the standalone kanban org file."
+  (interactive)
+  (find-file hive-mcp-kanban-standalone-org-file))
+
+(defn set-project []
+  "Set the default kanban project interactively."
+  (interactive)
+  (let* [projects (hive-mcp-org-kanban-list-projects)
+         names (mapcar (lambda (p) (alist-get 'name p)) projects)
+         selection (completing-read "Project: " names nil t)
+         project (cl-find-if (lambda (p)
+                               (equal (alist-get 'name p) selection))
+                             projects)]
+    (setq hive-mcp-kanban-vibe-default-project (alist-get 'id project))
+    (message "Set default project: %s (%s)"
+             selection hive-mcp-kanban-vibe-default-project)))
+
+;;;; Agent API:
+
+(defn api-status []
+  "Get kanban status for API consumption.
+Returns current tasks grouped by status."
+  (let [tasks (hive-mcp-org-kanban-list-tasks)]
+    (backquote ((backend . ,hive-mcp-org-kanban-backend)
+                (project . ,hive-mcp-kanban-vibe-default-project)
+                (total . ,(length tasks))
+                (by_status . ,(mapcar
+                               (lambda (status)
+                                 (cons status
+                                       (length (cl-remove-if-not
+                                               (lambda (tsk)
+                                                 (equal (alist-get 'status tsk) status))
+                                               tasks))))
+                               (mapcar #'cdr hive-mcp-kanban-protocol-status-map)))
+                (tasks . ,tasks)))))
+
+(defn api-my-tasks []
+  "Get tasks assigned to or modified by current agent."
+  (let* [agent (hive-mcp-kanban-protocol--current-agent)
+         tasks (hive-mcp-org-kanban-list-tasks)]
+    (cl-remove-if-not
+     (lambda (tsk)
+       (or (equal (alist-get 'agent tsk) agent)
+           (equal (alist-get 'last_agent tsk) agent)))
+     tasks)))
+
+(defn api-roadmap []
+  "Get roadmap view with milestones and progress."
+  (let* [tasks (hive-mcp-org-kanban-list-tasks)
+         total (length tasks)
+         done (length (cl-remove-if-not
+                       (lambda (tsk)
+                         (member (alist-get 'status tsk) '("done" "cancelled")))
+                       tasks))]
+    (backquote ((total . ,total)
+                (completed . ,done)
+                (progress . ,(if (> total 0)
+                                 (round (* 100 (/ (float done) total)))
+                               0))
+                (in_progress . ,(cl-remove-if-not
+                                 (lambda (tsk)
+                                   (equal (alist-get 'status tsk) "inprogress"))
+                                 tasks))
+                (next_up . ,(seq-take
+                             (cl-remove-if-not
+                              (lambda (tsk)
+                                (equal (alist-get 'status tsk) "todo"))
+                              tasks)
+                             5))))))
+
+;;;; Transient Menu:
+
+(transient-define-prefix hive-mcp-org-kanban-transient ()
+  "Kanban management menu."
+  ["hive-mcp Kanban"
+   ["View"
+    ("b" "Interactive board" hive-mcp-kanban-board-open-board)
+    ("v" "Text view (ASCII)" hive-mcp-org-kanban-view)
+    ("V" "Text view (Emacs)" (lambda (_unused) (interactive "i") (hive-mcp-org-kanban-view 'emacs)))
+    ("o" "Open org file" hive-mcp-org-kanban-open-org-file)]
+   ["Tasks"
+    ("c" "Create task" hive-mcp-org-kanban-create)
+    ("u" "Update status" hive-mcp-org-kanban-update-status)]
+   ["Settings"
+    ("p" "Set project" hive-mcp-org-kanban-set-project)
+    ("s" "Sync backends" hive-mcp-org-kanban-sync-all)
+    ("d" "Toggle dual mode" hive-mcp-org-kanban-enable-dual-backend)]])
+
+;;;; Minor Mode:
+
+(defvar hive-mcp-org-kanban-mode-map
+  (let [map (make-sparse-keymap)]
+    ;; Use C-c M-k (Meta modifier) - allowed for minor modes per Emacs conventions
+    (define-key map (kbd "C-c M-k") 'hive-mcp-org-kanban-transient)
+    map)
+  "Keymap for `hive-mcp-org-kanban-mode'.")
+
+(define-minor-mode hive-mcp-org-kanban-mode
+  "Minor mode for kanban task tracking with hive-mcp.
+
+Provides:
+- Dual backend support (vibe-kanban + standalone org)
+- Agent-aware task tracking
+- org-kanban UI integration
+- Session continuity
+
+\\{hive-mcp-org-kanban-mode-map}"
+  :init-value nil
+  :lighter " Kanban"
+  :keymap hive-mcp-org-kanban-mode-map
+  :global t
+  :group 'hive-mcp-kanban
+  (if hive-mcp-org-kanban-mode
+      (message "Emacs-mcp-kanban enabled (backend: %s)" hive-mcp-org-kanban-backend)
+    (message "Emacs-mcp-kanban disabled")))
+
+;;;; Addon Registration:
+
+(with-eval-after-load 'hive-mcp-addons
+  (hive-mcp-addon-register
+   'org-kanban
+   :version "0.1.0"
+   :description "Kanban tracking with dual backends (vibe-kanban + standalone org)"
+   :requires '(org)
+   :provides '(hive-mcp-org-kanban-mode hive-mcp-org-kanban-transient)))

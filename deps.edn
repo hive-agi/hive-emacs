@@ -9,7 +9,7 @@
 
         ;; hive-dsl — Result monad, rescue/guard DSL
         io.github.hive-agi/hive-dsl
-        {:git/tag "v0.3.1" :git/sha "0e28484fa8552a5712a5c3325a8a1f2449c2b6a3"}
+        {:git/tag "v0.3.2" :git/sha "5625daa78f038332cc51105573eae9fd05445e3f"}
 
         ;; Process execution for emacsclient subprocess
         babashka/process {:mvn/version "0.6.25"}}

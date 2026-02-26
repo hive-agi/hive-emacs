@@ -48,16 +48,16 @@
 
 (defface olympus-ui-focused '((t :box (:line-width 2 :color "yellow"))) "Face for the focused ling cell." :group 'olympus-ui)
 
-(defvar olympus-ui-olympus-ui--buffer-name "*Olympus Grid*"
+(defvar olympus-ui--buffer-name "*Olympus Grid*"
   "Name of the Olympus grid buffer.")
 
-(defvar olympus-ui-olympus-ui--current-state nil)
+(defvar olympus-ui--current-state nil)
 
-(defvar olympus-ui-olympus-ui--refresh-timer nil)
+(defvar olympus-ui--refresh-timer nil)
 
-(defvar olympus-ui-olympus-ui--focused-ling nil)
+(defvar olympus-ui--focused-ling nil)
 
-(defvar olympus-ui-olympus-ui--ws-subscription nil)
+(defvar olympus-ui--ws-subscription nil)
 
 (defun olympus-ui--status--gtface (status)
   "Return the face for a ling STATUS keyword."
