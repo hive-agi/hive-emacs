@@ -47,7 +47,8 @@
   :group 'hive-mcp-log
   :type 'integer)
 
-(defvar hive-mcp-log--history nil)
+(defvar hive-mcp-log--history nil
+  "Ring buffer storing recent log entries.")
 
 (defvar hive-mcp-log--level-priority '((debug . 0) (info . 1) (warn . 2) (error . 3))
   "Priority mapping for log levels.")
@@ -58,7 +59,8 @@
 (defvar hive-mcp-log--buffer-name "*hive-mcp-log*"
   "Name of the dedicated log buffer.")
 
-(defvar hive-mcp-log--mcp-call-stats nil)
+(defvar hive-mcp-log--mcp-call-stats nil
+  "Hash table tracking MCP call statistics.\nKeys are tool names, values are plists with :count, :total-ms, :max-ms.")
 
 (defun hive-mcp-log--ensure-history ()
   "Ensure the log history ring buffer exists."
@@ -150,7 +152,7 @@
   (hive-mcp-log--ensure-history)
   (let* ((n (or count 10))
         (len (ring-length hive-mcp-log--history))
-        (limit (cl-min n len)))
+        (limit (min n len)))
     (cl-loop for i from 0 below limit collect (ring-ref hive-mcp-log--history i))))
 
 (defun hive-mcp-log-log-filter-by-component (component)

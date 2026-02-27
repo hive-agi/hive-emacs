@@ -14,7 +14,7 @@
 
 
 
-(defvar org-id-locations nil)
+(defvar org-id-locations)
 
 (declare-function hive-mcp-api-get-context "hive-mcp-api")
 
@@ -212,9 +212,11 @@
     (equal (alist-get 'status tsk) "inprogress")) tasks)) (next_up - (seq-take (cl-remove-if-not (lambda (tsk)
     (equal (alist-get 'status tsk) "todo")) tasks) 5))))))
 
-(transient-define-prefix hive-mcp-org-kanban-transient (nil) "Kanban management menu." (list "hive-mcp Kanban" (list "View" ("b" "Interactive board" hive-mcp-kanban-board-open-board) ("v" "Text view (ASCII)" hive-mcp-org-kanban-view) ("V" "Text view (Emacs)" (lambda (_unused)
+(transient-define-prefix hive-mcp-org-kanban-transient ()
+  "Kanban management menu."
+  ["hive-mcp Kanban" ["View" ("b" "Interactive board" hive-mcp-kanban-board-open-board) ("v" "Text view (ASCII)" hive-mcp-org-kanban-view) ("V" "Text view (Emacs)" (lambda (_unused)
     (interactive "i")
-    (hive-mcp-org-kanban-view 'emacs))) ("o" "Open org file" hive-mcp-org-kanban-open-org-file)) (list "Tasks" ("c" "Create task" hive-mcp-org-kanban-create) ("u" "Update status" hive-mcp-org-kanban-update-status)) (list "Settings" ("p" "Set project" hive-mcp-org-kanban-set-project) ("s" "Sync backends" hive-mcp-org-kanban-sync-all) ("d" "Toggle dual mode" hive-mcp-org-kanban-enable-dual-backend))))
+    (hive-mcp-org-kanban-view 'emacs))) ("o" "Open org file" hive-mcp-org-kanban-open-org-file)] ["Tasks" ("c" "Create task" hive-mcp-org-kanban-create) ("u" "Update status" hive-mcp-org-kanban-update-status)] ["Settings" ("p" "Set project" hive-mcp-org-kanban-set-project) ("s" "Sync backends" hive-mcp-org-kanban-sync-all) ("d" "Toggle dual mode" hive-mcp-org-kanban-enable-dual-backend)]])
 
 (defvar hive-mcp-org-kanban-mode-map (let* ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c M-k") 'hive-mcp-org-kanban-transient)

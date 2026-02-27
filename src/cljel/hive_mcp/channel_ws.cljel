@@ -20,6 +20,7 @@
      (hive-mcp-channel-ws-on :hivemind-progress #'my-handler)
      (hive-mcp-channel-ws-send '(:type \"ping\"))")
 
+(require 'cl-lib)
 (require 'websocket)
 (require 'json)
 
@@ -145,19 +146,19 @@ Runs async in WebSocket callback context - all operations guarded."
       (let [text (websocket-frame-text frame)]
         (cond
          ;; Handle pong (response to our ping keepalive)
-         ((string= text "pong") nil)
+         (string= text "pong") nil
          ;; Handle ping from server (respond with pong)
-         ((string= text "ping")
+         (string= text "ping")
           (when (hive-mcp-channel-ws-connected-p)
             (condition-case nil
                 (websocket-send-text hive-mcp-channel-ws--connection "pong")
-              (error nil))))
+              (error nil)))
          ;; Parse JSON messages
-         (t (condition-case parse-err
+         t (condition-case parse-err
                 (let [msg (json-read-from-string text)]
                   (hive-mcp-channel-ws--dispatch msg))
               (error (message "hive-mcp-channel-ws: Parse error: %s"
-                              (error-message-string parse-err)))))))
+                              (error-message-string parse-err))))))
     (error (message "hive-mcp-channel-ws: on-message error: %s"
                     (error-message-string err)))))
 
@@ -189,17 +190,16 @@ Runs async - cleanup timers and schedule reconnect."
         (setq hive-mcp-channel-ws--connection nil)
         (cond
          ;; Already in degraded mode - stay silent
-         (hive-mcp-channel-ws--degraded-mode nil)
+         hive-mcp-channel-ws--degraded-mode nil
          ;; Exhausted reconnect attempts
-         ((and (> hive-mcp-channel-ws-max-reconnects 0)
-               (>= hive-mcp-channel-ws--reconnect-count
-                   hive-mcp-channel-ws-max-reconnects))
-          (setq hive-mcp-channel-ws--degraded-mode t)
-          (message "hive-mcp-channel-ws: Graceful degradation (server unavailable)"))
+         (and (> hive-mcp-channel-ws-max-reconnects 0)
+              (>= hive-mcp-channel-ws--reconnect-count
+                  hive-mcp-channel-ws-max-reconnects))
+          (do (setq hive-mcp-channel-ws--degraded-mode t)
+              (message "hive-mcp-channel-ws: Graceful degradation (server unavailable)"))
          ;; Schedule reconnect
-         (t
-          (message "hive-mcp-channel-ws: Connection closed")
-          (hive-mcp-channel-ws--schedule-reconnect))))
+         t (do (message "hive-mcp-channel-ws: Connection closed")
+               (hive-mcp-channel-ws--schedule-reconnect))))
     (error (message "hive-mcp-channel-ws: on-close ERROR: %s"
                     (error-message-string err)))))
 

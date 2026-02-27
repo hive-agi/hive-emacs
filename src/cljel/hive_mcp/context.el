@@ -16,9 +16,11 @@
   :group 'hive-mcp
   :prefix "hive-mcp-context-")
 
-(defvar hive-mcp-context-providers nil)
+(defvar hive-mcp-context-providers nil
+  "Alist of (NAME . FUNCTION) for additional context providers.\nEach function should return a plist or nil.")
 
-(defvar hive-mcp-context-gather-hook nil)
+(defvar hive-mcp-context-gather-hook nil
+  "Hook run when gathering context.  Can modify context plist.\nCalled with single argument: the context plist being built.")
 
 (defun hive-mcp-context-register-provider (name fn)
   "Register context provider NAME calling FN."
@@ -60,7 +62,7 @@
 
 (defun hive-mcp-context-project-root ()
   "Return project root directory or nil."
-  (when-let-star (list proj (project-current)) (project-root proj)))
+  (when-let-star (list proj (project-current)) (hive-mcp-context-project-root proj)))
 
 (defun hive-mcp-context-project ()
   "Return project context as plist."

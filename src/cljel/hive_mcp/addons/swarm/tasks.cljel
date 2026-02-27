@@ -89,7 +89,7 @@ Returns response string if complete, nil if still running."
           (when (and (search-forward search-key nil t)
                      (search-forward "\u25cf" nil t))
             (let [response-start (point)]
-              (cond
+              (elisp-cond
                ((search-forward "\n> " nil t)
                 (string-trim (buffer-substring-no-properties response-start (- (point) 3))))
                ((search-forward "\n\u2500\u2500\u2500\u2500" nil t)

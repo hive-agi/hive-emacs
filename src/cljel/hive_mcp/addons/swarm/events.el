@@ -15,7 +15,8 @@
 
 (declare-function hive-mcp-channel-dispatch-local "hive-mcp-channel")
 
-(defvar hive-mcp-swarm-events--session-id nil)
+(defvar hive-mcp-swarm-events--session-id nil
+  "Current session ID for event correlation.")
 
 (defun hive-mcp-swarm-events-channel-available-p ()
   "Check if the bidirectional channel is available and connected."

@@ -42,7 +42,8 @@
 (defvar hive-mcp-swarm-notify--stats '(:sent 0 :failed 0 :fallback 0)
   "Notification statistics for debugging.")
 
-(defvar hive-mcp-swarm-notify--last-notification nil)
+(defvar hive-mcp-swarm-notify--last-notification nil
+  "Last notification sent (for dedup).")
 
 (defvar hive-mcp-swarm-notify--dedup-window 2.0
   "Seconds to deduplicate identical notifications.")
@@ -63,7 +64,7 @@
         (last-key (car last))
         (last-time (cdr last)))
     (if (and last-key last-time (string= key last-key) (< (- now last-time) hive-mcp-swarm-notify--dedup-window)) (progn
-  (-log 'info "Deduplicated: %s" title)
+  (hive-mcp-swarm-notify---log 'info "Deduplicated: %s" title)
   nil) (setq hive-mcp-swarm-notify--last-notification (cons key now)))))
 
 (defun hive-mcp-swarm-notify---try-notify-send (title message urgency)
@@ -73,9 +74,9 @@
         (timeout-str (number-to-string hive-mcp-swarm-notify-timeout)))
     (if (executable-find "notify-send") (progn
   (start-process "hive-notify" nil "notify-send" "-u" urgency-str "-t" timeout-str "-a" "Hive-MCP Swarm" "-i" "dialog-information" title message)
-  (-log 'info "notify-send: %s - %s" title message)
-  t) (-log 'warn "notify-send not found in PATH")))
-  (error (-log 'error "notify-send failed: %s" (error-message-string err))
+  (hive-mcp-swarm-notify---log 'info "notify-send: %s - %s" title message)
+  t) (hive-mcp-swarm-notify---log 'warn "notify-send not found in PATH")))
+  (error (hive-mcp-swarm-notify---log 'error "notify-send failed: %s" (error-message-string err))
       nil)))
 
 (defun hive-mcp-swarm-notify---try-dbus (title message urgency)
@@ -83,9 +84,9 @@
   (condition-case err
     (if (fboundp 'notifications-notify) (progn
   (notifications-notify :title title :body message :urgency urgency :timeout hive-mcp-swarm-notify-timeout :app-name "Hive-MCP Swarm")
-  (-log 'info "D-Bus notify: %s - %s" title message)
-  t) (-log 'warn "notifications-notify not available"))
-  (error (-log 'error "D-Bus notify failed: %s" (error-message-string err))
+  (hive-mcp-swarm-notify---log 'info "D-Bus notify: %s - %s" title message)
+  t) (hive-mcp-swarm-notify---log 'warn "notifications-notify not available"))
+  (error (hive-mcp-swarm-notify---log 'error "D-Bus notify failed: %s" (error-message-string err))
       nil)))
 
 (defun hive-mcp-swarm-notify---fallback (title message urgency)
@@ -93,25 +94,25 @@
   (message "HIVE ALERT [%s]: %s - %s" (upcase (symbol-name urgency)) title message)
   (when (and hive-mcp-swarm-notify-sound (memq urgency '(critical high)))
     (ding t))
-  (-log 'info "Fallback notify: %s - %s" title message)
+  (hive-mcp-swarm-notify---log 'info "Fallback notify: %s - %s" title message)
   t)
 
 (defun hive-mcp-swarm-notify-notify (title message &optional urgency)
   "Send notification with TITLE and MESSAGE.\nURGENCY is a symbol: `critical', `high', `normal', or `low' (default: normal).\n\nGuarantees notification delivery through multiple fallback layers:\n1. notify-send (CLI tool)\n2. D-Bus notifications\n3. Emacs message + ding\n\nReturns t if notification was sent, nil if disabled or deduplicated."
   (unless hive-mcp-swarm-notify-enabled
-    (-log 'info "Notifications disabled, skipping: %s" title)
+    (hive-mcp-swarm-notify---log 'info "Notifications disabled, skipping: %s" title)
     (cl-return-from hive-mcp-swarm-notify-notify nil))
   (let* ((urgency (or urgency 'normal)))
-    (unless (-should-send-p title message)
+    (unless (hive-mcp-swarm-notify---should-send-p title message)
     (cl-return-from hive-mcp-swarm-notify-notify nil))
     (let* ((sent nil))
-    (setq sent (-try-notify-send title message urgency))
+    (setq sent (hive-mcp-swarm-notify---try-notify-send title message urgency))
     (unless sent
-    (setq sent (-try-dbus title message urgency))
+    (setq sent (hive-mcp-swarm-notify---try-dbus title message urgency))
     (when sent
     (cl-incf (plist-get hive-mcp-swarm-notify--stats :fallback))))
     (unless sent
-    (-fallback title message urgency)
+    (hive-mcp-swarm-notify---fallback title message urgency)
     (cl-incf (plist-get hive-mcp-swarm-notify--stats :fallback))
     (setq sent t))
     (if sent (cl-incf (plist-get hive-mcp-swarm-notify--stats :sent)) (cl-incf (plist-get hive-mcp-swarm-notify--stats :failed)))
@@ -164,13 +165,13 @@
   "Initialize notification module."
   (setq hive-mcp-swarm-notify--stats '(:sent 0 :failed 0 :fallback 0))
   (setq hive-mcp-swarm-notify--last-notification nil)
-  (-log 'info "Notification module initialized")
+  (hive-mcp-swarm-notify---log 'info "Notification module initialized")
   (unless (executable-find "notify-send")
-    (-log 'warn "notify-send not found - install libnotify-bin for best results")))
+    (hive-mcp-swarm-notify---log 'warn "notify-send not found - install libnotify-bin for best results")))
 
 (defun hive-mcp-swarm-notify-shutdown ()
   "Shutdown notification module."
-  (-log 'info "Notification module shutdown. Stats: sent=%d failed=%d fallback=%d" (plist-get hive-mcp-swarm-notify--stats :sent) (plist-get hive-mcp-swarm-notify--stats :failed) (plist-get hive-mcp-swarm-notify--stats :fallback)))
+  (hive-mcp-swarm-notify---log 'info "Notification module shutdown. Stats: sent=%d failed=%d fallback=%d" (plist-get hive-mcp-swarm-notify--stats :sent) (plist-get hive-mcp-swarm-notify--stats :failed) (plist-get hive-mcp-swarm-notify--stats :fallback)))
 
 (provide 'hive-mcp-swarm-notify)
 ;;; hive-mcp-swarm-notify.el ends here

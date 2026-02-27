@@ -448,7 +448,7 @@ If FILE is an .org file, opens the corresponding .html file."
   "Detect presentation format from current buffer."
   (save-excursion
     (goto-char (point-min))
-    (cond
+    (elisp-cond
      ((re-search-forward "^#\\+LATEX_CLASS:.*beamer" nil t) 'beamer)
      ((re-search-forward "^#\\+REVEAL_ROOT:" nil t) 'revealjs)
      (t nil))))

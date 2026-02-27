@@ -65,21 +65,26 @@
   :group 'hive-mcp-channel
   :type 'number)
 
-(defvar hive-mcp-channel--process nil)
+(defvar hive-mcp-channel--process nil
+  "Network process for channel connection.")
 
-(defvar hive-mcp-channel--buffer nil)
+(defvar hive-mcp-channel--buffer nil
+  "Buffer for accumulating incoming data.")
 
 (defvar hive-mcp-channel--handlers (make-hash-table :test 'eq)
   "Event handlers indexed by event type (keyword).")
 
-(defvar hive-mcp-channel--reconnect-timer nil)
+(defvar hive-mcp-channel--reconnect-timer nil
+  "Timer for reconnection attempts.")
 
 (defvar hive-mcp-channel--reconnect-count 0
   "Current reconnection attempt count.")
 
-(defvar hive-mcp-channel--message-queue nil)
+(defvar hive-mcp-channel--message-queue nil
+  "Queue of messages pending send (when disconnected).")
 
-(defvar hive-mcp-channel--degraded-mode nil)
+(defvar hive-mcp-channel--degraded-mode nil
+  "Non-nil when in graceful degradation mode (server unavailable).\nIn this mode, messages are queued silently without reconnect attempts.\nReset by calling `hive-mcp-channel-connect' manually.")
 
 (defun hive-mcp-channel--bencode-available-p ()
   "Check if CIDER's bencode encode AND decode are available."
@@ -104,9 +109,12 @@
 (defun hive-mcp-channel--bencode-fallback (obj)
   "Encode OBJ to bencode string (fallback)."
   (cond
-  (((stringp obj) (format "%d:%s" (length obj) obj)) ((integerp obj) (format "i%de" obj)))
-  (((listp obj) (if (and (consp (car obj)) (not (listp (cdar obj)))) (clel-concat "d" (mapconcat (lambda (pair)
-    (clel-concat (hive-mcp-channel--bencode-fallback (if (symbolp (car pair)) (symbol-name (car pair)) (car pair))) (hive-mcp-channel--bencode-fallback (cdr pair)))) obj "") "e") (clel-concat "l" (mapconcat #'hive-mcp-channel--bencode-fallback obj "") "e"))) ((vectorp obj) (clel-concat "l" (mapconcat #'hive-mcp-channel--bencode-fallback (append obj nil) "") "e")))))
+  ((stringp obj) (format "%d:%s" (length obj) obj))
+  ((integerp obj) (format "i%de" obj))
+  ((listp obj) (if (and (consp (car obj)) (not (listp (cdar obj)))) (clel-concat "d" (mapconcat (lambda (pair)
+    (clel-concat (hive-mcp-channel--bencode-fallback (if (symbolp (car pair)) (symbol-name (car pair)) (car pair))) (hive-mcp-channel--bencode-fallback (cdr pair)))) obj "") "e") (clel-concat "l" (mapconcat #'hive-mcp-channel--bencode-fallback obj "") "e")))
+  ((vectorp obj) (clel-concat "l" (mapconcat #'hive-mcp-channel--bencode-fallback (append obj nil) "") "e"))
+  (t (error "Cannot bencode: %S" obj))))
 
 (defun hive-mcp-channel--bdecode-fallback (str)
   "Decode bencode STR (fallback).\nReturns (decoded-value . consumed-bytes)."
@@ -155,13 +163,19 @@
 (defun hive-mcp-channel--sentinel (_proc event)
   "Sentinel for channel handling EVENT.\n_PROC is the process (unused, required by Emacs process API)."
   (cond
-  (((string-match-p "deleted\\|connection broken\\|exited\\|failed" event) (setq hive-mcp-channel--process nil) (cond
-  ((hive-mcp-channel--degraded-mode nil) ((and (> hive-mcp-channel-max-reconnects 0) (>= hive-mcp-channel--reconnect-count hive-mcp-channel-max-reconnects)) (setq hive-mcp-channel--degraded-mode t) (message "hive-mcp-channel: Entering graceful degradation mode (server unavailable). Messages queued. Call M-x hive-mcp-channel-connect to retry."))))) ((string-match-p "open" event) (message "hive-mcp-channel: Connected") (setq hive-mcp-channel--reconnect-count 0 hive-mcp-channel--degraded-mode nil) (while hive-mcp-channel--message-queue
+  ((string-match-p "deleted\\|connection broken\\|exited\\|failed" event) (progn
+  (setq hive-mcp-channel--process nil)
+  (cond
+  ((hive-mcp-channel--degraded-mode nil) ((and (> hive-mcp-channel-max-reconnects 0) (>= hive-mcp-channel--reconnect-count hive-mcp-channel-max-reconnects)) (setq hive-mcp-channel--degraded-mode t) (message "hive-mcp-channel: Entering graceful degradation mode (server unavailable). Messages queued. Call M-x hive-mcp-channel-connect to retry."))))))
+  ((string-match-p "open" event) (progn
+  (message "hive-mcp-channel: Connected")
+  (setq hive-mcp-channel--reconnect-count 0 hive-mcp-channel--degraded-mode nil)
+  (while hive-mcp-channel--message-queue
     (hive-mcp-channel-send (clel-pop hive-mcp-channel--message-queue)))))))
 
 (defun hive-mcp-channel--dispatch (msg)
   "Dispatch MSG to registered handlers."
-  (let* ((type-str (or (cdr (clel-assoc "type" msg)) (cdr (clel-assoc 'type msg))))
+  (let* ((type-str (or (cdr (assoc "type" msg)) (cdr (assoc 'type msg))))
         (type (when type-str
     (intern (clel-concat ":" type-str)))))
     (when type
@@ -225,8 +239,8 @@
 
 (defun hive-mcp-channel--calculate-backoff ()
   "Calculate reconnect interval with exponential backoff.\nReturns base * 2^(attempt-1), capped at max-reconnect-interval."
-  (let* ((interval (* hive-mcp-channel-reconnect-interval (expt 2 (cl-max 0 (1- hive-mcp-channel--reconnect-count))))))
-    (cl-min interval hive-mcp-channel-max-reconnect-interval)))
+  (let* ((interval (* hive-mcp-channel-reconnect-interval (expt 2 (max 0 (1- hive-mcp-channel--reconnect-count))))))
+    (min interval hive-mcp-channel-max-reconnect-interval)))
 
 (defun hive-mcp-channel--schedule-reconnect ()
   "Schedule a reconnection attempt with exponential backoff."

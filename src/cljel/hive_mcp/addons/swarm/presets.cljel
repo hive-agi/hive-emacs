@@ -211,7 +211,7 @@ Returns hash-table of name -> file-path."
   "Check if Chroma preset lookup is available.
 Caches result to avoid repeated MCP calls."
   (when hive-mcp-swarm-presets-use-chroma
-    (cond
+    (elisp-cond
      ((eq hive-mcp-swarm-presets--chroma-available t) t)
      ((eq hive-mcp-swarm-presets--chroma-available 'error) nil)
      (t

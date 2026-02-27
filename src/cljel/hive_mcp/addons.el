@@ -51,7 +51,8 @@
 (defvar hive-mcp-addon--registry (make-hash-table :test 'eq)
   "Hash table of registered addons.\nKeys are addon symbols, values are plists with :loaded, :version, :description,\n:init, :async-init, :shutdown, and runtime state.")
 
-(defvar hive-mcp-addon--hooks nil)
+(defvar hive-mcp-addon--hooks nil
+  "Alist of (FEATURE . ADDON) for deferred loading.")
 
 (defvar hive-mcp-addon--processes (make-hash-table :test 'eq)
   "Hash table tracking async processes started by addons.\nKeys are addon symbols, values are process objects.")
@@ -142,13 +143,19 @@
   "Load ADDON if available and not already loaded.\nAfter loading, runs :init (sync) then :async-init (non-blocking).\nReturns t if loaded successfully, nil otherwise."
   (interactive (list (intern (completing-read "Load addon: " (hive-mcp-addon-list-available) nil t))))
   (cond
-  (((hive-mcp-addons-addon-loaded-p addon) (message "Addon %s already loaded" addon) t) ((hive-mcp-addons--find-file addon) (let* ((file (hive-mcp-addons--find-file addon)))
+  ((hive-mcp-addons-addon-loaded-p addon) (progn
+  (message "Addon %s already loaded" addon)
+  t))
+  ((hive-mcp-addons--find-file addon) (let* ((file (hive-mcp-addons--find-file addon)))
     (load file nil t)
     (puthash addon (plist-put (gethash addon hive-mcp-addon--registry) :loaded t) hive-mcp-addon--registry)
     (hive-mcp-addons--run-init addon)
     (hive-mcp-addons--run-async-init addon)
     (message "Loaded hive-mcp addon: %s" addon)
-    t)))))
+    t))
+  (t (progn
+  (message "Addon %s not found" addon)
+  nil))))
 
 (defun hive-mcp-addons-addon-unload (addon)
   "Unload ADDON, running shutdown hooks and cleaning up resources."
@@ -242,6 +249,8 @@
     (insert (format "  %s\n" dir)))
     (goto-char (point-min)))
     (display-buffer buf)))
+
+(provide 'hive-mcp-addons)
 
 (provide 'hive-mcp-addons)
 ;;; hive-mcp-addons.el ends here

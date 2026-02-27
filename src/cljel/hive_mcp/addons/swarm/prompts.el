@@ -52,12 +52,14 @@
   :group 'hive-mcp-swarm-prompts
   :type 'string)
 
-(defvar hive-mcp-swarm-prompts--timer nil)
+(defvar hive-mcp-swarm-prompts--timer nil
+  "Timer for auto-approve watcher.")
 
 (defvar hive-mcp-swarm-prompts--last-positions (make-hash-table :test 'equal)
   "Hash of slave-id -> last checked position to avoid re-approving.")
 
-(defvar hive-mcp-swarm-prompts--pending nil)
+(defvar hive-mcp-swarm-prompts--pending nil
+  "List of pending prompts awaiting human decision.\nEach entry is plist: (:slave-id ID :prompt TEXT :buffer BUF :timestamp TIME)")
 
 (defun hive-mcp-swarm-prompts---check-for-prompt (buffer)
   "Check BUFFER for permission prompts and return position if found."
@@ -65,7 +67,7 @@
     (with-current-buffer buffer
     (save-excursion
     (goto-char (point-max))
-    (let* ((search-start (cl-max (point-min) (- (point-max) 500))))
+    (let* ((search-start (max (point-min) (- (point-max) 500))))
     (goto-char search-start)
     (cl-loop for pattern in hive-mcp-swarm-prompts-patterns when (re-search-forward pattern nil t) return (point)))))))
 
@@ -75,11 +77,11 @@
     (with-current-buffer buffer
     (save-excursion
     (goto-char (point-max))
-    (let* ((search-start (cl-max (point-min) (- (point-max) 500))))
+    (let* ((search-start (max (point-min) (- (point-max) 500))))
     (when (re-search-backward (regexp-opt hive-mcp-swarm-prompts-patterns) search-start t)
     (let* ((line-start (line-beginning-position))
         (line-end (line-end-position)))
-    (list :text (buffer-substring-no-properties line-start line-end) :pos (match-beginning 0)))))))))
+    (hive-mcp-swarm-prompts-list :text (buffer-substring-no-properties line-start line-end) :pos (match-beginning 0)))))))))
 
 (defun hive-mcp-swarm-prompts---slave-active-p (slave buffer)
   "Return t if SLAVE with BUFFER is ready for prompts."
@@ -119,19 +121,19 @@
   (let* ((buffer (plist-get slave :buffer))
         (term-type (funcall get-terminal-fn slave))
         (last-pos (gethash slave-id hive-mcp-swarm-prompts--last-positions 0)))
-    (when (-slave-active-p slave buffer)
-    (let* ((prompt-pos (-check-for-prompt buffer)))
-    (when (-prompt-is-new-p prompt-pos last-pos)
+    (when (hive-mcp-swarm-prompts---slave-active-p slave buffer)
+    (let* ((prompt-pos (hive-mcp-swarm-prompts---check-for-prompt buffer)))
+    (when (hive-mcp-swarm-prompts---prompt-is-new-p prompt-pos last-pos)
     (message "[swarm-prompts] Auto-approving prompt in %s" slave-id)
     (puthash slave-id prompt-pos hive-mcp-swarm-prompts--last-positions)
-    (-send-approval buffer term-type)
+    (hive-mcp-swarm-prompts---send-approval buffer term-type)
     t)))))
 
 (defun hive-mcp-swarm-prompts---auto-tick (slaves-hash get-terminal-fn)
   "Check all slave buffers for prompts in auto mode.\nSLAVES-HASH is hash table of slave-id -> slave plist.\nGET-TERMINAL-FN takes slave plist and returns terminal type symbol."
   (when hive-mcp-swarm-prompts-auto-approve
     (maphash (lambda (slave-id slave)
-    (-process-auto-approve slave-id slave get-terminal-fn)) slaves-hash)))
+    (hive-mcp-swarm-prompts---process-auto-approve slave-id slave get-terminal-fn)) slaves-hash)))
 
 (defun hive-mcp-swarm-prompts---send-desktop-notification (title body)
   "Send desktop notification with TITLE and BODY via notify-send.\nFalls back to beep + message if notify-send unavailable."
@@ -148,11 +150,11 @@
 
 (defun hive-mcp-swarm-prompts---queue-prompt (slave-id prompt-text buffer)
   "Add a prompt to the pending queue and notify user.\nEmits prompt-shown event via channel for push-based updates."
-  (push (list :slave-id slave-id :prompt prompt-text :buffer buffer :timestamp (current-time)) hive-mcp-swarm-prompts--pending)
-  (-display-prompt slave-id prompt-text)
+  (push (hive-mcp-swarm-prompts-list :slave-id slave-id :prompt prompt-text :buffer buffer :timestamp (current-time)) hive-mcp-swarm-prompts--pending)
+  (hive-mcp-swarm-prompts---display-prompt slave-id prompt-text)
   (when hive-mcp-swarm-prompts-notify
     (message "[swarm-prompts] Prompt from %s: %s" slave-id (truncate-string-to-width prompt-text 50)))
-  (-send-desktop-notification (format "Swarm Prompt: %s" slave-id) (truncate-string-to-width prompt-text 100))
+  (hive-mcp-swarm-prompts---send-desktop-notification (format "Swarm Prompt: %s" slave-id) (truncate-string-to-width prompt-text 100))
   (when (fboundp 'hive-mcp-swarm-events-emit-prompt-shown)
     (hive-mcp-swarm-events-emit-prompt-shown slave-id prompt-text)))
 
@@ -160,17 +162,17 @@
   "Process human-mode prompt detection for SLAVE with SLAVE-ID.\nQueues prompt for human decision if new and not already queued.\nReturns t if a prompt was queued, nil otherwise."
   (let* ((buffer (plist-get slave :buffer))
         (last-pos (gethash slave-id hive-mcp-swarm-prompts--last-positions 0)))
-    (when (-slave-active-p slave buffer)
-    (let* ((prompt-info (-extract-prompt buffer)))
-    (when (and prompt-info (-prompt-is-new-p (plist-get prompt-info :pos) last-pos) (not (-already-queued-p slave-id)))
+    (when (hive-mcp-swarm-prompts---slave-active-p slave buffer)
+    (let* ((prompt-info (hive-mcp-swarm-prompts---extract-prompt buffer)))
+    (when (and prompt-info (hive-mcp-swarm-prompts---prompt-is-new-p (plist-get prompt-info :pos) last-pos) (not (hive-mcp-swarm-prompts---already-queued-p slave-id)))
     (puthash slave-id (plist-get prompt-info :pos) hive-mcp-swarm-prompts--last-positions)
-    (-queue-prompt slave-id (plist-get prompt-info :text) buffer)
+    (hive-mcp-swarm-prompts---queue-prompt slave-id (plist-get prompt-info :text) buffer)
     t)))))
 
 (defun hive-mcp-swarm-prompts---human-tick (slaves-hash)
   "Check all slave buffers for prompts in human mode.\nSLAVES-HASH is hash table of slave-id -> slave plist."
   (maphash (lambda (slave-id slave)
-    (-process-human-mode slave-id slave)) slaves-hash))
+    (hive-mcp-swarm-prompts---process-human-mode slave-id slave)) slaves-hash))
 
 (defun hive-mcp-swarm-prompts---send-response (buffer response)
   "Send RESPONSE to slave BUFFER."
@@ -203,7 +205,7 @@
         (text (plist-get prompt :prompt))
         (response (clel-read-string (format "[%s] %s -> " slave-id text))))
     (clel-pop hive-mcp-swarm-prompts--pending)
-    (-send-response (plist-get prompt :buffer) response)
+    (hive-mcp-swarm-prompts---send-response (plist-get prompt :buffer) response)
     (hive-mcp-swarm-prompts-update-buffer)
     (message "[swarm-prompts] Sent response to %s" slave-id)) (message "[swarm-prompts] No pending prompts")))
 
@@ -211,7 +213,7 @@
   "Approve (send 'y') to the next pending prompt."
   (interactive)
   (if-let-star (list prompt (clel-pop hive-mcp-swarm-prompts--pending)) (progn
-  (-send-response (plist-get prompt :buffer) "y")
+  (hive-mcp-swarm-prompts---send-response (plist-get prompt :buffer) "y")
   (hive-mcp-swarm-prompts-update-buffer)
   (message "[swarm-prompts] Approved: %s" (plist-get prompt :slave-id))) (message "[swarm-prompts] No pending prompts")))
 
@@ -219,7 +221,7 @@
   "Deny (send 'n') to the next pending prompt."
   (interactive)
   (if-let-star (list prompt (clel-pop hive-mcp-swarm-prompts--pending)) (progn
-  (-send-response (plist-get prompt :buffer) "n")
+  (hive-mcp-swarm-prompts---send-response (plist-get prompt :buffer) "n")
   (hive-mcp-swarm-prompts-update-buffer)
   (message "[swarm-prompts] Denied: %s" (plist-get prompt :slave-id))) (message "[swarm-prompts] No pending prompts")))
 
@@ -243,7 +245,7 @@
   (if-let-star (list prompt (hive-mcp-swarm-prompts-find-pending slave-id)) (let* ((buffer (plist-get prompt :buffer)))
     (setq hive-mcp-swarm-prompts--pending (cl-remove slave-id hive-mcp-swarm-prompts--pending :key (lambda (p)
     (plist-get p :slave-id)) :test #'equal))
-    (-send-response buffer response)
+    (hive-mcp-swarm-prompts---send-response buffer response)
     (hive-mcp-swarm-prompts-update-buffer)
     t) nil))
 
@@ -258,8 +260,8 @@
     (condition-case err
     (pcase hive-mcp-swarm-prompts-mode
   ((quote bypass) nil)
-  ((quote auto) (-auto-tick slaves-hash get-terminal-fn))
-  ((quote human) (-human-tick slaves-hash)))
+  ((quote auto) (hive-mcp-swarm-prompts---auto-tick slaves-hash get-terminal-fn))
+  ((quote human) (hive-mcp-swarm-prompts---human-tick slaves-hash)))
   (error (message "[swarm-prompts] Watcher tick error: %s" (error-message-string err)))))))
   (message "[swarm-prompts] Watcher started (mode: %s)" hive-mcp-swarm-prompts-mode))
 

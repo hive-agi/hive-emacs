@@ -149,7 +149,7 @@ MSG should be an alist like ((\"type\" . \"event\"))."
 
 (defn- bencode-fallback [obj]
   "Encode OBJ to bencode string (fallback)."
-  (cond
+  (elisp-cond
    ((stringp obj)
     (format "%d:%s" (length obj) obj))
    ((integerp obj)
@@ -255,7 +255,7 @@ Returns t if a message was decoded, nil otherwise."
 (defn- sentinel [_proc event]
   "Sentinel for channel handling EVENT.
 _PROC is the process (unused, required by Emacs process API)."
-  (cond
+  (elisp-cond
    ((string-match-p "deleted\\|connection broken\\|exited\\|failed" event)
     ;; Atomic state update: clear process immediately
     (setq hive-mcp-channel--process nil)

@@ -683,7 +683,7 @@ Returns result when ready or signals error on timeout."
     (while (and (not hive-mcp-cider--async-done)
                 (< (- (float-time) start-time) timeout))
       (accept-process-output nil interval))
-    (cond
+    (elisp-cond
      ((not hive-mcp-cider--async-done)
       (error "Eval timed out after %d seconds (heartbeat polling)" timeout))
      (hive-mcp-cider--async-error

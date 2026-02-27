@@ -51,35 +51,36 @@
 
 (declare-function hive-mcp-swarm-events-emit-slave-killed "hive-mcp-swarm-events")
 
-(defvar hive-mcp-swarm--slaves nil)
+(defvar hive-mcp-swarm--slaves)
 
-(defvar hive-mcp-swarm--task-counter nil)
+(defvar hive-mcp-swarm--task-counter)
 
-(defvar hive-mcp-swarm--session-id nil)
+(defvar hive-mcp-swarm--session-id)
 
-(defvar hive-mcp-swarm--current-depth nil)
+(defvar hive-mcp-swarm--current-depth)
 
-(defvar hive-mcp-swarm--ancestry nil)
+(defvar hive-mcp-swarm--ancestry)
 
-(defvar hive-mcp-swarm-max-slaves nil)
+(defvar hive-mcp-swarm-max-slaves)
 
-(defvar hive-mcp-swarm-max-depth nil)
+(defvar hive-mcp-swarm-max-depth)
 
-(defvar hive-mcp-swarm-rate-limit-window nil)
+(defvar hive-mcp-swarm-rate-limit-window)
 
-(defvar hive-mcp-swarm-rate-limit-max-spawns nil)
+(defvar hive-mcp-swarm-rate-limit-max-spawns)
 
-(defvar hive-mcp-swarm-terminal nil)
+(defvar hive-mcp-swarm-terminal)
 
-(defvar hive-mcp-swarm-buffer-prefix nil)
+(defvar hive-mcp-swarm-buffer-prefix)
 
-(defvar hive-mcp-swarm-claude-command nil)
+(defvar hive-mcp-swarm-claude-command)
 
-(defvar hive-mcp-swarm-prompt-mode nil)
+(defvar hive-mcp-swarm-prompt-mode)
 
 (declare-function hive-mcp-swarm-list-presets "hive-mcp-swarm")
 
-(defvar hive-mcp-swarm-slaves--spawn-timestamps nil)
+(defvar hive-mcp-swarm-slaves--spawn-timestamps nil
+  "List of recent spawn timestamps for rate limiting.")
 
 (defun hive-mcp-swarm-slaves-generate-id (name)
   "Generate unique slave ID for NAME."
@@ -108,7 +109,7 @@
     (when (and my-id master-id)
     (push (cons my-id master-id) hive-mcp-swarm--ancestry))
     (when (>= depth hive-mcp-swarm-max-depth)
-    (error "Recursion limit reached: %s (depth %d) cannot spawn children.\nMaximum depth is %d (master -> child -> grandchild -> great-grandchild).\nThis limit prevents runaway recursive spawning." (-depth-label depth) depth hive-mcp-swarm-max-depth))
+    (error "Recursion limit reached: %s (depth %d) cannot spawn children.\nMaximum depth is %d (master -> child -> grandchild -> great-grandchild).\nThis limit prevents runaway recursive spawning." (hive-mcp-swarm-slaves---depth-label depth) depth hive-mcp-swarm-max-depth))
     depth))
 
 (defun hive-mcp-swarm-slaves-check-rate-limit ()
@@ -145,12 +146,12 @@
     (setq model (plist-get tier :model)))))
   (setq presets (hive-mcp-swarm-presets-merge-defaults (or presets '())))
   (let* ((slave-id (hive-mcp-swarm-slaves-generate-id symbol-name))
-        (work-dir (or cwd (-project-root) default-directory))
+        (work-dir (or cwd (hive-mcp-swarm-slaves---project-root) default-directory))
         (term-backend (or backend terminal hive-mcp-swarm-terminal))
         (parent-id (or (getenv "CLAUDE_SWARM_SLAVE_ID") "master"))
         (spawn-depth (1+ hive-mcp-swarm--current-depth)))
     (puthash slave-id (list :slave-id slave-id :name symbol-name :role role :presets presets :status 'spawning :buffer nil :terminal term-backend :backend term-backend :model model :cwd work-dir :depth spawn-depth :parent-id parent-id :kanban-task-id kanban-task-id :context-injected (not (null injected-context)) :current-task nil :task-queue '() :tasks-completed 0 :tasks-failed 0 :spawned-at (format-time-string "%FT%T%z") :last-activity (format-time-string "%FT%T%z")) hive-mcp-swarm--slaves)
-    (message "[swarm] Spawning %s (%s) at depth %d, parent: %s (async)" slave-id (-depth-label spawn-depth) spawn-depth parent-id)
+    (message "[swarm] Spawning %s (%s) at depth %d, parent: %s (async)" slave-id (hive-mcp-swarm-slaves---depth-label spawn-depth) spawn-depth parent-id)
     (hive-mcp-swarm-events-emit-slave-spawned slave-id symbol-name presets work-dir kanban-task-id)
     (let* ((ctx injected-context))
     (run-with-timer 0 nil (lambda (_unused)
@@ -248,7 +249,7 @@
   (when (buffer-live-p buffer)
     (let* ((buf-name (buffer-name buffer))
         (buf-name-lower (downcase buf-name))
-        (slave-name (-extract-name-from-id slave-id)))
+        (slave-name (hive-mcp-swarm-slaves---extract-name-from-id slave-id)))
     (cond
   (((not (string-prefix-p hive-mcp-swarm-buffer-prefix buf-name)) (message "[swarm-kill] BLOCKED: Buffer '%s' lacks swarm prefix for slave %s" buf-name slave-id) nil) ((string-match-p "coordinator" buf-name-lower) (message "[swarm-kill] BLOCKED: Buffer '%s' contains 'coordinator' - refusing to kill" buf-name) nil))
   (((or (string-match-p "\\*claude-code" buf-name-lower) (string-match-p "\\*claude code" buf-name-lower) (string-match-p "master" buf-name-lower)) (message "[swarm-kill] BLOCKED: Buffer '%s' matches coordinator pattern - refusing to kill" buf-name) nil) ((and slave-name (not (string-match-p (regexp-quote slave-name) buf-name))) (message "[swarm-kill] BLOCKED: Buffer '%s' doesn't match slave name '%s' from ID %s" buf-name slave-name slave-id) (message "[swarm-kill] This indicates registry corruption - buffer/slave-id mismatch!") nil))))))
@@ -260,7 +261,7 @@
         (slave-name (plist-get slave :name)))
     (cond
   (((null buffer) (message "[swarm-kill] Warning: slave %s has no buffer (spawn incomplete?)" slave-id) (hive-mcp-swarm-events-emit-slave-killed slave-id) (remhash slave-id hive-mcp-swarm--slaves) (hive-mcp-swarm-prompts-clear-slave slave-id) t) ((not (buffer-live-p buffer)) (message "[swarm-kill] Info: slave %s buffer already dead, cleaning registry" slave-id) (hive-mcp-swarm-events-emit-slave-killed slave-id) (remhash slave-id hive-mcp-swarm--slaves) (hive-mcp-swarm-prompts-clear-slave slave-id) t))
-  (((not (-valid-kill-target-p buffer slave-id)) (message "[swarm-kill] BLOCKED: Buffer '%s' failed safety validation for slave %s" (buffer-name buffer) slave-id) (message "[swarm-kill] This prevents accidentally killing coordinator!") (remhash slave-id hive-mcp-swarm--slaves) nil) (t (with-current-buffer buffer
+  (((not (hive-mcp-swarm-slaves---valid-kill-target-p buffer slave-id)) (message "[swarm-kill] BLOCKED: Buffer '%s' failed safety validation for slave %s" (buffer-name buffer) slave-id) (message "[swarm-kill] This prevents accidentally killing coordinator!") (remhash slave-id hive-mcp-swarm--slaves) nil) (t (with-current-buffer buffer
     (set-buffer-modified-p nil)
     (when-let-star (list proc (get-buffer-process buffer)) (set-process-query-on-exit-flag proc nil))
     (when (and (boundp 'vterm--process) vterm--process (process-live-p vterm--process))

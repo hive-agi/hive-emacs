@@ -43,9 +43,11 @@
   :group 'hive-mcp-hooks
   :type 'boolean)
 
-(defvar hive-mcp-hooks--initialized nil)
+(defvar hive-mcp-hooks--initialized nil
+  "Non-nil when hooks module has been initialized.")
 
-(defvar hive-mcp-hooks--handler-alist nil)
+(defvar hive-mcp-hooks--handler-alist nil
+  "Alist of (HOOK-TYPE . HANDLER-FUNCTION) for custom handlers.\nUsers can add custom handlers via `hive-mcp-hooks-register'.")
 
 (defun hive-mcp-hooks---log (format-string &rest args)
   "Log FORMAT-STRING with ARGS if logging is enabled."
@@ -54,82 +56,82 @@
 
 (defun hive-mcp-hooks-process (event)
   "Process a hook EVENT from the channel.\nEVENT is an alist with at least a \"type\" key.\nDispatches to appropriate handler based on event type."
-  (let* ((type-str (or (cdr (clel-assoc "type" event)) (cdr (clel-assoc 'type event))))
-        (data (or (cdr (clel-assoc "data" event)) (cdr (clel-assoc 'data event)) event)))
-    (-log "Processing event: %s" type-str)
+  (let* ((type-str (or (cdr (assoc "type" event)) (cdr (assoc 'type event))))
+        (data (or (cdr (assoc "data" event)) (cdr (assoc 'data event)) event)))
+    (hive-mcp-hooks---log "Processing event: %s" type-str)
     (condition-case err
     (pcase type-str
-  ("hook/commit" (-handle-commit data))
-  ("hook/wrap" (-handle-wrap data))
-  ("hook/notify" (-handle-notify data))
-  ('_ (when-let-star (list handler (cdr (clel-assoc type-str hive-mcp-hooks--handler-alist))) (funcall handler data))))
+  ("hook/commit" (hive-mcp-hooks---handle-commit data))
+  ("hook/wrap" (hive-mcp-hooks---handle-wrap data))
+  ("hook/notify" (hive-mcp-hooks---handle-notify data))
+  ('_ (when-let-star (list handler (cdr (assoc type-str hive-mcp-hooks--handler-alist))) (funcall handler data))))
   (error (message "[hive-mcp-hooks] Error processing %s: %s" type-str (error-message-string err))))))
 
 (defun hive-mcp-hooks---handle-commit (data)
   "Handle a hook/commit event with DATA.\nDATA may contain:\n  - action: 'stage', 'commit', 'amend'\n  - message: commit message (for commit/amend)\n  - files: list of files to stage (optional)\n  - directory: working directory"
-  (let* ((action (or (cdr (clel-assoc "action" data)) (cdr (clel-assoc 'action data)) "status"))
-        (commit-msg (or (cdr (clel-assoc "message" data)) (cdr (clel-assoc 'message data))))
-        (files (or (cdr (clel-assoc "files" data)) (cdr (clel-assoc 'files data))))
-        (directory (or (cdr (clel-assoc "directory" data)) (cdr (clel-assoc 'directory data)) default-directory)))
-    (-log "Commit hook: action=%s dir=%s" action directory)
+  (let* ((action (or (cdr (assoc "action" data)) (cdr (assoc 'action data)) "status"))
+        (commit-msg (or (cdr (assoc "message" data)) (cdr (assoc 'message data))))
+        (files (or (cdr (assoc "files" data)) (cdr (assoc 'files data))))
+        (directory (or (cdr (assoc "directory" data)) (cdr (assoc 'directory data)) default-directory)))
+    (hive-mcp-hooks---log "Commit hook: action=%s dir=%s" action directory)
     (let* ((default-directory directory))
     (pcase action
   ("stage" (if files (dolist (file files)
-    (-git-stage file)) (when hive-mcp-hooks-commit-auto-stage
-    (-git-stage-all))))
+    (hive-mcp-hooks---git-stage file)) (when hive-mcp-hooks-commit-auto-stage
+    (hive-mcp-hooks---git-stage-all))))
   ("commit" (when commit-msg
-    (-git-commit commit-msg)))
-  ("amend" (-git-amend commit-msg))
-  ("status" (-show-git-status directory))
-  ('_ (-log "Unknown commit action: %s" action))))))
+    (hive-mcp-hooks---git-commit commit-msg)))
+  ("amend" (hive-mcp-hooks---git-amend commit-msg))
+  ("status" (hive-mcp-hooks---show-git-status directory))
+  ('_ (hive-mcp-hooks---log "Unknown commit action: %s" action))))))
 
 (defun hive-mcp-hooks---handle-wrap (data)
   "Handle a hook/wrap event with DATA.\nDATA may contain:\n  - action: 'gather', 'crystallize', 'complete'\n  - session-id: current session identifier\n  - save-buffers: whether to save modified buffers"
-  (let* ((action (or (cdr (clel-assoc "action" data)) (cdr (clel-assoc 'action data)) "gather"))
-        (session-id (or (cdr (clel-assoc "session-id" data)) (cdr (clel-assoc 'session-id data))))
-        (save-buffers (or (cdr (clel-assoc "save-buffers" data)) (cdr (clel-assoc 'save-buffers data)) hive-mcp-hooks-wrap-auto-save)))
-    (-log "Wrap hook: action=%s session=%s" action session-id)
+  (let* ((action (or (cdr (assoc "action" data)) (cdr (assoc 'action data)) "gather"))
+        (session-id (or (cdr (assoc "session-id" data)) (cdr (assoc 'session-id data))))
+        (save-buffers (or (cdr (assoc "save-buffers" data)) (cdr (assoc 'save-buffers data)) hive-mcp-hooks-wrap-auto-save)))
+    (hive-mcp-hooks---log "Wrap hook: action=%s session=%s" action session-id)
     (pcase action
   ("gather" (when save-buffers
-    (save-some-buffers t)) (-notify "Wrap: Gathering session data..."))
-  ("crystallize" (-notify "Wrap: Crystallizing session..."))
+    (save-some-buffers t)) (hive-mcp-hooks---notify "Wrap: Gathering session data..."))
+  ("crystallize" (hive-mcp-hooks---notify "Wrap: Crystallizing session..."))
   ("complete" (when save-buffers
-    (save-some-buffers t)) (-notify "Wrap: Session complete for %s" (or session-id "current session")))
-  ('_ (-log "Unknown wrap action: %s" action)))))
+    (save-some-buffers t)) (hive-mcp-hooks---notify "Wrap: Session complete for %s" (or session-id "current session")))
+  ('_ (hive-mcp-hooks---log "Unknown wrap action: %s" action)))))
 
 (defun hive-mcp-hooks---handle-notify (data)
   "Handle a hook/notify event with DATA.\nDATA may contain:\n  - message: notification message (required)\n  - level: 'info', 'warning', 'error' (default: info)\n  - title: notification title (optional)"
-  (let* ((msg (or (cdr (clel-assoc "message" data)) (cdr (clel-assoc 'message data)) "Notification"))
-        (level (or (cdr (clel-assoc "level" data)) (cdr (clel-assoc 'level data)) "info"))
-        (title (or (cdr (clel-assoc "title" data)) (cdr (clel-assoc 'title data)))))
-    (-log "Notify: [%s] %s" level msg)
+  (let* ((msg (or (cdr (assoc "message" data)) (cdr (assoc 'message data)) "Notification"))
+        (level (or (cdr (assoc "level" data)) (cdr (assoc 'level data)) "info"))
+        (title (or (cdr (assoc "title" data)) (cdr (assoc 'title data)))))
+    (hive-mcp-hooks---log "Notify: [%s] %s" level msg)
     (pcase level
-  ("error" (-notify-error msg title))
-  ("warning" (-notify-warning msg title))
-  ('_ (-notify msg)))))
+  ("error" (hive-mcp-hooks---notify-error msg title))
+  ("warning" (hive-mcp-hooks---notify-warning msg title))
+  ('_ (hive-mcp-hooks---notify msg)))))
 
 (defun hive-mcp-hooks---git-stage (file)
   "Stage FILE for commit."
   (let* ((output (shell-command-to-string (format "git add %s 2>&1" (shell-quote-argument file)))))
     (unless (string-empty-p output)
-    (-log "git add %s: %s" file output))))
+    (hive-mcp-hooks---log "git add %s: %s" file output))))
 
 (defun hive-mcp-hooks---git-stage-all ()
   "Stage all modified files."
   (let* ((output (shell-command-to-string "git add -A 2>&1")))
-    (-log "git add -A: %s" (if (string-empty-p output) "done" output))))
+    (hive-mcp-hooks---log "git add -A: %s" (if (string-empty-p output) "done" output))))
 
 (defun hive-mcp-hooks---git-commit (message)
   "Create a commit with MESSAGE."
   (let* ((output (shell-command-to-string (format "git commit -m %s 2>&1" (shell-quote-argument message)))))
-    (-log "git commit: %s" output)
-    (-notify "Committed: %s" (truncate-string-to-width message 50))))
+    (hive-mcp-hooks---log "git commit: %s" output)
+    (hive-mcp-hooks---notify "Committed: %s" (truncate-string-to-width message 50))))
 
 (defun hive-mcp-hooks---git-amend (&optional message)
   "Amend the last commit, optionally with new MESSAGE."
   (let* ((cmd (if message (format "git commit --amend -m %s 2>&1" (shell-quote-argument message)) "git commit --amend --no-edit 2>&1"))
         (output (shell-command-to-string cmd)))
-    (-log "git commit --amend: %s" output)))
+    (hive-mcp-hooks---log "git commit --amend: %s" output)))
 
 (defun hive-mcp-hooks---show-git-status (directory)
   "Show git status for DIRECTORY.\nUses Magit if available, otherwise falls back to shell."
@@ -150,23 +152,23 @@
 
 (defun hive-mcp-hooks---channel-handler (event)
   "Channel message handler that dispatches hook events.\nEVENT is the decoded channel message."
-  (let* ((type-str (or (cdr (clel-assoc "type" event)) (cdr (clel-assoc 'type event)))))
+  (let* ((type-str (or (cdr (assoc "type" event)) (cdr (assoc 'type event)))))
     (when (and type-str (string-prefix-p "hook/" type-str))
-    (process event))))
+    (hive-mcp-hooks-process event))))
 
 (defun hive-mcp-hooks---register-with-channel ()
   "Register hook handlers with the bidirectional channel."
   (when (require 'hive-mcp-channel nil t)
     (dolist (type '(:hook/commit :hook/wrap :hook/notify))
     (hive-mcp-channel-on type #'hive-mcp-hooks-process))
-    (-log "Registered with channel")))
+    (hive-mcp-hooks---log "Registered with channel")))
 
 (defun hive-mcp-hooks---unregister-from-channel ()
   "Unregister hook handlers from the channel."
   (when (require 'hive-mcp-channel nil t)
     (dolist (type '(:hook/commit :hook/wrap :hook/notify))
     (hive-mcp-channel-off type #'hive-mcp-hooks-process))
-    (-log "Unregistered from channel")))
+    (hive-mcp-hooks---log "Unregistered from channel")))
 
 (defun hive-mcp-hooks-register (hook-type handler)
   "Register HANDLER for custom HOOK-TYPE.\nHOOK-TYPE should be a string like \"hook/my-custom\".\nHANDLER receives the event data as an alist."
@@ -180,17 +182,17 @@
   "Initialize the hooks module.\nRegisters handlers with the channel if connected."
   (interactive)
   (unless hive-mcp-hooks--initialized
-    (-register-with-channel)
+    (hive-mcp-hooks---register-with-channel)
     (setq hive-mcp-hooks--initialized t)
-    (-log "Initialized")))
+    (hive-mcp-hooks---log "Initialized")))
 
 (defun hive-mcp-hooks-shutdown ()
   "Shutdown the hooks module."
   (interactive)
   (when hive-mcp-hooks--initialized
-    (-unregister-from-channel)
+    (hive-mcp-hooks---unregister-from-channel)
     (setq hive-mcp-hooks--initialized nil)
-    (-log "Shutdown")))
+    (hive-mcp-hooks---log "Shutdown")))
 
 (defun hive-mcp-hooks-emit-hook-event (hook-type data)
   "Emit a hook event of HOOK-TYPE with DATA through swarm-events.\nThis allows Emacs-side code to trigger hooks that can be processed\nby both Emacs and Clojure sides."
@@ -200,19 +202,19 @@
 
 (defun hive-mcp-hooks-trigger-wrap (action &optional session-id)
   "Trigger a wrap hook with ACTION and optional SESSION-ID.\nACTION should be 'gather', 'crystallize', or 'complete'."
-  (emit-hook-event "hook/wrap" (clel-seq (clel-concat (clojure-core-list (clel-seq (clel-concat (clojure-core-list "action") (clojure-core-list '.) (clojure-core-list 'user/action)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list "session-id") (clojure-core-list '.) (clojure-core-list 'user/session-id)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list "timestamp") (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/truncate) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/float-time))))))))))))))
+  (hive-mcp-hooks-emit-hook-event "hook/wrap" (clel-seq (clel-concat (clojure-core-list (clel-seq (clel-concat (clojure-core-list "action") (clojure-core-list '.) (clojure-core-list 'user/action)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list "session-id") (clojure-core-list '.) (clojure-core-list 'user/session-id)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list "timestamp") (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/truncate) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/float-time))))))))))))))
 
 (defun hive-mcp-hooks-trigger-notify (message &optional level title)
   "Trigger a notification hook with MESSAGE, LEVEL, and TITLE."
-  (emit-hook-event "hook/notify" (clel-seq (clel-concat (clojure-core-list (clel-seq (clel-concat (clojure-core-list "message") (clojure-core-list '.) (clojure-core-list 'user/message)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list "level") (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/or) (clojure-core-list 'user/level) (clojure-core-list "info"))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list "title") (clojure-core-list '.) (clojure-core-list 'user/title))))))))
+  (hive-mcp-hooks-emit-hook-event "hook/notify" (clel-seq (clel-concat (clojure-core-list (clel-seq (clel-concat (clojure-core-list "message") (clojure-core-list '.) (clojure-core-list 'user/message)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list "level") (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/or) (clojure-core-list 'user/level) (clojure-core-list "info"))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list "title") (clojure-core-list '.) (clojure-core-list 'user/title))))))))
 
 (defun hive-mcp-hooks---addon-init ()
   "Addon init function - called when addon loads."
-  (init))
+  (hive-mcp-hooks-init))
 
 (defun hive-mcp-hooks---addon-shutdown ()
   "Addon shutdown function - called when addon unloads."
-  (shutdown))
+  (hive-mcp-hooks-shutdown))
 
 (with-eval-after-load 'hive-mcp-addons
   (declare-function hive-mcp-addon-register "hive-mcp-addons")

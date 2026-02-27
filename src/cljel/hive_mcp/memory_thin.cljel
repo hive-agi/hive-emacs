@@ -110,7 +110,7 @@ Returns a hash-table for maps, vectors for vectors, etc."
 (defn- -edn-get [edn key]
   "Get KEY from EDN hash-table or alist.
 KEY should be a keyword symbol like :project-id."
-  (cond
+  (elisp-cond
     ((hash-table-p edn) (gethash key edn))
     ((listp edn) (cdr (assoc key edn)))
     (t nil)))
@@ -176,7 +176,7 @@ Resolution order:
 Returns \"global\" if not in a project.
 PROJECT-ROOT must be a string path or nil."
   ;; CLARITY-I: Validate input type (fix for stringp bug from MCP)
-  (let [root (cond
+  (let [root (elisp-cond
                ((stringp project-root) project-root)
                ((null project-root) (hive-mcp-memory---get-project-root))
                (t (progn
@@ -192,7 +192,7 @@ PROJECT-ROOT must be a string path or nil."
 Use this for migration when you need the path-based hash.
 PROJECT-ROOT must be a string path or nil."
   ;; CLARITY-I: Validate input type (fix for stringp bug from MCP)
-  (let [root (cond
+  (let [root (elisp-cond
                ((stringp project-root) project-root)
                ((null project-root) (hive-mcp-memory---get-project-root))
                (t (progn
@@ -226,7 +226,7 @@ NAME is required for domain and project levels."
 (defn- -parse-scope-tag [tag]
   "Parse a scope TAG into (level . name) cons.
 Returns nil if TAG is not a scope tag."
-  (cond
+  (elisp-cond
     ((string= tag "scope:global") '(global . nil))
     ((string-prefix-p "scope:domain:" tag)
      (cons 'domain (substring tag (length "scope:domain:"))))
@@ -268,7 +268,7 @@ Always includes scope:global."
 Returns ISO 8601 timestamp or nil for permanent entries.
 Used for client-side display; actual TTL managed by Chroma."
   (let [days (alist-get duration hive-mcp-memory-duration-days)]
-    (cond
+    (elisp-cond
       ((null days) nil)  ; permanent - never expires
       ((= days 0) (format-time-string "%FT%T%z"))  ; ephemeral
       (t (format-time-string "%FT%T%z"
@@ -306,7 +306,7 @@ This is provided for backwards compatibility."
 (defn- -normalize-content [content]
   "Normalize CONTENT for consistent hashing.
 Trims whitespace, collapses multiple spaces/newlines."
-  (let [text (cond
+  (let [text (elisp-cond
                ((stringp content) content)
                ((plistp content) (format "%S" content))
                (t (format "%S" content)))]

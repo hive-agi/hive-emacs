@@ -1,0 +1,61 @@
+(ns claude-code-ide-debug
+  "Debug logging for Claude Code IDE."
+  (:require [json]
+            [project]))
+
+;;; Customization
+
+(defcustom claude-code-ide-debug nil
+  "When non-nil, enable debug logging for Claude Code IDE."
+  :type 'boolean
+  :group 'claude-code-ide)
+
+(defcustom claude-code-ide-log-with-context t
+  "When non-nil, include session context in log messages."
+  :type 'boolean
+  :group 'claude-code-ide)
+
+(defcustom claude-code-ide-debug-buffer "*claude-code-ide-debug*"
+  "Buffer name for debug output."
+  :type 'string
+  :group 'claude-code-ide)
+
+;;; Debug Functions
+
+(defn- -get-session-context []
+  "Get current session context for logging."
+  (if claude-code-ide-log-with-context
+      (format "[%s]" (or (ignore-errors
+                           (file-name-nondirectory
+                            (directory-file-name
+                             (project-root (project-current)))))
+                         "no-project"))
+    ""))
+
+(defmacro claude-code-ide-debug [format-string &rest args]
+  "Log debug message with FORMAT-STRING and ARGS if debug is enabled.
+This is a macro to avoid evaluating ARGS when debugging is disabled."
+  `(when claude-code-ide-debug
+     (let [message (format ~format-string ~@args)
+           timestamp (format-time-string "%Y-%m-%d %H:%M:%S")
+           context (claude-code-ide-debug--get-session-context)]
+       (with-current-buffer (get-buffer-create claude-code-ide-debug-buffer)
+         (goto-char (point-max))
+         (insert (format "%s %s%s\n" timestamp context message))))))
+
+(defn log [format-string &rest args]
+  "Log message with FORMAT-STRING and ARGS."
+  (let [message (apply #'format format-string args)]
+    (message "%s %s" (claude-code-ide-debug--get-session-context) message)))
+
+(defn show-debug []
+  "Show the debug buffer."
+  (interactive)
+  (display-buffer (get-buffer-create claude-code-ide-debug-buffer)))
+
+(defn clear-debug []
+  "Clear the debug buffer."
+  (interactive)
+  (with-current-buffer (get-buffer-create claude-code-ide-debug-buffer)
+    (erase-buffer)
+    (message "Debug buffer cleared")))

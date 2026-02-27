@@ -20,7 +20,8 @@
   :group 'hive-mcp-template
   :type 'boolean)
 
-(defvar hive-mcp-template--initialized nil)
+(defvar hive-mcp-template--initialized nil
+  "Whether the addon has been initialized.")
 
 (defun hive-mcp-template---ensure-api ()
   "Ensure hive-mcp-api is available."
@@ -30,19 +31,19 @@
 
 (defun hive-mcp-template-get-context ()
   "Get MCP context formatted for target-package."
-  (when (-ensure-api)
+  (when (hive-mcp-template---ensure-api)
     (hive-mcp-api-get-context)))
 
 (defun hive-mcp-template-save-to-memory (content type &optional tags)
   "Save CONTENT to hive-mcp memory as TYPE with optional TAGS."
   (interactive (list (if (use-region-p) (buffer-substring-no-properties (region-beginning) (region-end)) (clel-read-string "Content: ")) (completing-read "Type: " '("note" "snippet" "decision") nil t) (split-string (clel-read-string "Tags (comma-separated): ") "," t " ")))
-  (when (-ensure-api)
+  (when (hive-mcp-template---ensure-api)
     (hive-mcp-api-memory-add type content tags)
     (message "Saved to memory as %s" type)))
 
 (defun hive-mcp-template-query-memory (type &optional limit)
   "Query hive-mcp memory for entries of TYPE, return up to LIMIT entries."
-  (when (-ensure-api)
+  (when (hive-mcp-template---ensure-api)
     (hive-mcp-api-memory-query type nil (or limit 10))))
 
 (define-minor-mode hive-mcp-template-mode

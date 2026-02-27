@@ -196,7 +196,7 @@ Checks in order:
              (condition-case err
                  (progn
                    (setq attempts (1+ attempts))
-                   (cond
+                   (elisp-cond
                     ((-health-check)
                      (cancel-timer timer)
                      (setq hive-mcp-chroma--status 'running)
@@ -480,7 +480,7 @@ TYPE filters by memory type (note, snippet, convention, decision)."
 
           ;; Set provider based on availability
           (setq hive-mcp-chroma-embedding-provider
-                (cond
+                (elisp-cond
                  ((and ollama model) 'ollama)
                  (t 'mock)))
 
@@ -505,7 +505,7 @@ TYPE filters by memory type (note, snippet, convention, decision)."
             (-configure-mcp))
 
           ;; Inform user about status
-          (cond
+          (elisp-cond
            ((eq hive-mcp-chroma--status 'running)
             (message "hive-mcp-chroma: Semantic search enabled (Chroma + %s)"
                      hive-mcp-chroma-embedding-provider))

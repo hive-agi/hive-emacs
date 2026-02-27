@@ -31,7 +31,8 @@
 (defvar hive-mcp-hivemind--agents (make-hash-table :test 'equal)
   "Hash table of agent-id -> status info.")
 
-(defvar hive-mcp-hivemind--pending-asks nil)
+(defvar hive-mcp-hivemind--pending-asks nil
+  "List of pending ask events awaiting response.")
 
 (defun hive-mcp-hivemind--log (event-type agent-id message)
   "Log EVENT-TYPE from AGENT-ID with MESSAGE to the hivemind log buffer."
@@ -46,12 +47,12 @@
 
 (defun hive-mcp-hivemind--handle-shout (event)
   "Handle a hivemind shout EVENT from an agent."
-  (let* ((agent-id (or (alist-get 'agent-id event) (cdr (clel-assoc "agent-id" event))))
-        (data (or (alist-get 'data event) (cdr (clel-assoc "data" event))))
-        (event-type (or (alist-get 'type event) (cdr (clel-assoc "type" event))))
-        (timestamp (or (alist-get 'timestamp event) (cdr (clel-assoc "timestamp" event))))
-        (task (or (alist-get 'task data) (cdr (clel-assoc "task" data))))
-        (message (or (alist-get 'message data) (cdr (clel-assoc "message" data)))))
+  (let* ((agent-id (or (alist-get 'agent-id event) (cdr (assoc "agent-id" event))))
+        (data (or (alist-get 'data event) (cdr (assoc "data" event))))
+        (event-type (or (alist-get 'type event) (cdr (assoc "type" event))))
+        (timestamp (or (alist-get 'timestamp event) (cdr (assoc "timestamp" event))))
+        (task (or (alist-get 'task data) (cdr (assoc "task" data))))
+        (message (or (alist-get 'message data) (cdr (assoc "message" data)))))
     (puthash agent-id (list :status event-type :task task :message message :last-seen (or timestamp (float-time))) hive-mcp-hivemind--agents)
     (hive-mcp-hivemind--log event-type agent-id (or message task))
     (when (member (intern event-type) hive-mcp-hivemind-notify-events)
@@ -61,10 +62,10 @@
 
 (defun hive-mcp-hivemind--handle-ask (event)
   "Handle a hivemind ask EVENT requiring human response."
-  (let* ((ask-id (or (alist-get 'ask-id event) (cdr (clel-assoc "ask-id" event))))
-        (agent-id (or (alist-get 'agent-id event) (cdr (clel-assoc "agent-id" event))))
-        (question (or (alist-get 'question event) (cdr (clel-assoc "question" event))))
-        (options (or (alist-get 'options event) (cdr (clel-assoc "options" event)))))
+  (let* ((ask-id (or (alist-get 'ask-id event) (cdr (assoc "ask-id" event))))
+        (agent-id (or (alist-get 'agent-id event) (cdr (assoc "agent-id" event))))
+        (question (or (alist-get 'question event) (cdr (assoc "question" event))))
+        (options (or (alist-get 'options event) (cdr (assoc "options" event)))))
     (push (list :ask-id ask-id :agent-id agent-id :question question :options options :timestamp (float-time)) hive-mcp-hivemind--pending-asks)
     (hive-mcp-hivemind--log "ASK" agent-id question)
     (hive-mcp-hivemind--notify agent-id "NEEDS INPUT" question)

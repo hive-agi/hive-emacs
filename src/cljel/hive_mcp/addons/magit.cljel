@@ -369,7 +369,7 @@ DIRECTORY overrides `default-directory' if provided."
 DIRECTORY overrides `default-directory' if provided."
   (let [default-directory (or directory default-directory)]
     (-ensure-repo)
-    (cond
+    (elisp-cond
       ((eq files 'all) (-stage-all))
       ((stringp files) (-stage-file files))
       ((listp files) (dolist (f files) (-stage-file f))))))

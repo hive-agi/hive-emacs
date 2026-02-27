@@ -35,9 +35,9 @@
 
 (declare-function hive-mcp-api-call "hive-mcp-api")
 
-(defvar ellama-provider nil)
+(defvar ellama-provider)
 
-(defvar ellama-chat-done-callback nil)
+(defvar ellama-chat-done-callback)
 
 (defgroup hive-mcp-ellama nil
   "Integration between hive-mcp and ellama/Ollama."
@@ -89,9 +89,11 @@
   :group 'hive-mcp-ellama
   :type 'integer)
 
-(defvar hive-mcp-ellama--initialized nil)
+(defvar hive-mcp-ellama--initialized nil
+  "Whether the addon has been initialized.")
 
-(defvar hive-mcp-ellama--last-prompt nil)
+(defvar hive-mcp-ellama--last-prompt nil
+  "The last prompt sent, for response context.")
 
 (defvar hive-mcp-ellama--workers (make-hash-table :test 'equal)
   "Hash table of active Ollama swarm workers.\nKey: worker-id, Value: plist with :model :buffer :status :task")
@@ -110,18 +112,18 @@
 
 (defun hive-mcp-ellama-make-provider (&optional model)
   "Create an Ollama provider for MODEL.\nMODEL defaults to `hive-mcp-ellama-default-model'.\nIncludes num_ctx for larger context windows."
-  (when (-ensure-llm-ollama)
+  (when (hive-mcp-ellama--ensure-llm-ollama)
     (make-llm-ollama :chat-model (or model hive-mcp-ellama-default-model) :host hive-mcp-ellama-ollama-host :port hive-mcp-ellama-ollama-port :embedding-model "nomic-embed-text" :default-chat-non-standard-params '(("num_ctx" . 32768)))))
 
 (defun hive-mcp-ellama--build-context-prompt (prompt)
   "Build a prompt with context injected.\nPROMPT is the original user prompt."
-  (if (and hive-mcp-ellama-inject-context (-ensure-bridge)) (let* ((context (hive-mcp-ai-build-context (when hive-mcp-ellama-include-semantic
+  (if (and hive-mcp-ellama-inject-context (hive-mcp-ellama--ensure-bridge)) (let* ((context (hive-mcp-ai-build-context (when hive-mcp-ellama-include-semantic
     prompt))))
     (if context (clel-concat (hive-mcp-ai-format-context-for 'ellama context) hive-mcp-ellama-context-prefix prompt) prompt)) prompt))
 
 (defun hive-mcp-ellama--handle-response (response)
   "Handle ellama RESPONSE after completion."
-  (when (-ensure-bridge)
+  (when (hive-mcp-ellama--ensure-bridge)
     (when hive-mcp-ellama-log-interactions
     (hive-mcp-ai-log-interaction "ellama" "response" (list :prompt-length (length (or hive-mcp-ellama--last-prompt "")) :response-length (length response) :model hive-mcp-ellama-default-model)))
     (when hive-mcp-ellama-store-responses
@@ -131,11 +133,11 @@
 (defun hive-mcp-ellama-dispatch (prompt &optional model callback)
   "Send PROMPT to Ollama via llm-chat-async.\nMODEL overrides `hive-mcp-ellama-default-model'.\nCALLBACK is called with the response when complete.\nUses llm-chat-async directly for reliable model selection."
   (interactive "sPrompt: ")
-  (when (-ensure-llm-ollama)
+  (when (hive-mcp-ellama--ensure-llm-ollama)
     (setq hive-mcp-ellama--last-prompt prompt)
-    (let* ((provider (make-provider model)))
+    (let* ((provider (hive-mcp-ellama-make-provider model)))
     (llm-chat-async provider (llm-make-chat-prompt prompt) (lambda (response)
-    (-handle-response response)
+    (hive-mcp-ellama--handle-response response)
     (when callback
     (funcall callback response))) (lambda (err)
     (message "[hive-mcp-ellama] Error: %s" err))))))
@@ -143,8 +145,8 @@
 (defun hive-mcp-ellama-dispatch-with-context (prompt &optional model callback)
   "Send PROMPT to Ollama with memory context injected.\nMODEL overrides `hive-mcp-ellama-default-model'.\nCALLBACK is called with the response when complete."
   (interactive "sPrompt: ")
-  (let* ((augmented-prompt (-build-context-prompt prompt)))
-    (dispatch augmented-prompt model callback)))
+  (let* ((augmented-prompt (hive-mcp-ellama--build-context-prompt prompt)))
+    (hive-mcp-ellama-dispatch augmented-prompt model callback)))
 
 (defun hive-mcp-ellama-select-model ()
   "Interactively select an Ollama model."
@@ -172,7 +174,7 @@
     (error "Worker not found: %s" worker-id))
     (plist-put worker :status 'working)
     (plist-put worker :task task-id)
-    (dispatch-with-context prompt model (lambda (response)
+    (hive-mcp-ellama-dispatch-with-context prompt model (lambda (response)
     (plist-put worker :status 'idle)
     (plist-put worker :result response)
     (plist-put worker :task nil)
@@ -217,28 +219,28 @@
   "Start ellama chat with memory context injection."
   (interactive)
   (let* ((prompt (clel-read-string "Chat with context: ")))
-    (dispatch-with-context prompt)))
+    (hive-mcp-ellama-dispatch-with-context prompt)))
 
 (defun hive-mcp-ellama-query-memory (query)
   "Query memory with QUERY and insert results at point."
   (interactive "sQuery memory: ")
-  (when (-ensure-bridge)
+  (when (hive-mcp-ellama--ensure-bridge)
     (let* ((results (hive-mcp-ai-build-context query)))
     (if results (insert results) (message "No relevant memory found")))))
 
 (defun hive-mcp-ellama-store-region (beg end)
   "Store region between BEG and END as memory snippet."
   (interactive "r")
-  (when (-ensure-bridge)
+  (when (hive-mcp-ellama--ensure-bridge)
     (let* ((content (buffer-substring-no-properties beg end)))
     (hive-mcp-ai-store-response content "ellama-manual" '("user-selected"))
     (message "Stored selection to memory"))))
 
 (defun hive-mcp-ellama--setup ()
   "Set up ellama integration."
-  (when (-ensure-ellama)
+  (when (hive-mcp-ellama--ensure-ellama)
     (unless (bound-and-true-p ellama-provider)
-    (setq ellama-provider (make-provider)))
+    (setq ellama-provider (hive-mcp-ellama-make-provider)))
     (advice-add 'ellama-chat :around #'-chat-advice)))
 
 (defun hive-mcp-ellama--teardown ()
@@ -248,7 +250,7 @@
 (defun hive-mcp-ellama--chat-advice (orig-fun prompt &rest args)
   "Advice for ellama-chat to inject context.\nORIG-FUN is the original function, PROMPT is the user prompt, ARGS are extra args."
   (setq hive-mcp-ellama--last-prompt prompt)
-  (let* ((augmented (if hive-mcp-ellama-inject-context (-build-context-prompt prompt) prompt)))
+  (let* ((augmented (if hive-mcp-ellama-inject-context (hive-mcp-ellama--build-context-prompt prompt) prompt)))
     (apply orig-fun augmented args)))
 
 (define-minor-mode hive-mcp-ellama-mode
@@ -258,14 +260,16 @@
   :global t
   :group 'hive-mcp-ellama
   (if hive-mcp-ellama-mode (progn
-  (-setup)
+  (hive-mcp-ellama--setup)
   (setq hive-mcp-ellama--initialized t)
-  (message "hive-mcp-ellama: enabled")) (-teardown)))
+  (message "hive-mcp-ellama: enabled")) (hive-mcp-ellama--teardown)))
 
 (with-eval-after-load 'transient
-  (transient-define-prefix hive-mcp-ellama-menu (nil) "MCP integration menu for ellama/Ollama." (list "hive-mcp + ellama" (list "Chat" ("c" "Chat with context" hive-mcp-ellama-chat-with-context) ("q" "Query memory" hive-mcp-ellama-query-memory) ("m" "Select model" hive-mcp-ellama-select-model)) (list "Store" ("s" "Store region" hive-mcp-ellama-store-region)) (list "Swarm" ("S" "Swarm status" (lambda (_unused)
+  (transient-define-prefix hive-mcp-ellama-menu ()
+  "MCP integration menu for ellama/Ollama."
+  ["hive-mcp + ellama" ["Chat" ("c" "Chat with context" hive-mcp-ellama-chat-with-context) ("q" "Query memory" hive-mcp-ellama-query-memory) ("m" "Select model" hive-mcp-ellama-select-model)] ["Store" ("s" "Store region" hive-mcp-ellama-store-region)] ["Swarm" ("S" "Swarm status" (lambda (_unused)
     (interactive)
-    (message "%s" (swarm-status)))) ("K" "Kill all workers" hive-mcp-ellama-swarm-kill-all)) (list "Toggle" ("t" "Toggle mode" hive-mcp-ellama-mode)))))
+    (message "%s" (hive-mcp-ellama-swarm-status)))) ("K" "Kill all workers" hive-mcp-ellama-swarm-kill-all)] ["Toggle" ("t" "Toggle mode" hive-mcp-ellama-mode)]]))
 
 (defun hive-mcp-ellama--addon-init ()
   "Initialize ellama addon."
@@ -276,7 +280,7 @@
   "Shutdown ellama addon."
   (when hive-mcp-ellama-mode
     (hive-mcp-ellama-mode -1))
-  (swarm-kill-all)
+  (hive-mcp-ellama-swarm-kill-all)
   (message "hive-mcp-ellama: shutdown complete"))
 
 (with-eval-after-load 'hive-mcp-addons

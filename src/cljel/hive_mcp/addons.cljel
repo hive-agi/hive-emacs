@@ -225,7 +225,7 @@ Returns t if loaded successfully, nil otherwise."
     (list (intern (completing-read "Load addon: "
                                    (hive-mcp-addon-list-available)
                                    nil t))))
-  (cond
+  (elisp-cond
     ((hive-mcp-addons-addon-loaded-p addon)
      (message "Addon %s already loaded" addon)
      t)

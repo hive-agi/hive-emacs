@@ -11,14 +11,15 @@
 
 
 
-(defvar org-id-locations nil)
+(defvar org-id-locations)
 
 (defcustom org-file (expand-file-name ".hive-mcp-kanban.org" user-emacs-directory)
   "Path to standalone kanban org file."
   :group 'hive-mcp-kanban
   :type 'file)
 
-(defvar hive-mcp-kanban-standalone--buffer nil)
+(defvar hive-mcp-kanban-standalone--buffer nil
+  "Buffer visiting the standalone kanban org file.")
 
 (defun hive-mcp-kanban-standalone---init-org-file (file)
   "Initialize a new kanban org FILE."
@@ -39,7 +40,7 @@
         (parent-id (save-excursion
     (when (org-up-heading-safe)
     (org-id-get))))
-        (task-status (cdr (clel-assoc "TODO" props)))
+        (task-status (cdr (assoc "TODO" props)))
         (mapped-status (hive-mcp-kanban-protocol--org-to-vibe-status task-status)))
     (when (and (or (null project-id) (equal parent-id project-id)) (or (null status) (equal mapped-status status)))
     (push (backquote ((id - (org-id-get-create)) (title - (org-get-heading t t t t)) (status - mapped-status) (description - (org-entry-get nil "DESCRIPTION")) (agent - (org-entry-get nil "AGENT")) (session - (org-entry-get nil "SESSION")))) tasks)))) "LEVEL=2")
@@ -50,7 +51,7 @@
     (with-current-buffer (marker-buffer marker)
     (goto-char marker)
     (let* ((props (org-entry-properties)))
-    (backquote ((id - task-id) (title - (org-get-heading t t t t)) (status - (hive-mcp-kanban-protocol--org-to-vibe-status (cdr (clel-assoc "TODO" props)))) (description - (org-entry-get nil "DESCRIPTION")) (agent - (org-entry-get nil "AGENT")) (session - (org-entry-get nil "SESSION")) (created - (org-entry-get nil "CREATED")) (updated - (org-entry-get nil "UPDATED"))))))))))
+    (backquote ((id - task-id) (title - (org-get-heading t t t t)) (status - (hive-mcp-kanban-protocol--org-to-vibe-status (cdr (assoc "TODO" props)))) (description - (org-entry-get nil "DESCRIPTION")) (agent - (org-entry-get nil "AGENT")) (session - (org-entry-get nil "SESSION")) (created - (org-entry-get nil "CREATED")) (updated - (org-entry-get nil "UPDATED"))))))))))
 
 (cl-defmethod hive-mcp-kanban-protocol--create-task (list (_backend (eql standalone)) project-id title &optional description) "Create task with TITLE in PROJECT-ID, optionally with DESCRIPTION.\nIf PROJECT-ID is nil, uses the first project (Default Project)." (hive-mcp-kanban-standalone--with-org-file (let* ((marker (if project-id (org-id-find project-id 'marker) (save-excursion
     (goto-char (point-min))
@@ -152,7 +153,7 @@
         (id (org-id-get))
         (task (backquote ((id - id) (title - title) (status - todo-state)))))
     (when todo-state
-    (let* ((cell (clel-assoc todo-state tasks-by-status)))
+    (let* ((cell (assoc todo-state tasks-by-status)))
     (when cell
     (setcdr cell (append (cdr cell) (list task)))))))) t)))
     tasks-by-status))

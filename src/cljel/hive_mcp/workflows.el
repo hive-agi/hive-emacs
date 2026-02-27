@@ -25,9 +25,11 @@
 (defvar hive-mcp-workflow-step-handlers (make-hash-table :test 'eq)
   "Handlers for custom workflow step types.\nEach entry is TYPE -> function taking (step env) and returning env.")
 
-(defvar hive-mcp-workflow-before-hook nil)
+(defvar hive-mcp-workflow-before-hook nil
+  "Hook run before workflow execution.  Args: WORKFLOW-NAME ARGS.")
 
-(defvar hive-mcp-workflow-after-hook nil)
+(defvar hive-mcp-workflow-after-hook nil
+  "Hook run after workflow execution.  Args: WORKFLOW-NAME RESULT.")
 
 (defun hive-mcp-workflows-workflow-register (name spec)
   "Register workflow NAME with SPEC.\nThread-safe: overwrites existing entry atomically."

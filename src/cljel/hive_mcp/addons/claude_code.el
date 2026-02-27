@@ -50,7 +50,8 @@
   :group 'hive-mcp-claude-code
   :type 'boolean)
 
-(defvar hive-mcp-claude-code--available nil)
+(defvar hive-mcp-claude-code--available nil
+  "Cached check for whether hive-mcp-api is available.")
 
 (defun hive-mcp-claude-code---available-p ()
   "Check if hive-mcp-api is available."
@@ -179,7 +180,9 @@
     (json-mode)))
     (display-buffer buf)))
 
-(transient-define-prefix hive-mcp-claude-code-transient (nil) "MCP integration menu for Claude Code." (list "hive-mcp Integration" (list "Context & Memory" ("c" "Show context" hive-mcp-claude-code-get-context) ("s" "Send with context" hive-mcp-claude-code-send-with-context) ("m" "Save to memory" hive-mcp-claude-code-save-to-memory) ("q" "Query memory" hive-mcp-claude-code-query-memory)) (list "Workflows & Status" ("w" "Run workflow" hive-mcp-claude-code-run-workflow) ("?" "Show capabilities" hive-mcp-claude-code-show-capabilities)) (list "Settings" ("C" "Toggle auto-context" hive-mcp-claude-code-toggle-auto-context) ("L" "Toggle conversation logging" hive-mcp-claude-code-toggle-logging))))
+(transient-define-prefix hive-mcp-claude-code-transient ()
+  "MCP integration menu for Claude Code."
+  ["hive-mcp Integration" ["Context & Memory" ("c" "Show context" hive-mcp-claude-code-get-context) ("s" "Send with context" hive-mcp-claude-code-send-with-context) ("m" "Save to memory" hive-mcp-claude-code-save-to-memory) ("q" "Query memory" hive-mcp-claude-code-query-memory)] ["Workflows & Status" ("w" "Run workflow" hive-mcp-claude-code-run-workflow) ("?" "Show capabilities" hive-mcp-claude-code-show-capabilities)] ["Settings" ("C" "Toggle auto-context" hive-mcp-claude-code-toggle-auto-context) ("L" "Toggle conversation logging" hive-mcp-claude-code-toggle-logging)]])
 
 (defun hive-mcp-claude-code-toggle-auto-context ()
   "Toggle automatic context injection."

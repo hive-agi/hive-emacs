@@ -42,13 +42,15 @@
   :group 'hive-mcp-melpazoid
   :type '(choice (const :tag "Full Docker rebuild" nil) (const :tag "Local Python (no Docker)" local) (const :tag "Cached Docker image" cached)))
 
-(defvar hive-mcp-melpazoid--transient-menu nil)
+(defvar hive-mcp-melpazoid--transient-menu)
 
 (declare-function hive-mcp-melpazoid--transient-menu "hive-mcp-melpazoid")
 
-(defvar hive-mcp-melpazoid--process nil)
+(defvar hive-mcp-melpazoid--process nil
+  "Current melpazoid process.")
 
-(defvar hive-mcp-melpazoid--last-results nil)
+(defvar hive-mcp-melpazoid--last-results nil
+  "Last melpazoid run results.")
 
 (defvar hive-mcp-melpazoid--buffer-name "*MCP Melpazoid*"
   "Buffer name for melpazoid output.")
@@ -76,7 +78,7 @@
   (let* ((base-env (if (string-empty-p recipe-str) (format "LOCAL_REPO=%s" (shell-quote-argument project-dir)) (format "RECIPE='%s' LOCAL_REPO=%s" recipe-str (shell-quote-argument project-dir)))))
     (pcase hive-mcp-melpazoid-fast-mode
   ((quote local) (format "cd %s && %s python3 melpazoid/melpazoid.py" (shell-quote-argument melpazoid-path) base-env))
-  ((quote cached) (if (-docker-image-exists-p) (format "cd %s && %s docker run --rm -v %s:/pkg melpazoid:latest python3 melpazoid/melpazoid.py" (shell-quote-argument melpazoid-path) base-env (shell-quote-argument project-dir)) (format "cd %s && %s make" (shell-quote-argument melpazoid-path) base-env)))
+  ((quote cached) (if (hive-mcp-melpazoid---docker-image-exists-p) (format "cd %s && %s docker run --rm -v %s:/pkg melpazoid:latest python3 melpazoid/melpazoid.py" (shell-quote-argument melpazoid-path) base-env (shell-quote-argument project-dir)) (format "cd %s && %s make" (shell-quote-argument melpazoid-path) base-env)))
   ('_ (format "cd %s && %s make" (shell-quote-argument melpazoid-path) base-env)))))
 
 (defun hive-mcp-melpazoid---find-recipe (project-dir)
@@ -119,15 +121,15 @@
 (defun hive-mcp-melpazoid-run (project-dir &optional recipe)
   "Run melpazoid on PROJECT-DIR with optional RECIPE.\nIf RECIPE is nil, attempts to auto-detect from recipes/ directory."
   (interactive (list (read-directory-name "Project directory: " (or (locate-dominating-file default-directory ".git") default-directory)) nil))
-  (unless (or (eq hive-mcp-melpazoid-fast-mode 'local) (-docker-available-p))
+  (unless (or (eq hive-mcp-melpazoid-fast-mode 'local) (hive-mcp-melpazoid---docker-available-p))
     (error "Docker is not available. Please start Docker first"))
-  (let* ((melpazoid-path (-find-path))
+  (let* ((melpazoid-path (hive-mcp-melpazoid---find-path))
         (project-dir (expand-file-name project-dir))
         (recipe-file (when hive-mcp-melpazoid-auto-detect-recipe
-    (-find-recipe project-dir)))
-        (recipe-str (or recipe (-read-recipe recipe-file) (clel-read-string "MELPA recipe (or empty to skip): ")))
+    (hive-mcp-melpazoid---find-recipe project-dir)))
+        (recipe-str (or recipe (hive-mcp-melpazoid---read-recipe recipe-file) (clel-read-string "MELPA recipe (or empty to skip): ")))
         (buf (get-buffer-create hive-mcp-melpazoid--buffer-name))
-        (cmd (-build-command melpazoid-path project-dir recipe-str))
+        (cmd (hive-mcp-melpazoid---build-command melpazoid-path project-dir recipe-str))
         (mode-label (pcase hive-mcp-melpazoid-fast-mode
   ((quote local) "LOCAL (no Docker)")
   ((quote cached) "CACHED Docker")
@@ -152,14 +154,14 @@
     (when (string-match-p "\\(finished\\|exited\\)" event)
     (with-current-buffer (process-buffer proc)
     (let* ((output (buffer-string))
-        (results (-parse-output output)))
+        (results (hive-mcp-melpazoid---parse-output output)))
     (setq hive-mcp-melpazoid--last-results results)
     (goto-char (point-max))
     (insert "\n" (make-string 60 -p-eq) "\n")
-    (insert (-format-summary results))
+    (insert (hive-mcp-melpazoid---format-summary results))
     (insert "\n" (make-string 60 -p-eq) "\n")
     (when hive-mcp-melpazoid-save-results
-    (hive-mcp-api-memory-add "note" (format "Melpazoid run on %s\n%s\n\nFull output:\n%s" project-dir (-format-summary results) output) '("melpazoid" "melpa" "lint")))
+    (hive-mcp-api-memory-add "note" (format "Melpazoid run on %s\n%s\n\nFull output:\n%s" project-dir (hive-mcp-melpazoid---format-summary results) output) '("melpazoid" "melpa" "lint")))
     (message "Melpazoid %s: %d errors, %d warnings" (if (plist-get results :success) "PASSED" "FAILED") (plist-get results :error-count) (plist-get results :warning-count)))))))
     (message "Melpazoid started... check %s buffer" hive-mcp-melpazoid--buffer-name)))
 
@@ -167,7 +169,7 @@
   "Run melpazoid on the current project."
   (interactive)
   (let* ((root (or (locate-dominating-file default-directory ".git") (locate-dominating-file default-directory "elisp") default-directory)))
-    (run root)))
+    (hive-mcp-melpazoid-run root)))
 
 (defun hive-mcp-melpazoid-stop ()
   "Stop the current melpazoid process."
@@ -216,14 +218,16 @@
   "Run melpazoid in local mode (fastest, no Docker)."
   (interactive)
   (let* ((hive-mcp-melpazoid-fast-mode 'local))
-    (run-current-project)))
+    (hive-mcp-melpazoid-run-current-project)))
 
 (defun hive-mcp-melpazoid-transient ()
   "Melpazoid MELPA testing menu."
   (interactive)
   (if (require 'transient nil t) (progn
   (unless (fboundp 'hive-mcp-melpazoid--transient-menu)
-    (transient-define-prefix hive-mcp-melpazoid--transient-menu (nil) "Melpazoid MELPA testing menu." (list "Melpazoid - MELPA Submission Testing" (list "Run" ("r" "Run on project" hive-mcp-melpazoid-run-current-project) ("f" "Run FAST (local)" hive-mcp-melpazoid-run-fast) ("R" "Run on directory" hive-mcp-melpazoid-run) ("s" "Stop" hive-mcp-melpazoid-stop)) (list "Results" ("v" "View results" hive-mcp-melpazoid-show-results) ("S" "Save to memory" hive-mcp-melpazoid-save-results) ("?" "Status" hive-mcp-melpazoid-status)) (list "Settings" ("m" "Cycle fast-mode" hive-mcp-melpazoid-cycle-fast-mode)))))
+    (transient-define-prefix hive-mcp-melpazoid--transient-menu ()
+  "Melpazoid MELPA testing menu."
+  ["Melpazoid - MELPA Submission Testing" ["Run" ("r" "Run on project" hive-mcp-melpazoid-run-current-project) ("f" "Run FAST (local)" hive-mcp-melpazoid-run-fast) ("R" "Run on directory" hive-mcp-melpazoid-run) ("s" "Stop" hive-mcp-melpazoid-stop)] ["Results" ("v" "View results" hive-mcp-melpazoid-show-results) ("S" "Save to memory" hive-mcp-melpazoid-save-results) ("?" "Status" hive-mcp-melpazoid-status)] ["Settings" ("m" "Cycle fast-mode" hive-mcp-melpazoid-cycle-fast-mode)]]))
   (hive-mcp-melpazoid--transient-menu)) (message "Transient package not available. Use M-x hive-mcp-melpazoid-run-current-project")))
 
 (define-minor-mode hive-mcp-melpazoid-mode
@@ -234,7 +238,7 @@
   :group 'hive-mcp-melpazoid
   (if hive-mcp-melpazoid-mode (progn
   (require 'hive-mcp-api nil t)
-  (message "Emacs-mcp-melpazoid enabled")) (stop)))
+  (message "Emacs-mcp-melpazoid enabled")) (hive-mcp-melpazoid-stop)))
 
 (with-eval-after-load 'hive-mcp-addons
   (hive-mcp-addon-register 'melpazoid :version "0.1.0" :description "Melpazoid Docker-based MELPA testing" :requires '(hive-mcp-api) :provides '(hive-mcp-melpazoid-mode hive-mcp-melpazoid-transient)))

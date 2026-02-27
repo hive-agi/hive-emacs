@@ -21,18 +21,19 @@
 
 (declare-function hive-mcp-swarm-events-emit-dispatch-dropped "hive-mcp-swarm-events")
 
-(defvar hive-mcp-swarm--slaves nil)
+(defvar hive-mcp-swarm--slaves)
 
-(defvar hive-mcp-swarm--tasks nil)
+(defvar hive-mcp-swarm--tasks)
 
-(defvar hive-mcp-swarm-terminal nil)
+(defvar hive-mcp-swarm-terminal)
 
-(defvar hive-mcp-swarm-default-timeout nil)
+(defvar hive-mcp-swarm-default-timeout)
 
 (defvar hive-mcp-swarm-dispatch-queue '()
   "ACID queue for pending dispatches.\nEach element is a plist:\n  (:slave-id ID :prompt TEXT :timeout MS :priority PRI\n   :context CTX :queued-at TIME :retries N)")
 
-(defvar hive-mcp-swarm-dispatch-queue-timer nil)
+(defvar hive-mcp-swarm-dispatch-queue-timer nil
+  "Timer for processing the dispatch queue.")
 
 (defcustom hive-mcp-swarm-dispatch-queue-interval 0.5
   "Interval in seconds between queue processing attempts."
@@ -55,7 +56,7 @@
     (with-current-buffer buffer
     (save-excursion
     (goto-char (or start-point (point-min)))
-    (search-forward (substring text 0 (cl-min 40 (length text))) nil t)))))
+    (search-forward (substring text 0 (min 40 (length text))) nil t)))))
 
 (defun hive-mcp-swarm-tasks---claude-responded-p (buffer text &optional start-point)
   "Check if Claude has responded to TEXT in BUFFER after START-POINT."
@@ -63,7 +64,7 @@
     (with-current-buffer buffer
     (save-excursion
     (goto-char (or start-point (point-min)))
-    (when (search-forward (substring text 0 (cl-min 40 (length text))) nil t)
+    (when (search-forward (substring text 0 (min 40 (length text))) nil t)
     (search-forward "●" nil t))))))
 
 (defun hive-mcp-swarm-tasks---extract-response (buffer prompt)
@@ -72,11 +73,13 @@
     (with-current-buffer buffer
     (save-excursion
     (goto-char (point-min))
-    (let* ((search-key (substring prompt 0 (cl-min 50 (length prompt)))))
+    (let* ((search-key (substring prompt 0 (min 50 (length prompt)))))
     (when (and (search-forward search-key nil t) (search-forward "●" nil t))
     (let* ((response-start (point)))
     (cond
-  (((search-forward "\n> " nil t) (string-trim (buffer-substring-no-properties response-start (- (point) 3)))) ((search-forward "\n────" nil t) (string-trim (buffer-substring-no-properties response-start (- (point) 5)))))))))))))
+  ((search-forward "\n> " nil t) (string-trim (buffer-substring-no-properties response-start (- (point) 3))))
+  ((search-forward "\n────" nil t) (string-trim (buffer-substring-no-properties response-start (- (point) 5))))
+  ((search-forward "\n\n\n" nil t) (string-trim (buffer-substring-no-properties response-start (- (point) 3))))))))))))
 
 (defun hive-mcp-swarm-tasks---slave-matches-filter (slave filter)
   "Check if SLAVE matches FILTER criteria (:role, :status)."
@@ -134,14 +137,14 @@
         (queued-at (plist-get entry :queued-at))
         (slave (gethash slave-id hive-mcp-swarm--slaves)))
     (cond
-  (((-slave-truly-dead-p slave) (message "[swarm-tasks] Queue: %s slave dead, dropping dispatch" slave-id) (-notify-dispatch-dropped slave-id "slave-dead" prompt retries queued-at) :failed) ((>= retries hive-mcp-swarm-dispatch-max-retries) (message "[swarm-tasks] Queue: %s max retries (%d) exceeded, dropping" slave-id retries) (-notify-dispatch-dropped slave-id "max-retries-exceeded" prompt retries queued-at) :failed))
-  (((-slave-ready-p slave-id) (condition-case err
+  (((hive-mcp-swarm-tasks---slave-truly-dead-p slave) (message "[swarm-tasks] Queue: %s slave dead, dropping dispatch" slave-id) (hive-mcp-swarm-tasks---notify-dispatch-dropped slave-id "slave-dead" prompt retries queued-at) :failed) ((>= retries hive-mcp-swarm-dispatch-max-retries) (message "[swarm-tasks] Queue: %s max retries (%d) exceeded, dropping" slave-id retries) (hive-mcp-swarm-tasks---notify-dispatch-dropped slave-id "max-retries-exceeded" prompt retries queued-at) :failed))
+  (((hive-mcp-swarm-tasks---slave-ready-p slave-id) (condition-case err
     (let* ((result (hive-mcp-swarm-tasks-dispatch-immediate slave-id prompt :timeout timeout :priority priority :context context)))
     (if (equal (plist-get result :status) "dispatched") (progn
   (message "[swarm-tasks] Queue: %s dispatched after %d retries (task: %s)" slave-id retries (plist-get result :task-id))
   :success) (message "[swarm-tasks] Queue: %s dispatch failed: %s" slave-id (plist-get result :error))))
   (error (message "[swarm-tasks] Queue: %s dispatch error: %s" slave-id (error-message-string err))
-      (-notify-dispatch-dropped slave-id "dispatch-error" prompt retries queued-at)
+      (hive-mcp-swarm-tasks---notify-dispatch-dropped slave-id "dispatch-error" prompt retries queued-at)
       :failed))) (t (message "[swarm-tasks] Queue: %s not ready (retry %d/%d)" slave-id (1+ retries) hive-mcp-swarm-dispatch-max-retries) :retry)))))
 
 (defun hive-mcp-swarm-tasks-process-queue ()
@@ -152,7 +155,7 @@
         (new-queue '()))
     (setq hive-mcp-swarm-dispatch-queue nil)
     (dolist (entry current-queue)
-    (pcase (-process-queue-entry entry)
+    (pcase (hive-mcp-swarm-tasks---process-queue-entry entry)
   ('retry (plist-put entry :retries (1+ (plist-get entry :retries))) (push entry new-queue))
   ('success nil)
   ('failed nil)))
@@ -232,7 +235,7 @@
         (start-time (float-time))
         (result nil))
     (while (and (< (- (float-time) start-time) timeout) (not result))
-    (setq result (-extract-response buffer (plist-get task :prompt)))
+    (setq result (hive-mcp-swarm-tasks---extract-response buffer (plist-get task :prompt)))
     (unless result
     (sleep-for 0.5)))
     (if result (progn
@@ -251,7 +254,7 @@
   (let* ((results '())
         (target-count 0))
     (maphash (lambda (slave-id slave)
-    (when (or (not slave-filter) (-slave-matches-filter slave slave-filter))
+    (when (or (not slave-filter) (hive-mcp-swarm-tasks---slave-matches-filter slave slave-filter))
     (cl-incf target-count)
     (condition-case err
     (let* ((result (hive-mcp-swarm-tasks-dispatch slave-id prompt)))
@@ -264,7 +267,7 @@
 
 (defun hive-mcp-swarm-tasks-check-completion (task-id)
   "Check if TASK-ID has completed (NON-BLOCKING).\nReturns result string if complete, nil if still running."
-  (when-let-star (list task (gethash task-id hive-mcp-swarm--tasks) slave (gethash (plist-get task :slave-id) hive-mcp-swarm--slaves) buffer (plist-get slave :buffer)) (-extract-response buffer (plist-get task :prompt))))
+  (when-let-star (list task (gethash task-id hive-mcp-swarm--tasks) slave (gethash (plist-get task :slave-id) hive-mcp-swarm--slaves) buffer (plist-get slave :buffer)) (hive-mcp-swarm-tasks---extract-response buffer (plist-get task :prompt))))
 
 (defun hive-mcp-swarm-tasks-init ()
   "Initialize tasks module."

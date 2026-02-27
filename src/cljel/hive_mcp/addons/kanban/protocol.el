@@ -27,7 +27,7 @@
 
 (defun hive-mcp-kanban-protocol--org-to-vibe-status (org-status)
   "Convert ORG-STATUS to vibe-kanban status."
-  (or (cdr (clel-assoc org-status hive-mcp-kanban-protocol-status-map)) "todo"))
+  (or (cdr (assoc org-status hive-mcp-kanban-protocol-status-map)) "todo"))
 
 (defun hive-mcp-kanban-protocol--vibe-to-org-status (vibe-status)
   "Convert VIBE-STATUS to org TODO state."

@@ -9,7 +9,8 @@
 
 (require 'cl-lib)
 
-(defvar hive-mcp-swarm-hooks--registry nil)
+(defvar hive-mcp-swarm-hooks--registry nil
+  "Alist of event-type -> list of handler functions.\nEach handler receives the event data as its argument.\nStructure: ((event-type . (handler1 handler2 ...)) ...)")
 
 (defun hive-mcp-swarm-hooks-register (event-type handler)
   "Register HANDLER function for EVENT-TYPE events.\nHANDLER should be a function that accepts one argument: event data.\nMultiple handlers can be registered for the same event type.\nReturns t on successful registration."
@@ -17,7 +18,7 @@
     (error "Handler must be a function"))
   (let* ((existing (assq event-type hive-mcp-swarm-hooks--registry)))
     (if existing (unless (memq handler (cdr existing))
-    (setcdr existing (cons handler (cdr existing)))) (push (cons event-type (list handler)) hive-mcp-swarm-hooks--registry)))
+    (setcdr existing (cons handler (cdr existing)))) (push (cons event-type (hive-mcp-swarm-hooks-list handler)) hive-mcp-swarm-hooks--registry)))
   t)
 
 (defun hive-mcp-swarm-hooks-unregister (event-type handler)

@@ -66,7 +66,7 @@
 
 (declare-function claude-code-ide-mcp-server-get-session-context "claude-code-ide-mcp-server")
 
-(defvar claude-code-ide-terminal-backend nil)
+(defvar claude-code-ide-terminal-backend)
 
 (defgroup hive-mcp-swarm nil
   "Claude swarm orchestration."
@@ -185,14 +185,17 @@
 (defvar hive-mcp-swarm--task-counter 0
   "Counter for generating unique task IDs.")
 
-(defvar hive-mcp-swarm--session-id nil)
+(defvar hive-mcp-swarm--session-id nil
+  "Current swarm session ID.")
 
 (defvar hive-mcp-swarm--current-depth 0
   "Current recursion depth (set via environment).")
 
-(defvar hive-mcp-swarm--spawn-timestamps nil)
+(defvar hive-mcp-swarm--spawn-timestamps nil
+  "List of recent spawn timestamps for rate limiting.")
 
-(defvar hive-mcp-swarm--ancestry nil)
+(defvar hive-mcp-swarm--ancestry nil
+  "Ancestry chain: list of (slave-id . master-id) for loop detection.")
 
 (defalias 'hive-mcp-swarm--channel-available-p 'hive-mcp-swarm-events-channel-available-p)
 
@@ -355,7 +358,7 @@
   "Collect formatted details from all slaves in SLAVES-HASH.\nReturns list of alists suitable for JSON serialization."
   (let* ((details '()))
     (maphash (lambda (id slave)
-    (push (-format-slave-detail id slave) details)) slaves-hash)
+    (push (hive-mcp-swarm---format-slave-detail id slave) details)) slaves-hash)
     details))
 
 (defun hive-mcp-swarm---format-pending-prompt (prompt)
@@ -382,18 +385,18 @@
 (defun hive-mcp-swarm-status (&optional slave-id)
   "Get swarm status.\nIf SLAVE-ID is provided, get that slave's status.\nOtherwise return aggregate status.\n\nUses terminal buffer introspection as fallback to discover any lings\nthat may have been spawned but not properly registered in the hash table.\n\nCLARITY: Y - Yield safe failure with fallback discovery.\nCLARITY: L - Bottom-up reading via extracted helpers."
   (interactive)
-  (if slave-id (gethash slave-id hive-mcp-swarm--slaves) (let* ((counts (-count-slaves-by-status hive-mcp-swarm--slaves))
+  (if slave-id (gethash slave-id hive-mcp-swarm--slaves) (let* ((counts (hive-mcp-swarm---count-slaves-by-status hive-mcp-swarm--slaves))
         (total (plist-get counts :total))
         (idle (plist-get counts :idle))
         (working (plist-get counts :working))
         (error-count (plist-get counts :error))
-        (orphans (-introspect-terminal-buffers))
+        (orphans (hive-mcp-swarm---introspect-terminal-buffers))
         (orphan-count (length orphans))
-        (slaves-detail (-collect-slave-details hive-mcp-swarm--slaves)))
+        (slaves-detail (hive-mcp-swarm---collect-slave-details hive-mcp-swarm--slaves)))
     (dolist (orphan orphans)
-    (push (-format-orphan-detail orphan) slaves-detail))
+    (push (hive-mcp-swarm---format-orphan-detail orphan) slaves-detail))
     (cl-incf total orphan-count)
-    (let* ((status-result (-build-status-response total idle working error-count orphan-count (vconcat (nreverse slaves-detail)))))
+    (let* ((status-result (hive-mcp-swarm---build-status-response total idle working error-count orphan-count (vconcat (nreverse slaves-detail)))))
     (when (called-interactively-p 'any)
     (message "Swarm: %d slaves (%d idle, %d working%s), %d tasks" total idle working (if (> orphan-count 0) (format ", %d orphan" orphan-count) "") (hash-table-count hive-mcp-swarm--tasks)))
     status-result))))
@@ -404,16 +407,16 @@
 
 (defun hive-mcp-swarm-list-lings ()
   "List all lings (spawned slaves) with their metadata.\nReturns a vector of alists suitable for JSON encoding.\nUsed by Clojure's query-elisp-lings fallback when registry is empty.\n\nUses terminal buffer introspection as fallback to discover any lings\nthat may exist as buffers but weren't registered in the hash table.\n\nEach ling alist contains:\n- slave-id: Unique identifier\n- name: Display name\n- presets: List of applied presets\n- cwd: Working directory\n- status: Current status (idle/working/error/orphan)\n\nCLARITY: Y - Yield safe failure with fallback discovery.\nCLARITY: L - Bottom-up reading via extracted helpers."
-  (let* ((lings (-collect-ling-data hive-mcp-swarm--slaves)))
-    (dolist (orphan (-introspect-terminal-buffers))
-    (push (-format-orphan-ling orphan) lings))
+  (let* ((lings (hive-mcp-swarm---collect-ling-data hive-mcp-swarm--slaves)))
+    (dolist (orphan (hive-mcp-swarm---introspect-terminal-buffers))
+    (push (hive-mcp-swarm---format-orphan-ling orphan) lings))
     (vconcat (nreverse lings))))
 
 (defun hive-mcp-swarm---collect-ling-data (slaves-hash)
   "Collect formatted ling data from all slaves in SLAVES-HASH.\nReturns list of alists suitable for JSON serialization."
   (let* ((lings '()))
     (maphash (lambda (id slave)
-    (push (-format-ling-data id slave) lings)) slaves-hash)
+    (push (hive-mcp-swarm---format-ling-data id slave) lings)) slaves-hash)
     lings))
 
 (defun hive-mcp-swarm-show-slave (slave-id)
@@ -440,7 +443,7 @@
 
 (defun hive-mcp-swarm-api-status ()
   "API: Get swarm status as JSON-serializable plist."
-  (status))
+  (hive-mcp-swarm-status))
 
 (defalias 'hive-mcp-swarm--check-task-completion 'hive-mcp-swarm-tasks-check-completion)
 
@@ -487,7 +490,9 @@
 (require 'transient nil t)
 
 (when (featurep 'transient)
-    (transient-define-prefix hive-mcp-swarm-transient (nil) "Swarm orchestration menu." (list "hive-mcp Swarm" (list "Slaves" ("s" "Spawn slave" hive-mcp-swarm-spawn) ("k" "Kill slave" hive-mcp-swarm-kill) ("K" "Kill all" hive-mcp-swarm-kill-all) ("v" "View slave" hive-mcp-swarm-show-slave)) (list "Tasks" ("d" "Dispatch" hive-mcp-swarm-dispatch) ("c" "Collect" hive-mcp-swarm-collect) ("b" "Broadcast" hive-mcp-swarm-broadcast)) (list "Prompts (human mode)" ("y" "Approve next" hive-mcp-swarm-approve) ("n" "Deny next" hive-mcp-swarm-deny) ("p" "Respond custom" hive-mcp-swarm-respond) ("l" "List pending" hive-mcp-swarm-list-prompts)) (list "Info" ("?" "Status" hive-mcp-swarm-status) ("P" "List presets" hive-mcp-swarm-list-presets) ("r" "Reload presets" hive-mcp-swarm-reload-presets) ("a" "Add presets dir" hive-mcp-swarm-add-custom-presets-dir)))))
+    (transient-define-prefix hive-mcp-swarm-transient ()
+  "Swarm orchestration menu."
+  ["hive-mcp Swarm" ["Slaves" ("s" "Spawn slave" hive-mcp-swarm-spawn) ("k" "Kill slave" hive-mcp-swarm-kill) ("K" "Kill all" hive-mcp-swarm-kill-all) ("v" "View slave" hive-mcp-swarm-show-slave)] ["Tasks" ("d" "Dispatch" hive-mcp-swarm-dispatch) ("c" "Collect" hive-mcp-swarm-collect) ("b" "Broadcast" hive-mcp-swarm-broadcast)] ["Prompts (human mode)" ("y" "Approve next" hive-mcp-swarm-approve) ("n" "Deny next" hive-mcp-swarm-deny) ("p" "Respond custom" hive-mcp-swarm-respond) ("l" "List pending" hive-mcp-swarm-list-prompts)] ["Info" ("?" "Status" hive-mcp-swarm-status) ("P" "List presets" hive-mcp-swarm-list-presets) ("r" "Reload presets" hive-mcp-swarm-reload-presets) ("a" "Add presets dir" hive-mcp-swarm-add-custom-presets-dir)]]))
 
 (defvar hive-mcp-swarm-mode-map (let* ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c M-s") #'hive-mcp-swarm-transient)
@@ -507,11 +512,11 @@
   (hive-mcp-swarm-events-init hive-mcp-swarm--session-id)
   (hive-mcp-swarm-presets-init)
   (hive-mcp-swarm-prompts-init)
-  (-register-hivemind-sync-hooks)
+  (hive-mcp-swarm---register-hivemind-sync-hooks)
   (when hive-mcp-swarm-auto-approve
-    (start-auto-approve))
-  (start-completion-watcher)
-  (message "hive-mcp-swarm enabled (session: %s, auto-approve: %s, auto-shout: on)" hive-mcp-swarm--session-id (if hive-mcp-swarm-auto-approve "on" "off"))) (stop-auto-approve)))
+    (hive-mcp-swarm-start-auto-approve))
+  (hive-mcp-swarm-start-completion-watcher)
+  (message "hive-mcp-swarm enabled (session: %s, auto-approve: %s, auto-shout: on)" hive-mcp-swarm--session-id (if hive-mcp-swarm-auto-approve "on" "off"))) (hive-mcp-swarm-stop-auto-approve)))
 
 (defun hive-mcp-swarm---register-hivemind-sync-hooks ()
   "Register sync handler with all hivemind event types."
@@ -530,17 +535,17 @@
   (hive-mcp-swarm-events-init hive-mcp-swarm--session-id)
   (hive-mcp-swarm-presets-init)
   (hive-mcp-swarm-prompts-init)
-  (-register-hivemind-sync-hooks)
+  (hive-mcp-swarm---register-hivemind-sync-hooks)
   (when hive-mcp-swarm-auto-approve
-    (start-auto-approve))
-  (start-completion-watcher))
+    (hive-mcp-swarm-start-auto-approve))
+  (hive-mcp-swarm-start-completion-watcher))
 
 (defun hive-mcp-swarm---addon-shutdown ()
   "Shutdown swarm addon - kill all slaves."
-  (stop-auto-approve)
-  (stop-completion-watcher)
+  (hive-mcp-swarm-stop-auto-approve)
+  (hive-mcp-swarm-stop-completion-watcher)
   (hive-mcp-swarm-kill-all)
-  (-unregister-hivemind-sync-hooks)
+  (hive-mcp-swarm---unregister-hivemind-sync-hooks)
   (hive-mcp-swarm-hooks-shutdown)
   (hive-mcp-swarm-prompts-shutdown)
   (hive-mcp-swarm-presets-shutdown)

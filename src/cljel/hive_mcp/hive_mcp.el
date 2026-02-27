@@ -59,7 +59,8 @@
 (when (require 'transient nil t)
     (require 'hive-mcp-transient))
 
-(defvar hive-mcp--initialized nil)
+(defvar hive-mcp--initialized nil
+  "Non-nil if hive-mcp has been initialized.")
 
 (defun hive-mcp-initialize ()
   "Initialize hive-mcp system.\nRe-entrant safe: only runs once unless reset via `hive-mcp-reset'."

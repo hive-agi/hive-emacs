@@ -7,6 +7,8 @@
 
 
 
+(require 'cl-lib)
+
 (require 'websocket)
 
 (require 'json)
@@ -51,21 +53,26 @@
   :group 'hive-mcp-channel-ws
   :type 'number)
 
-(defvar hive-mcp-channel-ws--connection nil)
+(defvar hive-mcp-channel-ws--connection nil
+  "WebSocket connection object.")
 
 (defvar hive-mcp-channel-ws--handlers (make-hash-table :test 'equal)
   "Event handlers indexed by event type string.")
 
-(defvar hive-mcp-channel-ws--reconnect-timer nil)
+(defvar hive-mcp-channel-ws--reconnect-timer nil
+  "Timer for reconnection attempts.")
 
 (defvar hive-mcp-channel-ws--reconnect-count 0
   "Current reconnection attempt count.")
 
-(defvar hive-mcp-channel-ws--degraded-mode nil)
+(defvar hive-mcp-channel-ws--degraded-mode nil
+  "Non-nil when in graceful degradation mode.")
 
-(defvar hive-mcp-channel-ws--message-queue nil)
+(defvar hive-mcp-channel-ws--message-queue nil
+  "Queue of messages pending send.")
 
-(defvar hive-mcp-channel-ws--keepalive-timer nil)
+(defvar hive-mcp-channel-ws--keepalive-timer nil
+  "Timer for keepalive pings.")
 
 (defun hive-mcp-channel-ws--start-keepalive ()
   "Start the keepalive timer."
@@ -88,7 +95,7 @@
 
 (defun hive-mcp-channel-ws--dispatch (msg)
   "Dispatch parsed JSON MSG to registered handlers.\nEach handler is called within condition-case for thread safety."
-  (let* ((type (cdr (clel-assoc 'type msg)))
+  (let* ((type (cdr (assoc 'type msg)))
         (handlers (gethash type hive-mcp-channel-ws--handlers)))
     (dolist (handler handlers)
     (condition-case err
@@ -100,10 +107,15 @@
   (condition-case err
     (let* ((text (websocket-frame-text frame)))
     (cond
-  (((string= text "pong") nil) ((string= text "ping") (when (hive-mcp-channel-ws-connected-p)
+  ((string= text "pong") nil)
+  ((string= text "ping") (when (hive-mcp-channel-ws-connected-p)
     (condition-case nil
     (websocket-send-text hive-mcp-channel-ws--connection "pong")
-  (error nil)))))))
+  (error nil))))
+  (t (condition-case parse-err
+    (let* ((msg (json-read-from-string text)))
+    (hive-mcp-channel-ws--dispatch msg))
+  (error (message "hive-mcp-channel-ws: Parse error: %s" (error-message-string parse-err)))))))
   (error (message "hive-mcp-channel-ws: on-message error: %s" (error-message-string err)))))
 
 (defun hive-mcp-channel-ws--on-open (_ws)
@@ -124,7 +136,13 @@
   (hive-mcp-channel-ws--stop-keepalive)
   (setq hive-mcp-channel-ws--connection nil)
   (cond
-  ((hive-mcp-channel-ws--degraded-mode nil) ((and (> hive-mcp-channel-ws-max-reconnects 0) (>= hive-mcp-channel-ws--reconnect-count hive-mcp-channel-ws-max-reconnects)) (setq hive-mcp-channel-ws--degraded-mode t) (message "hive-mcp-channel-ws: Graceful degradation (server unavailable)")))))
+  (hive-mcp-channel-ws--degraded-mode nil)
+  ((and (> hive-mcp-channel-ws-max-reconnects 0) (>= hive-mcp-channel-ws--reconnect-count hive-mcp-channel-ws-max-reconnects)) (progn
+  (setq hive-mcp-channel-ws--degraded-mode t)
+  (message "hive-mcp-channel-ws: Graceful degradation (server unavailable)")))
+  (t (progn
+  (message "hive-mcp-channel-ws: Connection closed")
+  (hive-mcp-channel-ws--schedule-reconnect)))))
   (error (message "hive-mcp-channel-ws: on-close ERROR: %s" (error-message-string err)))))
 
 (defun hive-mcp-channel-ws--on-error (_ws _type err)
@@ -133,8 +151,8 @@
 
 (defun hive-mcp-channel-ws--calculate-backoff ()
   "Calculate reconnect interval with exponential backoff.\nReturns base * 2^(attempt-1), capped at max-reconnect-interval."
-  (let* ((interval (* hive-mcp-channel-ws-reconnect-interval (expt 2 (cl-max 0 (1- hive-mcp-channel-ws--reconnect-count))))))
-    (cl-min interval hive-mcp-channel-ws-max-reconnect-interval)))
+  (let* ((interval (* hive-mcp-channel-ws-reconnect-interval (expt 2 (max 0 (1- hive-mcp-channel-ws--reconnect-count))))))
+    (min interval hive-mcp-channel-ws-max-reconnect-interval)))
 
 (defun hive-mcp-channel-ws--schedule-reconnect ()
   "Schedule a reconnection attempt with exponential backoff."

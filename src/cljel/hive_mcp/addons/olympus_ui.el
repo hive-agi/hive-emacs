@@ -51,13 +51,17 @@
 (defvar olympus-ui--buffer-name "*Olympus Grid*"
   "Name of the Olympus grid buffer.")
 
-(defvar olympus-ui--current-state nil)
+(defvar olympus-ui--current-state nil
+  "Current cached state from olympus_status.\nMap with :lings, :layout, :positions, :active-tab, :layout-mode.")
 
-(defvar olympus-ui--refresh-timer nil)
+(defvar olympus-ui--refresh-timer nil
+  "Timer for automatic refresh.")
 
-(defvar olympus-ui--focused-ling nil)
+(defvar olympus-ui--focused-ling nil
+  "Currently focused ling ID, or nil for grid view.")
 
-(defvar olympus-ui--ws-subscription nil)
+(defvar olympus-ui--ws-subscription nil
+  "WebSocket subscription handle for hivemind events.")
 
 (defun olympus-ui--status--gtface (status)
   "Return the face for a ling STATUS keyword."
@@ -134,7 +138,7 @@
 (defun olympus-ui--pad-string (s width)
   "Pad string S to WIDTH characters, truncating if necessary."
   (let* ((truncated (olympus-ui--truncate-string s width)))
-    (clel-concat truncated (make-string (cl-max 0 (- width (length truncated))) -p))))
+    (clel-concat truncated (make-string (max 0 (- width (length truncated))) -p))))
 
 (defun olympus-ui--render-cell-line (content width face)
   "Render a single line of cell content with FACE."
@@ -243,7 +247,7 @@
     (insert (olympus-ui--render-header state))
     (insert (olympus-ui--render-grid state))
     (insert (olympus-ui--render-keybindings))
-    (goto-char (cl-min pos (point-max))))))))
+    (goto-char (min pos (point-max))))))))
 
 (defun olympus-ui-show ()
   "Show the Olympus grid buffer."

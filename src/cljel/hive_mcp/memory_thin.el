@@ -49,7 +49,8 @@
 (defvar hive-mcp-memory--cache (make-hash-table :test 'equal)
   "Compatibility variable for hive-mcp-reset.\nIn thin/Chroma-delegate mode this is unused; storage is server-side.\nKept so (clrhash hive-mcp-memory--cache) in hive-mcp.el doesn't error.")
 
-(defvar hive-mcp-memory-add-hook nil)
+(defvar hive-mcp-memory-add-hook nil
+  "Hook run after adding memory entry. Args: TYPE ENTRY PROJECT-ID.")
 
 (defun hive-mcp-memory---parse-edn-string (str)
   "Parse an EDN string STR into elisp using parseedn.\nReturns a hash-table for maps, vectors for vectors, etc."
@@ -58,7 +59,9 @@
 (defun hive-mcp-memory---edn-get (edn key)
   "Get KEY from EDN hash-table or alist.\nKEY should be a keyword symbol like :project-id."
   (cond
-  (((hash-table-p edn) (gethash key edn)) ((listp edn) (cdr (clel-assoc key edn))))))
+  ((hash-table-p edn) (gethash key edn))
+  ((listp edn) (cdr (assoc key edn)))
+  (t nil)))
 
 (defun hive-mcp-memory---read-project-config (&optional project-root)
   "Read and parse .hive-project.edn from PROJECT-ROOT.\nReturns alist of config values, or nil if file doesn't exist.\nCaches result per project root."
@@ -96,13 +99,21 @@
 (defun hive-mcp-memory---project-id (&optional project-root)
   "Return unique ID for PROJECT-ROOT (defaults to current project).\nResolution order:\n  1. Stable :project-id from .hive-project.edn (survives renames)\n  2. Fallback: SHA1 hash of absolute path (filesystem-safe)\nReturns \"global\" if not in a project.\nPROJECT-ROOT must be a string path or nil."
   (let* ((root (cond
-  (((stringp project-root) project-root) ((null project-root) (hive-mcp-memory--get-project-root))))))
+  ((stringp project-root) project-root)
+  ((null project-root) (hive-mcp-memory---get-project-root))
+  (t (progn
+  (message "[hive-mcp] Warning: project-root not a string: %S" project-root)
+  (hive-mcp-memory---get-project-root))))))
     (if root (or (hive-mcp-memory---get-stable-project-id root) (substring (sha1 (expand-file-name root)) 0 16)) "global")))
 
 (defun hive-mcp-memory---project-id-hash (&optional project-root)
   "Return SHA1 hash ID for PROJECT-ROOT (ignores config).\nUse this for migration when you need the path-based hash.\nPROJECT-ROOT must be a string path or nil."
   (let* ((root (cond
-  (((stringp project-root) project-root) ((null project-root) (hive-mcp-memory--get-project-root))))))
+  ((stringp project-root) project-root)
+  ((null project-root) (hive-mcp-memory---get-project-root))
+  (t (progn
+  (message "[hive-mcp] Warning: project-root not a string: %S" project-root)
+  (hive-mcp-memory---get-project-root))))))
     (if root (substring (sha1 (expand-file-name root)) 0 16) "global")))
 
 (defun hive-mcp-memory---make-scope-tag (level &optional name)
@@ -116,8 +127,10 @@
 (defun hive-mcp-memory---parse-scope-tag (tag)
   "Parse a scope TAG into (level . name) cons.\nReturns nil if TAG is not a scope tag."
   (cond
-  (((string= tag "scope:global") '(global . nil)) ((string-prefix-p "scope:domain:" tag) (cons 'domain (substring tag (length "scope:domain:")))))
-  (((string-prefix-p "scope:project:" tag) (cons 'project (substring tag (length "scope:project:")))) (t nil))))
+  ((string= tag "scope:global") '(global . nil))
+  ((string-prefix-p "scope:domain:" tag) (cons 'domain (substring tag (length "scope:domain:"))))
+  ((string-prefix-p "scope:project:" tag) (cons 'project (substring tag (length "scope:project:"))))
+  (t nil)))
 
 (defun hive-mcp-memory---has-scope-tag-p (tags)
   "Return non-nil if TAGS contains any scope tag."
@@ -126,21 +139,23 @@
 
 (defun hive-mcp-memory---inject-project-scope (tags)
   "Inject current project scope into TAGS if no scope present.\nReturns modified tags list."
-  (if (hive-mcp-memory---has-scope-tag-p tags) tags (if-let-star (list project-name (hive-mcp-memory--get-project-name)) (cons (hive-mcp-memory---make-scope-tag 'project project-name) tags) tags)))
+  (if (hive-mcp-memory---has-scope-tag-p tags) tags (if-let-star (list project-name (hive-mcp-memory---get-project-name)) (cons (hive-mcp-memory---make-scope-tag 'project project-name) tags) tags)))
 
 (defun hive-mcp-memory---applicable-scope-tags (&optional project-name domain-name)
   "Return list of scope tags applicable to current context.\nPROJECT-NAME defaults to current project.\nDOMAIN-NAME is optional domain filter.\nAlways includes scope:global."
   (let* ((tags (list "scope:global")))
     (when domain-name
     (push (hive-mcp-memory---make-scope-tag 'domain domain-name) tags))
-    (when-let-star (list proj (or project-name (hive-mcp-memory--get-project-name))) (push (hive-mcp-memory---make-scope-tag 'project proj) tags))
+    (when-let-star (list proj (or project-name (hive-mcp-memory---get-project-name))) (push (hive-mcp-memory---make-scope-tag 'project proj) tags))
     tags))
 
 (defun hive-mcp-memory---calculate-expires (duration)
   "Calculate expiration timestamp for DURATION.\nReturns ISO 8601 timestamp or nil for permanent entries.\nUsed for client-side display; actual TTL managed by Chroma."
   (let* ((days (alist-get duration hive-mcp-memory-duration-days)))
     (cond
-  (((null days) nil) ((equal days 0) (format-time-string "%FT%T%z"))))))
+  ((null days) nil)
+  ((equal days 0) (format-time-string "%FT%T%z"))
+  (t (format-time-string "%FT%T%z" (time-add (current-time) (days-to-time days)))))))
 
 (defun hive-mcp-memory---duration-next (duration)
   "Return next longer DURATION in hierarchy, or nil if permanent."
@@ -165,7 +180,9 @@
 (defun hive-mcp-memory---normalize-content (content)
   "Normalize CONTENT for consistent hashing.\nTrims whitespace, collapses multiple spaces/newlines."
   (let* ((text (cond
-  (((stringp content) content) ((plistp content) (format "%S" content))))))
+  ((stringp content) content)
+  ((plistp content) (format "%S" content))
+  (t (format "%S" content)))))
     (setq text (string-trim text))
     (setq text (replace-regexp-in-string "[ \t]+" " " text))
     (setq text (replace-regexp-in-string "\n+" "\n" text))
@@ -227,7 +244,8 @@
 
 (defalias 'hive-mcp-memory-project-get-name 'hive-mcp-memory---get-project-name)
 
-(defvar hive-mcp-memory--storage-delegate nil)
+(defvar hive-mcp-memory--storage-delegate nil
+  "Function to call for storage operations.\nShould accept (op type &rest args) and delegate to MCP.\nIf nil, storage operations will error with instructions.")
 
 (defun hive-mcp-memory---cider-delegate (&rest args)
   (let ((op (nth 0 args)) (args (nthcdr 1 args)))

@@ -15,7 +15,8 @@
   :group 'hive-mcp-kanban
   :type '(choice (const :tag "None" nil) (string :tag "Project UUID")))
 
-(defvar hive-mcp-kanban-vibe--cache nil)
+(defvar hive-mcp-kanban-vibe--cache nil
+  "Cache for vibe-kanban data.")
 
 (defun hive-mcp-kanban-vibe---mcp-call (tool params)
   "Call vibe-kanban MCP TOOL with PARAMS.\nThis uses emacsclient to communicate with the MCP server."

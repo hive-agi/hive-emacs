@@ -38,7 +38,8 @@
   :group 'hive-mcp-vibe-kanban
   :type '(choice (const nil) directory))
 
-(defvar hive-mcp-vibe-kanban--process nil)
+(defvar hive-mcp-vibe-kanban--process nil
+  "Process object for the vibe-kanban server.")
 
 (defvar hive-mcp-vibe-kanban--buffer-name "*vibe-kanban*"
   "Buffer name for vibe-kanban output.")
@@ -112,7 +113,9 @@
   (hive-mcp-vibe-kanban--stop)
   (message "hive-mcp-vibe-kanban: shutdown complete"))
 
-(transient-define-prefix hive-mcp-vibe-kanban-transient (nil) "Vibe Kanban control menu." (list "Vibe Kanban" (list "Server" ("s" "Start" hive-mcp-vibe-kanban-start) ("S" "Stop" hive-mcp-vibe-kanban-stop) ("r" "Restart" hive-mcp-vibe-kanban-restart) ("?" "Status" hive-mcp-vibe-kanban-status)) (list "View" ("b" "Show buffer" hive-mcp-vibe-kanban-show-buffer))))
+(transient-define-prefix hive-mcp-vibe-kanban-transient ()
+  "Vibe Kanban control menu."
+  ["Vibe Kanban" ["Server" ("s" "Start" hive-mcp-vibe-kanban-start) ("S" "Stop" hive-mcp-vibe-kanban-stop) ("r" "Restart" hive-mcp-vibe-kanban-restart) ("?" "Status" hive-mcp-vibe-kanban-status)] ["View" ("b" "Show buffer" hive-mcp-vibe-kanban-show-buffer)]])
 
 (with-eval-after-load 'hive-mcp-addons
   (hive-mcp-addon-register 'vibe-kanban :version "0.1.0" :description "Vibe Kanban task management server" :requires '(hive-mcp-api) :provides '(hive-mcp-vibe-kanban-transient) :init #'-addon-init :async-init #'-addon-async-init :shutdown #'-addon-shutdown))

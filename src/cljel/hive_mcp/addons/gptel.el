@@ -27,15 +27,15 @@
 
 (declare-function hive-mcp-ai-format-context-for "hive-mcp-ai-bridge")
 
-(defvar gptel-directives nil)
+(defvar gptel-directives)
 
-(defvar gptel-prompt-filter-hook nil)
+(defvar gptel-prompt-filter-hook)
 
-(defvar gptel-post-response-functions nil)
+(defvar gptel-post-response-functions)
 
-(defvar gptel-pre-response-hook nil)
+(defvar gptel-pre-response-hook)
 
-(defvar gptel--system-message nil)
+(defvar gptel--system-message)
 
 (defgroup hive-mcp-gptel nil
   "Integration between hive-mcp and gptel."
@@ -72,11 +72,14 @@
   :group 'hive-mcp-gptel
   :type 'regexp)
 
-(defvar hive-mcp-gptel--initialized nil)
+(defvar hive-mcp-gptel--initialized nil
+  "Whether the addon has been initialized.")
 
-(defvar hive-mcp-gptel--last-prompt nil)
+(defvar hive-mcp-gptel--last-prompt nil
+  "The last prompt sent, for response context.")
 
-(defvar hive-mcp-gptel--response-start nil)
+(defvar hive-mcp-gptel--response-start nil
+  "Marker for response start position.")
 
 (defun hive-mcp-gptel--ensure-bridge ()
   "Ensure hive-mcp-ai-bridge is available."
@@ -88,7 +91,7 @@
 
 (defun hive-mcp-gptel--inject-context ()
   "Inject memory context into the current prompt buffer.\nThis runs in `gptel-prompt-filter-hook' before the query is sent."
-  (when (and hive-mcp-gptel-inject-context (-ensure-bridge))
+  (when (and hive-mcp-gptel-inject-context (hive-mcp-gptel--ensure-bridge))
     (let* ((prompt-text (buffer-string))
         (context (hive-mcp-ai-build-context (when hive-mcp-gptel-include-semantic
     prompt-text))))
@@ -104,7 +107,7 @@
 
 (defun hive-mcp-gptel--handle-response (beg end)
   "Handle gptel response between BEG and END.\nThis runs in `gptel-post-response-functions'."
-  (when (-ensure-bridge)
+  (when (hive-mcp-gptel--ensure-bridge)
     (let* ((response (buffer-substring-no-properties beg end)))
     (when hive-mcp-gptel-log-interactions
     (hive-mcp-ai-log-interaction "gptel" "response" (list :prompt-length (length (or hive-mcp-gptel--last-prompt "")) :response-length (length response) :buffer (buffer-name))))
@@ -114,7 +117,7 @@
 
 (defun hive-mcp-gptel--check-swarm-dispatch ()
   "Check for @swarm: directives in the current prompt.\nDispatches matching tasks to swarm agents."
-  (when (and (-ensure-bridge) (-ensure-gptel))
+  (when (and (hive-mcp-gptel--ensure-bridge) (hive-mcp-gptel--ensure-gptel))
     (save-excursion
     (goto-char (point-min))
     (while (re-search-forward hive-mcp-gptel-swarm-tasks-pattern nil t)
@@ -123,15 +126,15 @@
 
 (defun hive-mcp-gptel-directive-with-context ()
   "Create a gptel directive that includes memory context.\nReturns a cons cell suitable for `gptel-directives'."
-  (when (-ensure-bridge)
+  (when (hive-mcp-gptel--ensure-bridge)
     (let* ((context (hive-mcp-ai-build-context)))
     (cons "Memory-Aware" (clel-concat "You are a helpful assistant with access to project knowledge.\n\n" (or context "") "\n\nUse this context to provide informed, project-specific responses.")))))
 
 (defun hive-mcp-gptel-add-memory-directive ()
   "Add a memory-aware directive to `gptel-directives'."
   (interactive)
-  (when (-ensure-gptel)
-    (when-let-star (list directive (directive-with-context)) (add-to-list 'gptel-directives directive) (message "Added Memory-Aware directive to gptel-directives"))))
+  (when (hive-mcp-gptel--ensure-gptel)
+    (when-let-star (list directive (hive-mcp-gptel-directive-with-context)) (add-to-list 'gptel-directives directive) (message "Added Memory-Aware directive to gptel-directives"))))
 
 (defun hive-mcp-gptel-send-with-context ()
   "Send prompt to gptel with memory context injection.\nLike `gptel-send' but ensures context is injected."
@@ -142,14 +145,14 @@
 (defun hive-mcp-gptel-query-memory (query)
   "Query memory with QUERY and insert results at point."
   (interactive "sQuery memory: ")
-  (when (-ensure-bridge)
+  (when (hive-mcp-gptel--ensure-bridge)
     (let* ((results (hive-mcp-ai-build-context query)))
     (if results (insert results) (message "No relevant memory found")))))
 
 (defun hive-mcp-gptel-store-region (beg end)
   "Store region between BEG and END as memory snippet."
   (interactive "r")
-  (when (-ensure-bridge)
+  (when (hive-mcp-gptel--ensure-bridge)
     (let* ((content (buffer-substring-no-properties beg end)))
     (hive-mcp-ai-store-response content "gptel-manual" '("user-selected"))
     (message "Stored selection to memory"))))
@@ -157,13 +160,13 @@
 (defun hive-mcp-gptel-dispatch-to-swarm (task)
   "Dispatch TASK to swarm agent."
   (interactive "sTask for swarm: ")
-  (when (-ensure-bridge)
+  (when (hive-mcp-gptel--ensure-bridge)
     (let* ((result (hive-mcp-ai-dispatch-to-swarm task :source "gptel-interactive" :preset "general")))
     (if result (message "Dispatched to swarm: %s" result) (message "Swarm dispatch failed - is swarm available?")))))
 
 (defun hive-mcp-gptel--setup-hooks ()
   "Set up gptel hooks for integration."
-  (when (-ensure-gptel)
+  (when (hive-mcp-gptel--ensure-gptel)
     (add-hook 'gptel-prompt-filter-hook #'-inject-context)
     (add-hook 'gptel-prompt-filter-hook #'-check-swarm-dispatch)
     (add-hook 'gptel-pre-response-hook #'-mark-response-start)
@@ -183,12 +186,14 @@
   :global t
   :group 'hive-mcp-gptel
   (if hive-mcp-gptel-mode (progn
-  (-setup-hooks)
+  (hive-mcp-gptel--setup-hooks)
   (setq hive-mcp-gptel--initialized t)
-  (message "hive-mcp-gptel: enabled")) (-teardown-hooks)))
+  (message "hive-mcp-gptel: enabled")) (hive-mcp-gptel--teardown-hooks)))
 
 (with-eval-after-load 'transient
-  (transient-define-prefix hive-mcp-gptel-menu (nil) "MCP integration menu for gptel." (list "hive-mcp + gptel" (list "Context" ("c" "Send with context" hive-mcp-gptel-send-with-context) ("q" "Query memory" hive-mcp-gptel-query-memory) ("d" "Add memory directive" hive-mcp-gptel-add-memory-directive)) (list "Store" ("s" "Store region" hive-mcp-gptel-store-region)) (list "Swarm" ("w" "Dispatch to swarm" hive-mcp-gptel-dispatch-to-swarm)) (list "Toggle" ("m" "Toggle mode" hive-mcp-gptel-mode)))))
+  (transient-define-prefix hive-mcp-gptel-menu ()
+  "MCP integration menu for gptel."
+  ["hive-mcp + gptel" ["Context" ("c" "Send with context" hive-mcp-gptel-send-with-context) ("q" "Query memory" hive-mcp-gptel-query-memory) ("d" "Add memory directive" hive-mcp-gptel-add-memory-directive)] ["Store" ("s" "Store region" hive-mcp-gptel-store-region)] ["Swarm" ("w" "Dispatch to swarm" hive-mcp-gptel-dispatch-to-swarm)] ["Toggle" ("m" "Toggle mode" hive-mcp-gptel-mode)]]))
 
 (defun hive-mcp-gptel--addon-init ()
   "Initialize gptel addon."

@@ -51,7 +51,7 @@
 
 (declare-function hive-mcp-swarm-events-emit-ling-ready-for-wrap "hive-mcp-swarm-events")
 
-(defvar hive-mcp-swarm--slaves nil)
+(defvar hive-mcp-swarm--slaves)
 
 (defvar-local hive-mcp-swarm-terminal--working-p nil "Non-nil when the terminal is actively processing a task.")
 
@@ -134,9 +134,11 @@
   :group 'hive-mcp-swarm-terminal
   :type 'integer)
 
-(defvar hive-mcp-swarm-terminal--completion-timer nil)
+(defvar hive-mcp-swarm-terminal--completion-timer nil
+  "Timer for polling task completion across all working slave buffers.")
 
-(defvar hive-mcp-swarm-terminal--completion-callback nil)
+(defvar hive-mcp-swarm-terminal--completion-callback nil
+  "Callback to invoke when task completion is detected.")
 
 (defvar hive-mcp-swarm-terminal--activity-timestamps (make-hash-table :test 'equal)
   "Hash of slave-id -> last-activity-timestamp (float-time).")
@@ -144,7 +146,8 @@
 (defvar hive-mcp-swarm-terminal--last-shout-timestamps (make-hash-table :test 'equal)
   "Hash of slave-id -> last-shout-timestamp (float-time).")
 
-(defvar hive-mcp-swarm-terminal--idle-timer nil)
+(defvar hive-mcp-swarm-terminal--idle-timer nil
+  "Timer for polling idle detection across working slaves.")
 
 (defvar hive-mcp-swarm-terminal--idle-emitted (make-hash-table :test 'equal)
   "Hash of slave-id -> t for slaves that have already had idle event emitted.")
@@ -187,11 +190,11 @@
 
 (defun hive-mcp-swarm-terminal---should-flush-p (buffer)
   "Return non-nil if BUFFER should have its process output flushed."
-  (or (not hive-mcp-swarm-terminal-lazy-render) (-buffer-visible-p buffer) (zerop (mod hive-mcp-swarm-terminal--lazy-tick-count (cl-max 1 hive-mcp-swarm-terminal-lazy-render-interval)))))
+  (or (not hive-mcp-swarm-terminal-lazy-render) (hive-mcp-swarm-terminal---buffer-visible-p buffer) (zerop (mod hive-mcp-swarm-terminal--lazy-tick-count (max 1 hive-mcp-swarm-terminal-lazy-render-interval)))))
 
 (defun hive-mcp-swarm-terminal---flush-buffer (buffer)
   "Flush pending process output for BUFFER if it should be flushed.\nReturns non-nil if a flush was actually performed."
-  (when (and (buffer-live-p buffer) (-should-flush-p buffer))
+  (when (and (buffer-live-p buffer) (hive-mcp-swarm-terminal---should-flush-p buffer))
     (when-let-star (list proc (get-buffer-process buffer)) (accept-process-output proc 0.01) t)))
 
 (defun hive-mcp-swarm-terminal---on-window-buffer-change (frame)
@@ -217,7 +220,7 @@
         (error-type (cdr pattern-pair)))
     (when (string-match-p (regexp-quote pattern) recent-text)
     (let* ((error-preview (when (string-match (clel-concat "^.*" (regexp-quote pattern) ".*$") recent-text)
-    (substring recent-text (match-beginning 0) (cl-min (match-end 0) (+ (match-beginning 0) 200))))))
+    (substring recent-text (match-beginning 0) (min (match-end 0) (+ (match-beginning 0) 200))))))
     (signal 'error 'found-error))))) nil))))))
 
 (defun hive-mcp-swarm-terminal---truncate-for-preview (text max-length)
@@ -249,7 +252,7 @@
 
 (defun hive-mcp-swarm-terminal---send-ollama (buffer text)
   "Send TEXT to Ollama via ellama. Non-blocking.\nBUFFER is the swarm worker buffer (used for logging)."
-  (let* ((slave-id (-find-slave-by-buffer buffer))
+  (let* ((slave-id (hive-mcp-swarm-terminal---find-slave-by-buffer buffer))
         (slave (and slave-id (gethash slave-id hive-mcp-swarm--slaves)))
         (model (or (and slave (plist-get slave :model)) "devstral-small-2")))
     (if (fboundp 'hive-mcp-ellama-dispatch) (hive-mcp-ellama-dispatch text model (lambda (response)
@@ -265,7 +268,7 @@
   "Send TEXT via claude-code-ide abstraction.\nBlocking is OK for individual slaves since they're isolated."
   (with-current-buffer buffer
     (if (fboundp 'claude-code-ide--terminal-send-string) (let* ((text-lines (length (split-string text "\n")))
-        (paste-delay (cl-min 2.0 (+ 0.1 (* 0.01 text-lines)))))
+        (paste-delay (min 2.0 (+ 0.1 (* 0.01 text-lines)))))
     (claude-code-ide--terminal-send-string text)
     (sit-for paste-delay)
     (when (fboundp 'claude-code-ide--terminal-send-return)
@@ -280,16 +283,16 @@
     (setq-local hive-mcp-swarm-terminal--task-start-time (float-time))
     (setq-local hive-mcp-swarm-terminal--pending-prompt text))
   (when hive-mcp-swarm-terminal-auto-shout
-    (when-let-star (list slave-id (-find-slave-by-buffer buffer)) (hive-mcp-swarm-terminal-record-activity slave-id) (let* ((task-preview (-truncate-for-preview text 100)))
+    (when-let-star (list slave-id (hive-mcp-swarm-terminal---find-slave-by-buffer buffer)) (hive-mcp-swarm-terminal-record-activity slave-id) (let* ((task-preview (hive-mcp-swarm-terminal---truncate-for-preview text 100)))
     (when (fboundp 'hive-mcp-swarm-events-emit-auto-started)
     (hive-mcp-swarm-events-emit-auto-started slave-id task-preview))
     (message "[swarm-terminal] Auto-shout: %s started task" slave-id))))
   (let* ((backend (or backend (hive-mcp-swarm-terminal-detect-buffer-backend buffer) hive-mcp-swarm-terminal-backend)))
     (pcase backend
-  ((quote claude-code-ide) (-send-claude-code-ide buffer text))
-  ((quote vterm) (-send-vterm buffer text))
-  ((quote eat) (-send-eat buffer text))
-  ((quote ollama) (-send-ollama buffer text))
+  ((quote claude-code-ide) (hive-mcp-swarm-terminal---send-claude-code-ide buffer text))
+  ((quote vterm) (hive-mcp-swarm-terminal---send-vterm buffer text))
+  ((quote eat) (hive-mcp-swarm-terminal---send-eat buffer text))
+  ((quote ollama) (hive-mcp-swarm-terminal---send-ollama buffer text))
   ('_ (error "Unknown terminal backend: %s" backend)))))
 
 (defun hive-mcp-swarm-terminal-ready-p (buffer)
@@ -298,7 +301,7 @@
     (with-current-buffer buffer
     (save-excursion
     (goto-char (point-max))
-    (let* ((search-start (cl-max (point-min) (- (point-max) hive-mcp-swarm-terminal-ready-search-window))))
+    (let* ((search-start (max (point-min) (- (point-max) hive-mcp-swarm-terminal-ready-search-window))))
     (search-backward hive-mcp-swarm-terminal-prompt-marker search-start t))))))
 
 (defun hive-mcp-swarm-terminal-wait-ready (buffer callback &optional timeout-secs)
@@ -348,19 +351,19 @@
     (let* ((kill-buffer-query-functions nil)
         (kill-buffer-hook nil)
         (vterm-exit-functions nil))
-    (kill-buffer buffer))))
+    (hive-mcp-swarm-terminal-kill-buffer buffer))))
 
 (defun hive-mcp-swarm-terminal---check-buffer-completion (buffer)
   "Check if BUFFER has completed its task (working -> ready transition).\nReturns a plist with completion info if done, nil otherwise."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-    (-flush-buffer buffer)
+    (hive-mcp-swarm-terminal---flush-buffer buffer)
     (when (and hive-mcp-swarm-terminal--working-p (hive-mcp-swarm-terminal-ready-p buffer))
-    (let* ((slave-id (-find-slave-by-buffer buffer))
+    (let* ((slave-id (hive-mcp-swarm-terminal---find-slave-by-buffer buffer))
         (start-time hive-mcp-swarm-terminal--task-start-time)
         (duration (when start-time
     (- (float-time) start-time)))
-        (error-info (-detect-error buffer))
+        (error-info (hive-mcp-swarm-terminal---detect-error buffer))
         (status (if error-info "error" "completed")))
     (setq-local hive-mcp-swarm-terminal--working-p nil)
     (setq-local hive-mcp-swarm-terminal--task-start-time nil)
@@ -371,7 +374,7 @@
 (defun hive-mcp-swarm-terminal---check-buffer-activity (slave-id buffer)
   "Check if BUFFER has new output since last check for SLAVE-ID.\nReturns t if activity was recorded, nil otherwise."
   (when (buffer-live-p buffer)
-    (-flush-buffer buffer)
+    (hive-mcp-swarm-terminal---flush-buffer buffer)
     (let* ((current-size (buffer-size buffer))
         (last-size (gethash slave-id hive-mcp-swarm-terminal--buffer-sizes 0)))
     (puthash slave-id current-size hive-mcp-swarm-terminal--buffer-sizes)
@@ -385,8 +388,8 @@
     (when (and hive-mcp-swarm-terminal-auto-shout (boundp 'hive-mcp-swarm--slaves) (hash-table-p hive-mcp-swarm--slaves))
     (cl-incf hive-mcp-swarm-terminal--lazy-tick-count)
     (maphash (lambda (slave-id slave)
-    (when-let-star (list buffer (plist-get slave :buffer)) (-check-buffer-activity slave-id buffer))
-    (when-let-star (list buffer (plist-get slave :buffer) completion-info (-check-buffer-completion buffer)) (let* ((completed-slave-id (plist-get completion-info :slave-id))
+    (when-let-star (list buffer (plist-get slave :buffer)) (hive-mcp-swarm-terminal---check-buffer-activity slave-id buffer))
+    (when-let-star (list buffer (plist-get slave :buffer) completion-info (hive-mcp-swarm-terminal---check-buffer-completion buffer)) (let* ((completed-slave-id (plist-get completion-info :slave-id))
         (duration (plist-get completion-info :duration))
         (status (plist-get completion-info :status))
         (error-type (plist-get completion-info :error-type))
@@ -449,8 +452,8 @@
 (defun hive-mcp-swarm-terminal---slave-idle-p (slave-id)
   "Check if SLAVE-ID is considered idle based on timestamps."
   (let* ((now (float-time))
-        (activity-time (-get-activity-timestamp slave-id))
-        (shout-time (-get-shout-timestamp slave-id))
+        (activity-time (hive-mcp-swarm-terminal---get-activity-timestamp slave-id))
+        (shout-time (hive-mcp-swarm-terminal---get-shout-timestamp slave-id))
         (timeout hive-mcp-swarm-terminal-idle-timeout))
     (when activity-time
     (let* ((activity-age (- now activity-time))
@@ -459,7 +462,7 @@
 
 (defun hive-mcp-swarm-terminal---slave-needs-idle-event-p (slave-id)
   "Check if SLAVE-ID needs an idle-timeout event emitted."
-  (and (not (gethash slave-id hive-mcp-swarm-terminal--idle-emitted)) (-slave-idle-p slave-id) (when (and (boundp 'hive-mcp-swarm--slaves) (hash-table-p hive-mcp-swarm--slaves))
+  (and (not (gethash slave-id hive-mcp-swarm-terminal--idle-emitted)) (hive-mcp-swarm-terminal---slave-idle-p slave-id) (when (and (boundp 'hive-mcp-swarm--slaves) (hash-table-p hive-mcp-swarm--slaves))
     (let* ((slave (gethash slave-id hive-mcp-swarm--slaves)))
     (eq (plist-get slave :status) 'working)))))
 
@@ -476,11 +479,11 @@
     (when (and (boundp 'hive-mcp-swarm--slaves) (hash-table-p hive-mcp-swarm--slaves))
     (maphash (lambda (_slave-id slave)
     (when-let-star (list buffer (plist-get slave :buffer)) (when (buffer-live-p buffer)
-    (-flush-buffer buffer)))) hive-mcp-swarm--slaves)
+    (hive-mcp-swarm-terminal---flush-buffer buffer)))) hive-mcp-swarm--slaves)
     (maphash (lambda (slave-id _slave)
-    (when (-slave-needs-idle-event-p slave-id)
+    (when (hive-mcp-swarm-terminal---slave-needs-idle-event-p slave-id)
     (puthash slave-id t hive-mcp-swarm-terminal--idle-emitted)
-    (let* ((activity-time (-get-activity-timestamp slave-id))
+    (let* ((activity-time (hive-mcp-swarm-terminal---get-activity-timestamp slave-id))
         (idle-duration (if activity-time (- (float-time) activity-time) 0))
         (pending-prompt (when (fboundp 'hive-mcp-swarm-prompts-find-pending)
     (hive-mcp-swarm-prompts-find-pending slave-id)))
@@ -526,14 +529,14 @@
 
 (defun hive-mcp-swarm-terminal---should-auto-wrap-p (slave-id)
   "Check if SLAVE-ID should trigger auto-wrap."
-  (and hive-mcp-swarm-terminal-auto-wrap (not (-session-wrapped-p slave-id)) (when (and (boundp 'hive-mcp-swarm--slaves) (hash-table-p hive-mcp-swarm--slaves))
+  (and hive-mcp-swarm-terminal-auto-wrap (not (hive-mcp-swarm-terminal---session-wrapped-p slave-id)) (when (and (boundp 'hive-mcp-swarm--slaves) (hash-table-p hive-mcp-swarm--slaves))
     (let* ((slave (gethash slave-id hive-mcp-swarm--slaves)))
     (and slave (not (eq (plist-get slave :status) 'working)))))))
 
 (defun hive-mcp-swarm-terminal-trigger-auto-wrap (slave-id reason)
   "Trigger auto-wrap for SLAVE-ID with REASON.\nReturns t if wrap was triggered, nil if already wrapped or disabled."
-  (when (-should-auto-wrap-p slave-id)
-    (-mark-session-wrapped slave-id)
+  (when (hive-mcp-swarm-terminal---should-auto-wrap-p slave-id)
+    (hive-mcp-swarm-terminal---mark-session-wrapped slave-id)
     (when (fboundp 'hive-mcp-swarm-events-emit-ling-ready-for-wrap)
     (hive-mcp-swarm-events-emit-ling-ready-for-wrap slave-id reason))
     (message "[swarm-terminal] Auto-wrap triggered for %s (reason: %s)" slave-id reason)

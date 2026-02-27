@@ -31,7 +31,9 @@
 (defun hive-mcp-docs---get-docstring (symbol)
   "Get the docstring for SYMBOL (function or variable)."
   (cond
-  (((fboundp symbol) (documentation symbol t)) ((boundp symbol) (documentation-property symbol 'variable-documentation t)))))
+  ((fboundp symbol) (documentation symbol t))
+  ((boundp symbol) (documentation-property symbol 'variable-documentation t))
+  (t nil)))
 
 (defun hive-mcp-docs---function-signature (func)
   "Get the signature/arglist for FUNC."
@@ -49,22 +51,26 @@
 (defun hive-mcp-docs---symbol-type (symbol)
   "Determine the type of SYMBOL."
   (cond
-  (((and (fboundp symbol) (commandp symbol)) "interactive command") ((and (fboundp symbol) (macrop (symbol-function symbol))) "macro"))
-  (((and (fboundp symbol) (subrp (symbol-function symbol))) "built-in function") ((fboundp symbol) "function"))
-  (((and (boundp symbol) (custom-variable-p symbol)) "customizable variable") ((boundp symbol) "variable"))
-  (((facep symbol) "face") (t "symbol"))))
+  ((and (fboundp symbol) (commandp symbol)) "interactive command")
+  ((and (fboundp symbol) (macrop (symbol-function symbol))) "macro")
+  ((and (fboundp symbol) (subrp (symbol-function symbol))) "built-in function")
+  ((fboundp symbol) "function")
+  ((and (boundp symbol) (custom-variable-p symbol)) "customizable variable")
+  ((boundp symbol) "variable")
+  ((facep symbol) "face")
+  (t "symbol")))
 
 (defun hive-mcp-docs-describe-function (function-name)
   "Get documentation for FUNCTION-NAME.\nReturns a plist with :name, :type, :signature, :docstring, :file."
   (let* ((sym (if (symbolp function-name) function-name (intern-soft function-name))))
-    (if (and sym (fboundp sym)) (list :name (symbol-name sym) :type (-symbol-type sym) :signature (-function-signature sym) :docstring (or (-get-docstring sym) "No documentation available.") :file (when hive-mcp-docs-include-source-location
-    (-function-source-file sym))) (list :error (format "Function not found: %s" function-name)))))
+    (if (and sym (fboundp sym)) (list :name (symbol-name sym) :type (hive-mcp-docs---symbol-type sym) :signature (hive-mcp-docs---function-signature sym) :docstring (or (hive-mcp-docs---get-docstring sym) "No documentation available.") :file (when hive-mcp-docs-include-source-location
+    (hive-mcp-docs---function-source-file sym))) (list :error (format "Function not found: %s" function-name)))))
 
 (defun hive-mcp-docs-describe-variable (variable-name)
   "Get documentation for VARIABLE-NAME.\nReturns a plist with :name, :type, :value, :docstring, :file."
   (let* ((sym (if (symbolp variable-name) variable-name (intern-soft variable-name))))
     (if (and sym (boundp sym)) (let* ((val (symbol-value sym)))
-    (list :name (symbol-name sym) :type (-symbol-type sym) :value (if (> (length (format "%S" val)) 500) (format "%s... (truncated)" (substring (format "%S" val) 0 500)) (format "%S" val)) :docstring (or (documentation-property sym 'variable-documentation t) "No documentation available.") :file (when hive-mcp-docs-include-source-location
+    (list :name (symbol-name sym) :type (hive-mcp-docs---symbol-type sym) :value (if (> (length (format "%S" val)) 500) (format "%s... (truncated)" (substring (format "%S" val) 0 500)) (format "%S" val)) :docstring (or (documentation-property sym 'variable-documentation t) "No documentation available.") :file (when hive-mcp-docs-include-source-location
     (find-lisp-object-file-name sym 'defvar)))) (list :error (format "Variable not found: %s" variable-name)))))
 
 (defun hive-mcp-docs-apropos (pattern &optional type)
@@ -80,7 +86,7 @@
   ('_ t))) all-symbols))
         (limited (seq-take filtered hive-mcp-docs-max-results)))
     (list :pattern pattern :type (or type "all") :total-matches (length filtered) :returned (length limited) :symbols (mapcar (lambda (sym)
-    (list :name (symbol-name sym) :type (-symbol-type sym) :docstring-preview (when-let-star (list doc (-get-docstring sym)) (if (> (length doc) 100) (clel-concat (substring doc 0 100) "...") doc)))) limited))))
+    (list :name (symbol-name sym) :type (hive-mcp-docs---symbol-type sym) :docstring-preview (when-let-star (list doc (hive-mcp-docs---get-docstring sym)) (if (> (length doc) 100) (clel-concat (substring doc 0 100) "...") doc)))) limited))))
 
 (defun hive-mcp-docs-package-functions (package-or-prefix)
   "List all functions defined by PACKAGE-OR-PREFIX.\nPACKAGE-OR-PREFIX can be a feature name or a symbol prefix string.\nReturns list of functions with signatures."
@@ -90,7 +96,7 @@
     (and (fboundp sym) (string-match-p prefix-regexp (symbol-name sym)))) (apropos-internal prefix-regexp #'fboundp)))
         (limited (seq-take functions hive-mcp-docs-max-results)))
     (list :prefix prefix :total-functions (length functions) :returned (length limited) :functions (mapcar (lambda (sym)
-    (list :name (symbol-name sym) :type (-symbol-type sym) :signature (-function-signature sym) :interactive (commandp sym))) limited))))
+    (list :name (symbol-name sym) :type (hive-mcp-docs---symbol-type sym) :signature (hive-mcp-docs---function-signature sym) :interactive (commandp sym))) limited))))
 
 (defun hive-mcp-docs-find-keybindings (command)
   "Find all keybindings for COMMAND.\nReturns list of key sequences that invoke the command."
@@ -111,8 +117,10 @@
 (defun hive-mcp-docs-package-commentary (file-or-feature)
   "Get the Commentary section from FILE-OR-FEATURE.\nFILE-OR-FEATURE can be a filename or a feature symbol."
   (let* ((lib-file (cond
-  (((and (stringp file-or-feature) (file-exists-p file-or-feature)) file-or-feature) ((symbolp file-or-feature) (locate-library (symbol-name file-or-feature))))
-  (((stringp file-or-feature) (locate-library file-or-feature)) (t nil))))
+  ((and (stringp file-or-feature) (file-exists-p file-or-feature)) file-or-feature)
+  ((symbolp file-or-feature) (locate-library (symbol-name file-or-feature)))
+  ((stringp file-or-feature) (locate-library file-or-feature))
+  (t nil)))
         (file (when lib-file
     (if (string-suffix-p ".elc" lib-file) (let* ((src (clel-concat (file-name-sans-extension lib-file) ".el")))
     (if (file-exists-p src) src lib-file)) lib-file))))
@@ -138,13 +146,15 @@
   (interactive)
   (let* ((sym (symbol-at-point))
         (result (cond
-  (((fboundp sym) (describe-function sym)) ((boundp sym) (describe-variable sym))))))
+  ((fboundp sym) (hive-mcp-docs-describe-function sym))
+  ((boundp sym) (hive-mcp-docs-describe-variable sym))
+  (t (list :error "No describable symbol at point")))))
     (message "%S" result)))
 
 (defun hive-mcp-docs-apropos-interactive (pattern)
   "Interactive apropos search using MCP docs."
   (interactive "sApropos pattern: ")
-  (let* ((result (apropos pattern)))
+  (let* ((result (hive-mcp-docs-apropos pattern)))
     (with-current-buffer (get-buffer-create "*MCP Docs Apropos*")
     (erase-buffer)
     (insert (format "Apropos: %s\n" pattern))
@@ -155,12 +165,14 @@
     (goto-char (point-min)))
     (display-buffer "*MCP Docs Apropos*")))
 
-(transient-define-prefix hive-mcp-docs-transient (nil) "MCP documentation tools menu." (list "hive-mcp Documentation Tools" (list "Describe" ("f" "Describe function" describe-function) ("v" "Describe variable" describe-variable) ("." "Describe at point" hive-mcp-docs-describe-at-point)) (list "Search" ("a" "Apropos" hive-mcp-docs-apropos-interactive) ("p" "Package functions" hive-mcp-docs-package-functions-interactive) ("k" "Find keybindings" hive-mcp-docs-find-keybindings-interactive)) (list "Info" ("i" "Info lookup" info-lookup-symbol) ("c" "Package commentary" hive-mcp-docs-commentary-interactive))))
+(transient-define-prefix hive-mcp-docs-transient ()
+  "MCP documentation tools menu."
+  ["hive-mcp Documentation Tools" ["Describe" ("f" "Describe function" hive-mcp-docs-describe-function) ("v" "Describe variable" hive-mcp-docs-describe-variable) ("." "Describe at point" hive-mcp-docs-describe-at-point)] ["Search" ("a" "Apropos" hive-mcp-docs-apropos-interactive) ("p" "Package functions" hive-mcp-docs-package-functions-interactive) ("k" "Find keybindings" hive-mcp-docs-find-keybindings-interactive)] ["Info" ("i" "Info lookup" info-lookup-symbol) ("c" "Package commentary" hive-mcp-docs-commentary-interactive)]])
 
 (defun hive-mcp-docs-package-functions-interactive (prefix)
   "Interactive package functions lookup."
   (interactive "sPackage/prefix: ")
-  (let* ((result (package-functions prefix)))
+  (let* ((result (hive-mcp-docs-package-functions prefix)))
     (with-current-buffer (get-buffer-create "*MCP Docs Package*")
     (erase-buffer)
     (insert (format "Functions for: %s\n" prefix))
@@ -174,14 +186,14 @@
 (defun hive-mcp-docs-find-keybindings-interactive (command)
   "Interactive keybinding lookup."
   (interactive "CCommand: ")
-  (let* ((result (find-keybindings command)))
+  (let* ((result (hive-mcp-docs-find-keybindings command)))
     (if (plist-get result :error) (message "%s" (plist-get result :error)) (message "%s is bound to: %s" (plist-get result :command) (mapconcat (lambda (b)
     (plist-get b :key)) (plist-get result :bindings) ", ")))))
 
 (defun hive-mcp-docs-commentary-interactive (feature)
   "Interactive commentary lookup."
   (interactive "SFeature: ")
-  (let* ((result (package-commentary feature)))
+  (let* ((result (hive-mcp-docs-package-commentary feature)))
     (if (plist-get result :error) (message "%s" (plist-get result :error)) (with-current-buffer (get-buffer-create "*MCP Docs Commentary*")
     (erase-buffer)
     (insert (format "Commentary for: %s\n" (plist-get result :file)))

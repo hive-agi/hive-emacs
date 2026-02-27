@@ -46,7 +46,8 @@
   :group 'hive-mcp-swarm-presets
   :type 'boolean)
 
-(defvar hive-mcp-swarm-presets--cache nil)
+(defvar hive-mcp-swarm-presets--cache nil
+  "Cache of loaded presets (name -> file-path).")
 
 (defconst hive-mcp-swarm-presets--auto-shout-footer "\n\n---\n\n## MANDATORY: Task Completion Protocol\n\n**CRITICAL**: When you complete your assigned task, you MUST immediately call:\n\n```\nhivemind_shout(event_type: \"completed\", task: \"<your task summary>\", message: \"<brief result summary>\")\n```\n\nThis is NON-NEGOTIABLE. The coordinator cannot see your work until you shout completion.\n\nRules:\n1. NEVER go idle without shouting completion status\n2. If blocked or failed, shout with event_type: \"blocked\" or \"error\"\n3. Include actionable summary in the message field\n4. Shout progress periodically for long tasks: event_type: \"progress\"\n\nFailure to shout completion wastes coordinator context and blocks pipeline progress.\n\n---\n\n## Dogfooding: Report Tool Friction\n\nWhen you encounter friction, confusion, or pain points with hive-mcp tools:\n\n1. **Log it immediately** via memory (don't wait for task completion):\n```\nmcp_memory_add(\n  type: \"note\",\n  content: \"FRICTION: <tool-name>: <what you tried> -> <what went wrong/was confusing>\",\n  tags: [\"ling-feedback\", \"dogfood\", \"pain-point\"],\n  duration: \"long\"\n)\n```\n\n2. **Examples of reportable friction**:\n   - Tool returned unexpected format\n   - Missing parameter wasn't clear from docs\n   - Had to work around a limitation\n   - Error message was unhelpful\n   - Workflow required too many steps\n   - Tool name/purpose was confusing\n\n3. **Format**: Keep it actionable: `FRICTION: <tool>: tried X, expected Y, got Z`\n\nThis feedback improves the swarm tools for all agents." "Footer injected into all presets to ensure lings auto-shout on completion.")
 
@@ -62,17 +63,17 @@
 (defun hive-mcp-swarm-presets---load-all ()
   "Load all presets from built-in and custom directories.\nReturns hash-table of name -> file-path."
   (let* ((presets (make-hash-table :test 'equal)))
-    (dolist (entry (-scan-dir hive-mcp-swarm-presets-dir))
+    (dolist (entry (hive-mcp-swarm-presets---scan-dir hive-mcp-swarm-presets-dir))
     (puthash (car entry) (cdr entry) presets))
     (dolist (dir hive-mcp-swarm-presets-custom-dirs)
-    (dolist (entry (-scan-dir dir))
+    (dolist (entry (hive-mcp-swarm-presets---scan-dir dir))
     (puthash (car entry) (cdr entry) presets)))
     presets))
 
 (defun hive-mcp-swarm-presets-reload ()
   "Reload all presets from disk."
   (interactive)
-  (setq hive-mcp-swarm-presets--cache (-load-all))
+  (setq hive-mcp-swarm-presets--cache (hive-mcp-swarm-presets---load-all))
   (message "Loaded %d presets" (hash-table-count hive-mcp-swarm-presets--cache)))
 
 (defun hive-mcp-swarm-presets---ensure-loaded ()
@@ -82,24 +83,34 @@
 
 (defun hive-mcp-swarm-presets---get-file-content (name)
   "Get content of file-based preset NAME."
-  (-ensure-loaded)
+  (hive-mcp-swarm-presets---ensure-loaded)
   (when-let-star (list path (gethash name hive-mcp-swarm-presets--cache)) (with-temp-buffer
     (insert-file-contents path)
     (buffer-string))))
 
 (declare-function hive-mcp-api-call-tool "hive-mcp-api")
 
-(defvar hive-mcp-swarm-presets--chroma-available nil)
+(defvar hive-mcp-swarm-presets--chroma-available nil
+  "Cache for Chroma availability check. nil = not checked, t/`error' = result.")
 
 (defun hive-mcp-swarm-presets---chroma-available-p ()
   "Check if Chroma preset lookup is available.\nCaches result to avoid repeated MCP calls."
   (when hive-mcp-swarm-presets-use-chroma
     (cond
-  (((eq hive-mcp-swarm-presets--chroma-available t) t) ((eq hive-mcp-swarm-presets--chroma-available 'error) nil)))))
+  ((eq hive-mcp-swarm-presets--chroma-available t) t)
+  ((eq hive-mcp-swarm-presets--chroma-available 'error) nil)
+  (t (condition-case nil
+    (when (fboundp 'hive-mcp-api-call-tool)
+    (let* ((result (hive-mcp-api-call-tool "preset_status" nil)))
+    (when (and result (not (plist-get result :error)))
+    (setq hive-mcp-swarm-presets--chroma-available (if (plist-get result :chroma-configured?) t 'error))
+    (eq hive-mcp-swarm-presets--chroma-available t))))
+  (error (setq hive-mcp-swarm-presets--chroma-available 'error)
+      nil))))))
 
 (defun hive-mcp-swarm-presets---get-chroma-content (name)
   "Get preset NAME from Chroma vector DB via MCP.\nReturns content string or nil if not found/unavailable."
-  (when (-chroma-available-p)
+  (when (hive-mcp-swarm-presets---chroma-available-p)
     (condition-case err
     (when (fboundp 'hive-mcp-api-call-tool)
     (let* ((result (hive-mcp-api-call-tool "preset_get" (clel-seq (clel-concat (clojure-core-list :name) (clojure-core-list 'clojure.core/name))))))
@@ -112,7 +123,7 @@
 
 (defun hive-mcp-swarm-presets---list-chroma ()
   "List preset names from Chroma vector DB."
-  (when (-chroma-available-p)
+  (when (hive-mcp-swarm-presets---chroma-available-p)
     (condition-case nil
     (when (fboundp 'hive-mcp-api-call-tool)
     (let* ((result (hive-mcp-api-call-tool "preset_list" nil)))
@@ -123,7 +134,7 @@
 
 (defun hive-mcp-swarm-presets-search (query &optional limit)
   "Search presets using semantic similarity via Chroma.\nQUERY is a natural language description of desired preset.\nLIMIT is max results (default 5).\nReturns list of matching preset names or nil if Chroma unavailable."
-  (when (-chroma-available-p)
+  (when (hive-mcp-swarm-presets---chroma-available-p)
     (condition-case nil
     (when (fboundp 'hive-mcp-api-call-tool)
     (let* ((result (hive-mcp-api-call-tool "preset_search" (clel-seq (clel-concat (clojure-core-list :query) (clojure-core-list 'user/query) (clojure-core-list :limit) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/or) (clojure-core-list 'user/limit) (clojure-core-list 5)))))))))
@@ -152,7 +163,7 @@
   "Get preset NAME from memory system (conventions tagged swarm-preset).\nReturns nil if memory delegate is not yet configured."
   (when (fboundp 'hive-mcp-memory-query)
     (condition-case _err
-    (let* ((entries (hive-mcp-memory-query 'convention (list "swarm-preset" name) nil 1 nil nil)))
+    (let* ((entries (hive-mcp-memory-query 'convention (hive-mcp-swarm-presets-list "swarm-preset" name) nil 1 nil nil)))
     (when entries
     (plist-get (car entries) :content)))
   (error nil))))
@@ -167,16 +178,16 @@
 (defun hive-mcp-swarm-presets-list ()
   "List all available presets (chroma + file-based + memory-based)."
   (interactive)
-  (-ensure-loaded)
-  (let* ((chroma-presets (-list-chroma))
+  (hive-mcp-swarm-presets---ensure-loaded)
+  (let* ((chroma-presets (hive-mcp-swarm-presets---list-chroma))
         (file-presets (hash-table-keys hive-mcp-swarm-presets--cache))
-        (memory-presets (-list-memory))
+        (memory-presets (hive-mcp-swarm-presets---list-memory))
         (all-names (cl-remove-duplicates (append chroma-presets file-presets memory-presets) :test #'string-eq)))
     (if (called-interactively-p 'any) (message "Available presets: %s (chroma: %d, file: %d, memory: %d)" (string-join (clel-sort all-names #'string-lt) ", ") (length chroma-presets) (length file-presets) (length memory-presets)) all-names)))
 
 (defun hive-mcp-swarm-presets-get (name)
   "Get content of preset NAME.\nPriority: chroma -> memory-based (project-scoped) -> file-based (.md fallback)."
-  (or (-get-chroma-content name) (-get-memory-content name) (-get-file-content name)))
+  (or (hive-mcp-swarm-presets---get-chroma-content name) (hive-mcp-swarm-presets---get-memory-content name) (hive-mcp-swarm-presets---get-file-content name)))
 
 (defun hive-mcp-swarm-presets---build-full-prompt (presets injected-context)
   "Build full system prompt by concatenating PRESETS content.\nINJECTED-CONTEXT is prepended if non-nil."
@@ -209,9 +220,9 @@
   "Build combined system prompt from list of PRESETS.\nWhen `hive-mcp-swarm-presets-lazy-mode' is non-nil, returns lightweight\nprompt with preset names and fetch instructions (~300 tokens).\nOtherwise, returns full preset content concatenated (~5K+ tokens).\n\nReturns concatenated content with separator and auto-shout footer,\nor nil if no presets found."
   (if hive-mcp-swarm-presets-lazy-mode (when (or presets injected-context)
     (let* ((header (when presets
-    (-fetch-lazy-header presets))))
+    (hive-mcp-swarm-presets---fetch-lazy-header presets))))
     (if header (clel-concat (when injected-context
-    (clel-concat injected-context "\n\n---\n\n")) header hive-mcp-swarm-presets--auto-shout-footer) (-build-lazy-prompt presets injected-context)))) (-build-full-prompt presets injected-context)))
+    (clel-concat injected-context "\n\n---\n\n")) header hive-mcp-swarm-presets--auto-shout-footer) (hive-mcp-swarm-presets---build-lazy-prompt presets injected-context)))) (hive-mcp-swarm-presets---build-full-prompt presets injected-context)))
 
 (defun hive-mcp-swarm-presets-add-custom-dir (dir)
   "Add DIR to custom preset directories and reload."
@@ -231,11 +242,11 @@
 
 (defun hive-mcp-swarm-presets-role-to-tier (role)
   "Get tier configuration for ROLE.\nReturns plist with :backend and optionally :model, or nil for default."
-  (cdr (clel-assoc role hive-mcp-swarm-tier-mapping)))
+  (cdr (assoc role hive-mcp-swarm-tier-mapping)))
 
 (defun hive-mcp-swarm-presets-role-to-presets (role)
   "Convert ROLE to list of preset names."
-  (or (cdr (clel-assoc role hive-mcp-swarm-presets-role-mapping)) (list role)))
+  (or (cdr (assoc role hive-mcp-swarm-presets-role-mapping)) (hive-mcp-swarm-presets-list role)))
 
 (defcustom hive-mcp-swarm-presets-task-patterns '(("\\bSAA\\b\\|\\bSilence[- ]Abstract[- ]Act\\b" . ("saa")) ("\\b[Ss]ilence\\b\\|\\bground\\(ing\\)?\\b\\|\\bterritory\\b\\|\\bread first\\b\\|\\bexplor\\(e\\|ation\\|ing\\)\\b" . ("saa" "explorer")) ("\\b[Aa]bstract\\b\\|\\bEDN plan\\b\\|\\bstructure\\b\\|\\bcreate.*plan\\b\\|\\bplan\\(ning\\)?\\b" . ("saa" "planner")) ("\\b[Aa]ct\\b\\|\\bexecut\\(e\\|ion\\)\\b\\|\\bimplement\\(ation\\)?\\b\\|\\bTDD\\b\\|\\bDAG-Wave\\b" . ("saa" "executor")))
   "Patterns to detect SAA-related tasks and inject appropriate presets.\nEach entry is (REGEXP . PRESETS-LIST)."

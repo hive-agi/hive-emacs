@@ -11,7 +11,7 @@
 
 (require 'hive-mcp-context)
 
-(defvar hive-mcp-mode-map nil)
+(defvar hive-mcp-mode-map)
 
 (defgroup hive-mcp-triggers nil
   "Trigger and automation settings for hive-mcp."

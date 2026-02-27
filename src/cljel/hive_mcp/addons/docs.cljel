@@ -46,7 +46,7 @@ MCP Tools provided:
 
 (defn- -get-docstring [symbol]
   "Get the docstring for SYMBOL (function or variable)."
-  (cond
+  (elisp-cond
    ((fboundp symbol) (documentation symbol t))
    ((boundp symbol) (documentation-property symbol 'variable-documentation t))
    (t nil)))
@@ -70,7 +70,7 @@ MCP Tools provided:
 
 (defn- -symbol-type [symbol]
   "Determine the type of SYMBOL."
-  (cond
+  (elisp-cond
    ((and (fboundp symbol) (commandp symbol)) "interactive command")
    ((and (fboundp symbol) (macrop (symbol-function symbol))) "macro")
    ((and (fboundp symbol) (subrp (symbol-function symbol))) "built-in function")
@@ -223,7 +223,7 @@ Returns relevant Info node content if found."
 (defn package-commentary [file-or-feature]
   "Get the Commentary section from FILE-OR-FEATURE.
 FILE-OR-FEATURE can be a filename or a feature symbol."
-  (let* [lib-file (cond
+  (let* [lib-file (elisp-cond
                    ((and (stringp file-or-feature)
                          (file-exists-p file-or-feature))
                     file-or-feature)
@@ -282,7 +282,7 @@ FILE-OR-FEATURE can be a filename or a feature symbol."
   "Describe the symbol at point using MCP docs tools."
   (interactive)
   (let* [sym (symbol-at-point)
-         result (cond
+         result (elisp-cond
                  ((fboundp sym) (describe-function sym))
                  ((boundp sym) (describe-variable sym))
                  (t (list :error "No describable symbol at point")))]

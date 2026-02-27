@@ -70,7 +70,7 @@
 (defun hive-mcp-presentation-create (title format filename)
   "Create a new presentation with TITLE in FORMAT, saving to FILENAME."
   (interactive (list (clel-read-string "Presentation title: ") (intern (completing-read "Format: " '("beamer" "revealjs") nil t (symbol-name hive-mcp-presentation-default-format))) (read-file-name "Save as: " nil nil nil "presentation.org")))
-  (let* ((header (-generate-header format title)))
+  (let* ((header (hive-mcp-presentation---generate-header format title)))
     (find-file filename)
     (insert header)
     (insert (format "* %s\n" title))
@@ -83,7 +83,7 @@
 (defun hive-mcp-presentation-insert-slide (title &optional content)
   "Insert a new slide with TITLE and optional CONTENT."
   (interactive "sSlide title: ")
-  (let* ((format (-detect-format)))
+  (let* ((format (hive-mcp-presentation---detect-format)))
     (end-of-line)
     (insert "\n")
     (insert (pcase format
@@ -94,7 +94,7 @@
 (defun hive-mcp-presentation-insert-two-column (title left-title left-content right-title right-content)
   "Insert a two-column slide with TITLE.\nLEFT-TITLE and LEFT-CONTENT for left column.\nRIGHT-TITLE and RIGHT-CONTENT for right column."
   (interactive (list (clel-read-string "Slide title: ") (clel-read-string "Left column title: ") (clel-read-string "Left content: ") (clel-read-string "Right column title: ") (clel-read-string "Right content: ")))
-  (let* ((format (-detect-format)))
+  (let* ((format (hive-mcp-presentation---detect-format)))
     (end-of-line)
     (insert "\n")
     (pcase format
@@ -105,7 +105,7 @@
 (defun hive-mcp-presentation-insert-code-slide (title language code)
   "Insert a code slide with TITLE showing CODE in LANGUAGE."
   (interactive (list (clel-read-string "Slide title: ") (completing-read "Language: " '("clojure" "elisp" "python" "javascript" "go" "rust" "bash" "latex" "sql")) (clel-read-string "Code (or leave empty to fill later): ")))
-  (let* ((format (-detect-format)))
+  (let* ((format (hive-mcp-presentation---detect-format)))
     (end-of-line)
     (insert "\n")
     (pcase format
@@ -116,7 +116,7 @@
 (defun hive-mcp-presentation-insert-image-slide (title image-path &optional caption)
   "Insert an image slide with TITLE showing IMAGE-PATH with optional CAPTION."
   (interactive (list (clel-read-string "Slide title: ") (read-file-name "Image: ") (clel-read-string "Caption (optional): ")))
-  (let* ((format (-detect-format))
+  (let* ((format (hive-mcp-presentation---detect-format))
         (rel-path (file-relative-name image-path)))
     (end-of-line)
     (insert "\n")
@@ -128,7 +128,7 @@
 (defun hive-mcp-presentation-insert-quote-slide (title quote author)
   "Insert a quote slide with TITLE showing QUOTE by AUTHOR."
   (interactive (list (clel-read-string "Slide title: ") (clel-read-string "Quote: ") (clel-read-string "Author: ")))
-  (let* ((format (-detect-format)))
+  (let* ((format (hive-mcp-presentation---detect-format)))
     (end-of-line)
     (insert "\n")
     (pcase format
@@ -139,7 +139,7 @@
 (defun hive-mcp-presentation-insert-iframe-slide (title url)
   "Insert an iframe background slide with TITLE showing URL (Reveal.js only)."
   (interactive (list (clel-read-string "Slide title: ") (clel-read-string "URL: ")))
-  (let* ((format (-detect-format)))
+  (let* ((format (hive-mcp-presentation---detect-format)))
     (end-of-line)
     (insert "\n")
     (pcase format
@@ -149,7 +149,7 @@
 (defun hive-mcp-presentation-export ()
   "Export the current presentation to its target format."
   (interactive)
-  (let* ((format (-detect-format)))
+  (let* ((format (hive-mcp-presentation---detect-format)))
     (pcase format
   ((quote beamer) (org-beamer-export-to-pdf))
   ((quote revealjs) (org-reveal-export-to-html))
@@ -158,7 +158,7 @@
 (defun hive-mcp-presentation-preview ()
   "Preview the current presentation in PDF viewer or browser."
   (interactive)
-  (let* ((format (-detect-format)))
+  (let* ((format (hive-mcp-presentation---detect-format)))
     (pcase format
   ((quote beamer) (let* ((pdf-file (clel-concat (file-name-sans-extension buffer-file-name) ".pdf")))
     (if (file-exists-p pdf-file) (find-file-other-window pdf-file) (when (y-or-n-p "PDF not found. Export first?")
@@ -174,14 +174,14 @@
 (defun hive-mcp-presentation-export-and-preview ()
   "Export the presentation and immediately preview it.\nFor Beamer: exports to PDF and opens in PDF viewer.\nFor Reveal.js: exports to HTML and opens in browser."
   (interactive)
-  (export)
-  (preview))
+  (hive-mcp-presentation-export)
+  (hive-mcp-presentation-preview))
 
 (defun hive-mcp-presentation-refresh ()
   "Re-export and refresh the presentation preview.\nUse after making changes to see updates immediately."
   (interactive)
   (save-buffer)
-  (let* ((format (-detect-format)))
+  (let* ((format (hive-mcp-presentation---detect-format)))
     (pcase format
   ((quote beamer) (org-beamer-export-to-pdf) (let* ((pdf-file (clel-concat (file-name-sans-extension buffer-file-name) ".pdf")))
     (when-let-star (list pdf-buf (get-file-buffer pdf-file)) (with-current-buffer pdf-buf
@@ -198,7 +198,7 @@
   "Open presentation FILE, export it, and preview.\nFILE should be an org-mode presentation file."
   (interactive "fPresentation file: ")
   (find-file file)
-  (export-and-preview))
+  (hive-mcp-presentation-export-and-preview))
 
 (defun hive-mcp-presentation-open-html-in-browser (file)
   "Open exported HTML FILE directly in browser.\nIf FILE is an .org file, opens the corresponding .html file."
@@ -211,14 +211,16 @@
 (defun hive-mcp-presentation-open-current-html ()
   "Open the HTML version of current presentation in browser."
   (interactive)
-  (open-html-in-browser buffer-file-name))
+  (hive-mcp-presentation-open-html-in-browser buffer-file-name))
 
 (defun hive-mcp-presentation---detect-format ()
   "Detect presentation format from current buffer."
   (save-excursion
     (goto-char (point-min))
     (cond
-  (((re-search-forward "^#\\+LATEX_CLASS:.*beamer" nil t) 'beamer) ((re-search-forward "^#\\+REVEAL_ROOT:" nil t) 'revealjs)))))
+  ((re-search-forward "^#\\+LATEX_CLASS:.*beamer" nil t) 'beamer)
+  ((re-search-forward "^#\\+REVEAL_ROOT:" nil t) 'revealjs)
+  (t nil))))
 
 (defun hive-mcp-presentation-generate-outline (topic)
   "Generate a presentation outline for TOPIC using MCP memory context."
@@ -235,8 +237,8 @@
   "Save the current slide to MCP memory as a snippet."
   (interactive)
   (when (hive-mcp-api-available-p)
-    (let* ((slide-content (-get-current-slide))
-        (title (-get-slide-title)))
+    (let* ((slide-content (hive-mcp-presentation---get-current-slide))
+        (title (hive-mcp-presentation---get-slide-title)))
     (hive-mcp-api-memory-add "snippet" slide-content (list "presentation" "slide" (or title "untitled")))
     (message "Slide saved to memory: %s" (or title "untitled")))))
 
@@ -254,18 +256,20 @@
     (org-back-to-heading t)
     (org-element-property :title (org-element-at-point))))
 
-(transient-define-prefix hive-mcp-presentation-transient (nil) "Presentation creation menu." (list "hive-mcp Presentations" (list "Create" ("n" "New presentation" hive-mcp-presentation-create) ("s" "Insert slide" hive-mcp-presentation-insert-slide) ("2" "Two-column slide" hive-mcp-presentation-insert-two-column)) (list "Content" ("c" "Code slide" hive-mcp-presentation-insert-code-slide) ("i" "Image slide" hive-mcp-presentation-insert-image-slide) ("q" "Quote slide" hive-mcp-presentation-insert-quote-slide) ("f" "Iframe slide (Reveal)" hive-mcp-presentation-insert-iframe-slide)) (list "Export & Preview" ("e" "Export" hive-mcp-presentation-export) ("p" "Preview" hive-mcp-presentation-preview) ("r" "Refresh (export + preview)" hive-mcp-presentation-refresh) ("b" "Open HTML in browser" hive-mcp-presentation-open-current-html) ("x" "Export and preview" hive-mcp-presentation-export-and-preview)) (list "MCP" ("o" "Generate outline" hive-mcp-presentation-generate-outline) ("m" "Save slide to memory" hive-mcp-presentation-save-slide-to-memory))))
+(transient-define-prefix hive-mcp-presentation-transient ()
+  "Presentation creation menu."
+  ["hive-mcp Presentations" ["Create" ("n" "New presentation" hive-mcp-presentation-create) ("s" "Insert slide" hive-mcp-presentation-insert-slide) ("2" "Two-column slide" hive-mcp-presentation-insert-two-column)] ["Content" ("c" "Code slide" hive-mcp-presentation-insert-code-slide) ("i" "Image slide" hive-mcp-presentation-insert-image-slide) ("q" "Quote slide" hive-mcp-presentation-insert-quote-slide) ("f" "Iframe slide (Reveal)" hive-mcp-presentation-insert-iframe-slide)] ["Export & Preview" ("e" "Export" hive-mcp-presentation-export) ("p" "Preview" hive-mcp-presentation-preview) ("r" "Refresh (export + preview)" hive-mcp-presentation-refresh) ("b" "Open HTML in browser" hive-mcp-presentation-open-current-html) ("x" "Export and preview" hive-mcp-presentation-export-and-preview)] ["MCP" ("o" "Generate outline" hive-mcp-presentation-generate-outline) ("m" "Save slide to memory" hive-mcp-presentation-save-slide-to-memory)]])
 
 (defun hive-mcp-presentation-api-refresh (file)
   "API: Open FILE, export, and preview. Returns status message.\nUse this from Claude to refresh a presentation after edits."
   (find-file file)
-  (refresh)
+  (hive-mcp-presentation-refresh)
   (format "Refreshed presentation: %s" file))
 
 (defun hive-mcp-presentation-api-export-html (file)
   "API: Export FILE to HTML and return the output path."
   (find-file file)
-  (let* ((format (-detect-format)))
+  (let* ((format (hive-mcp-presentation---detect-format)))
     (pcase format
   ((quote revealjs) (org-reveal-export-to-html) (clel-concat (file-name-sans-extension file) ".html"))
   ((quote beamer) (error "Use api-export-pdf for Beamer presentations"))
@@ -274,7 +278,7 @@
 (defun hive-mcp-presentation-api-export-pdf (file)
   "API: Export FILE to PDF and return the output path."
   (find-file file)
-  (let* ((format (-detect-format)))
+  (let* ((format (hive-mcp-presentation---detect-format)))
     (pcase format
   ((quote beamer) (org-beamer-export-to-pdf) (clel-concat (file-name-sans-extension file) ".pdf"))
   ((quote revealjs) (error "Use api-export-html for Reveal.js presentations"))
@@ -290,7 +294,7 @@
   "API: Get presentation info for FILE as alist."
   (with-temp-buffer
     (insert-file-contents file)
-    (let* ((format (-detect-format)))
+    (let* ((format (hive-mcp-presentation---detect-format)))
     (clel-seq (clel-concat (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/file) (clojure-core-list '.) (clojure-core-list 'user/file)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/format) (clojure-core-list '.) (clojure-core-list 'clojure.core/format)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/html-exists) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/file-exists-p) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/concat) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/file-name-sans-extension) (clojure-core-list 'user/file)))) (clojure-core-list ".html")))))))))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/pdf-exists) (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/file-exists-p) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/concat) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/file-name-sans-extension) (clojure-core-list 'user/file)))) (clojure-core-list ".pdf")))))))))))))))
 
 (defun hive-mcp-presentation---addon-init ()

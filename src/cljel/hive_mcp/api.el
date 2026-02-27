@@ -396,7 +396,7 @@
 
 (defun hive-mcp-api-save-buffer ()
   "Save current buffer."
-  (save-buffer)
+  (hive-mcp-api-save-buffer)
   t)
 
 (defun hive-mcp-api-switch-buffer (name)
@@ -412,7 +412,7 @@
 (defun hive-mcp-api-kill-buffer (&optional name)
   "Kill buffer NAME or current buffer."
   (hive-mcp-api--validate-string-or-nil name "buffer name")
-  (kill-buffer name)
+  (hive-mcp-api-kill-buffer name)
   t)
 
 (defun hive-mcp-api-goto-line (line)
@@ -433,7 +433,7 @@
   (hive-mcp-api--validate-string string "search string")
   (when bound
     (hive-mcp-api--validate-positive-integer bound "bound"))
-  (search-forward string bound t))
+  (hive-mcp-api-search-forward string bound t))
 
 (defun hive-mcp-api-search-regexp (regexp &optional bound)
   "Search forward for REGEXP.\nBOUND limits the search to that buffer position.\nReturns position if found, nil otherwise."

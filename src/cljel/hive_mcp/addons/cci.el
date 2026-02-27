@@ -65,7 +65,8 @@
 (defvar hive-mcp-cci--task-counter 0
   "Counter for generating unique task IDs.")
 
-(defvar hive-mcp-cci--sync-timer nil)
+(defvar hive-mcp-cci--sync-timer nil
+  "Timer for automatic hivemind sync.")
 
 (defun hive-mcp-cci---generate-ling-id (name)
   "Generate unique ling ID for NAME."
@@ -86,7 +87,7 @@
   "Sync task completion status from hivemind coordinator.\nUpdates local task records based on hivemind agent messages."
   (interactive)
   (condition-case err
-    (let* ((hivemind-status (-get-hivemind-status))
+    (let* ((hivemind-status (hive-mcp-cci---get-hivemind-status))
         (updated 0))
     (when hivemind-status
     (maphash (lambda (task-id task)
@@ -105,7 +106,7 @@
         (msg-task (alist-get 'task msg))
         (data (alist-get 'data msg)))
     (when (and (equal event-type "completed") (or (equal msg-task task-id) (equal (alist-get 'task_id data) task-id)))
-    (-handle-hivemind-completion task-id (or (alist-get 'status data) "success") (or (alist-get 'result data) (alist-get 'message msg)) (alist-get 'files_modified data))
+    (hive-mcp-cci---handle-hivemind-completion task-id (or (alist-get 'status data) "success") (or (alist-get 'result data) (alist-get 'message msg)) (alist-get 'files_modified data))
     (cl-incf updated)))))))))) hive-mcp-cci--tasks))
     (when (and (called-interactively-p 'any) (> updated 0))
     (message "[cci] Synced %d task completions from hivemind" updated))
@@ -115,7 +116,7 @@
 
 (defun hive-mcp-cci---handle-hivemind-completion (task-id status result files)
   "Handle completion of TASK-ID with STATUS, RESULT, and FILES from hivemind."
-  (when-let-star (list task (gethash task-id hive-mcp-cci--tasks)) (plist-put task :status (intern (or status "success"))) (plist-put task :result result) (plist-put task :files-modified files) (plist-put task :completed-at (format-time-string "%FT%T%z")) (when-let-star (list ling-id (plist-get task :ling-id) ling (gethash ling-id hive-mcp-cci--lings)) (plist-put ling :status 'idle) (plist-put ling :current-task nil) (cl-incf (plist-get ling :tasks-completed))) (when-let-star (list callback (gethash task-id hive-mcp-cci--pending-completions)) (remhash task-id hive-mcp-cci--pending-completions) (funcall callback task)) (-emit-event "task-completed" (clel-seq (clel-concat (clojure-core-list (clel-seq (clel-concat (clojure-core-list "task-id") (clojure-core-list '.) (clojure-core-list 'user/task-id)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list "status") (clojure-core-list '.) (clojure-core-list 'user/status)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list "ling-id") (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/task) (clojure-core-list :ling-id)))))))))) (message "[cci] Task %s completed via hivemind: %s" task-id status)))
+  (when-let-star (list task (gethash task-id hive-mcp-cci--tasks)) (plist-put task :status (intern (or status "success"))) (plist-put task :result result) (plist-put task :files-modified files) (plist-put task :completed-at (format-time-string "%FT%T%z")) (when-let-star (list ling-id (plist-get task :ling-id) ling (gethash ling-id hive-mcp-cci--lings)) (plist-put ling :status 'idle) (plist-put ling :current-task nil) (cl-incf (plist-get ling :tasks-completed))) (when-let-star (list callback (gethash task-id hive-mcp-cci--pending-completions)) (remhash task-id hive-mcp-cci--pending-completions) (funcall callback task)) (hive-mcp-cci---emit-event "task-completed" (clel-seq (clel-concat (clojure-core-list (clel-seq (clel-concat (clojure-core-list "task-id") (clojure-core-list '.) (clojure-core-list 'user/task-id)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list "status") (clojure-core-list '.) (clojure-core-list 'user/status)))) (clojure-core-list (clel-seq (clel-concat (clojure-core-list "ling-id") (clojure-core-list '.) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'user/plist-get) (clojure-core-list 'user/task) (clojure-core-list :ling-id)))))))))) (message "[cci] Task %s completed via hivemind: %s" task-id status)))
 
 (defun hive-mcp-cci---start-sync-timer ()
   "Start the automatic hivemind sync timer."
@@ -140,7 +141,7 @@
     (error "claude-code-ide not available"))
   (when (>= (hash-table-count hive-mcp-cci--lings) hive-mcp-cci-max-lings)
     (error "Maximum ling count (%d) reached" hive-mcp-cci-max-lings))
-  (let* ((ling-id (-generate-ling-id symbol-name))
+  (let* ((ling-id (hive-mcp-cci---generate-ling-id symbol-name))
         (work-dir (or cwd (when (fboundp 'project-root)
     (when-let-star (list proj (project-current)) (project-root proj))) default-directory))
         (agent-id (or hivemind-agent symbol-name))
@@ -173,14 +174,14 @@
   "Kill all lings."
   (interactive)
   (maphash (lambda (id _unused)
-    (kill id)) hive-mcp-cci--lings)
+    (hive-mcp-cci-kill id)) hive-mcp-cci--lings)
   (clrhash hive-mcp-cci--lings)
   (message "[cci] Killed all lings"))
 
 (cl-defun hive-mcp-cci-dispatch (ling-id prompt &key timeout callback)
   "Dispatch PROMPT to LING-ID.\n\nTIMEOUT is milliseconds (default `hive-mcp-cci-default-timeout').\nCALLBACK is called with task plist when complete (via hivemind sync).\n\nReturns task-id.\n\nThe ling should call hivemind_shout with event_type=completed when done.\nUse `hive-mcp-cci-sync-from-hivemind' to poll for completion, or rely\non automatic sync if `hive-mcp-cci-auto-sync' is enabled."
   (let* ((ling (gethash ling-id hive-mcp-cci--lings))
-        (task-id (-generate-task-id ling-id))
+        (task-id (hive-mcp-cci---generate-task-id ling-id))
         (agent-id (plist-get ling :hivemind-agent)))
     (unless ling
     (error "Ling not found: %s" ling-id))
@@ -232,7 +233,7 @@
 
 (defun hive-mcp-cci-api-status ()
   "API: Get status."
-  (status))
+  (hive-mcp-cci-status))
 
 (defun hive-mcp-cci-api-collect (task-id)
   "API: Get task TASK-ID result."
@@ -240,7 +241,7 @@
 
 (defun hive-mcp-cci-api-sync ()
   "API: Sync task status from hivemind."
-  (sync-from-hivemind))
+  (hive-mcp-cci-sync-from-hivemind))
 
 (define-minor-mode hive-mcp-cci-mode
   "Minor mode for swarm orchestration via claude-code-ide.\n\nProvides structured communication with ling Claude instances\nusing hivemind for task completion tracking.\n\nKey features:\n- Spawn lings via claude-code-ide (not raw vterm)\n- Dispatch tasks with structured prompts\n- Completion tracking via hivemind_shout\n- Automatic sync from hivemind coordinator"
@@ -252,8 +253,8 @@
   (unless (require 'claude-code-ide nil t)
     (setq hive-mcp-cci-mode nil)
     (error "claude-code-ide not available"))
-  (-start-sync-timer)
-  (message "hive-mcp-cci enabled (hivemind completion)")) (-stop-sync-timer)))
+  (hive-mcp-cci---start-sync-timer)
+  (message "hive-mcp-cci enabled (hivemind completion)")) (hive-mcp-cci---stop-sync-timer)))
 
 (defalias 'hive-mcp-cci-claude-code-ide-mode 'hive-mcp-cci-mode "Backwards compatibility alias for `hive-mcp-cci-mode'.")
 

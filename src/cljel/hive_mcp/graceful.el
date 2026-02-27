@@ -52,7 +52,7 @@
 (defun hive-mcp-graceful--calculate-delay (attempt base-delay)
   "Calculate delay for ATTEMPT with BASE-DELAY using exponential backoff."
   (let* ((delay (* base-delay (expt hive-mcp-graceful-backoff-multiplier (1- attempt)))))
-    (cl-min delay hive-mcp-graceful-max-delay)))
+    (min delay hive-mcp-graceful-max-delay)))
 
 (defmacro hive-mcp-with-fallback (primary-expr fallback-expr)
   "Execute PRIMARY-EXPR, returning FALLBACK-EXPR on any error."

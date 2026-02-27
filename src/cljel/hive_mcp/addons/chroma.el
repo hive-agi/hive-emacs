@@ -54,14 +54,17 @@
   :group 'hive-mcp-chroma
   :type 'integer)
 
-(defvar hive-mcp-chroma--process nil)
+(defvar hive-mcp-chroma--process nil
+  "Process handle for docker-compose.")
 
 (defvar hive-mcp-chroma--status 'unknown
   "Current Chroma status: `running', `stopped', `starting', or `unknown'.")
 
-(defvar hive-mcp-chroma--fallback-active nil)
+(defvar hive-mcp-chroma--fallback-active nil
+  "When non-nil, using fallback local memory instead of Chroma.")
 
-(defvar hive-mcp-chroma--project-root nil)
+(defvar hive-mcp-chroma--project-root nil
+  "Cached path to the hive-mcp project root.")
 
 (defun hive-mcp-chroma---project-root ()
   "Find the hive-mcp project root directory.\nChecks in order:\n1. Cached value\n2. `hive-mcp-root' variable (set in user config)\n3. Computed from load-file-name (fallback)"
@@ -71,7 +74,7 @@
 
 (defun hive-mcp-chroma---docker-compose-file ()
   "Return the path to docker-compose.yml."
-  (or hive-mcp-chroma-docker-compose-file (expand-file-name "docker-compose.yml" (-project-root))))
+  (or hive-mcp-chroma-docker-compose-file (expand-file-name "docker-compose.yml" (hive-mcp-chroma---project-root))))
 
 (defun hive-mcp-chroma---docker-available-p ()
   "Check if docker is available."
@@ -104,22 +107,22 @@
 (defun hive-mcp-chroma-start ()
   "Start the Chroma container via docker-compose."
   (interactive)
-  (let* ((compose-file (-docker-compose-file)))
+  (let* ((compose-file (hive-mcp-chroma---docker-compose-file)))
     (unless (file-exists-p compose-file)
     (error "docker-compose.yml not found at %s" compose-file))
-    (unless (-docker-available-p)
+    (unless (hive-mcp-chroma---docker-available-p)
     (error "Docker is not available"))
-    (unless (-compose-available-p)
+    (unless (hive-mcp-chroma---compose-available-p)
     (error "docker-compose is not available"))
     (setq hive-mcp-chroma--status 'starting)
     (message "Starting Chroma container...")
     (let* ((default-directory (file-name-directory compose-file))
-        (cmd (-compose-command))
+        (cmd (hive-mcp-chroma---compose-command))
         (args (append (cdr cmd) (list "-f" compose-file "up" "-d"))))
     (setq hive-mcp-chroma--process (apply #'start-process "hive-mcp-chroma" "*hive-mcp-chroma*" (car cmd) args))
     (set-process-sentinel hive-mcp-chroma--process (lambda (proc _event)
     (when (eq (process-status proc) 'exit)
-    (if (zerop (process-exit-status proc)) (-wait-for-healthy) (setq hive-mcp-chroma--status 'stopped))))))))
+    (if (zerop (process-exit-status proc)) (hive-mcp-chroma---wait-for-healthy) (setq hive-mcp-chroma--status 'stopped))))))))
 
 (defun hive-mcp-chroma---wait-for-healthy ()
   "Wait for Chroma to become healthy, then configure."
@@ -131,16 +134,26 @@
     (progn
   (setq attempts (1+ attempts))
   (cond
-  (((-health-check) (cancel-timer timer) (setq hive-mcp-chroma--status 'running) (setq hive-mcp-chroma--fallback-active nil) (-configure-mcp) (message "Chroma is running and connected")) ((>= attempts max-attempts) (cancel-timer timer) (setq hive-mcp-chroma--status 'stopped) (setq hive-mcp-chroma--fallback-active t) (message "Chroma failed to start, using local memory fallback")))))
+  ((hive-mcp-chroma---health-check) (progn
+  (cancel-timer timer)
+  (setq hive-mcp-chroma--status 'running)
+  (setq hive-mcp-chroma--fallback-active nil)
+  (hive-mcp-chroma---configure-mcp)
+  (message "Chroma is running and connected")))
+  ((>= attempts max-attempts) (progn
+  (cancel-timer timer)
+  (setq hive-mcp-chroma--status 'stopped)
+  (setq hive-mcp-chroma--fallback-active t)
+  (message "Chroma failed to start, using local memory fallback")))))
   (error (cancel-timer timer)
       (message "[chroma] Health check timer error: %s" (error-message-string err)))))))))
 
 (defun hive-mcp-chroma-stop ()
   "Stop the Chroma container."
   (interactive)
-  (let* ((compose-file (-docker-compose-file))
+  (let* ((compose-file (hive-mcp-chroma---docker-compose-file))
         (default-directory (file-name-directory compose-file))
-        (cmd (-compose-command))
+        (cmd (hive-mcp-chroma---compose-command))
         (args (append (cdr cmd) (list "-f" compose-file "down"))))
     (apply #'call-process (car cmd) nil nil nil args)
     (setq hive-mcp-chroma--status 'stopped)
@@ -149,9 +162,9 @@
 (defun hive-mcp-chroma-restart ()
   "Restart the Chroma container."
   (interactive)
-  (stop)
+  (hive-mcp-chroma-stop)
   (sleep-for 1)
-  (start))
+  (hive-mcp-chroma-start))
 
 (defun hive-mcp-chroma---configure-mcp ()
   "Configure the MCP server to use Chroma."
@@ -163,7 +176,7 @@
   "Search memory entries semantically for QUERY.\nLIMIT is max results (default 10).\nTYPE filters by memory type (note, snippet, convention, decision)."
   (interactive "sSearch query: ")
   (let* ((limit (or limit 10)))
-    (if (and (not hive-mcp-chroma--fallback-active) (eq hive-mcp-chroma--status 'running)) (-semantic-search query limit type) (-local-search query limit type))))
+    (if (and (not hive-mcp-chroma--fallback-active) (eq hive-mcp-chroma--status 'running)) (hive-mcp-chroma---semantic-search query limit type) (hive-mcp-chroma---local-search query limit type))))
 
 (defun hive-mcp-chroma---semantic-search (query limit type)
   "Perform semantic search via Chroma."
@@ -171,7 +184,7 @@
     (hive-mcp--send-request "tools/call" (clel-seq (clel-concat (clojure-core-list :name) (clojure-core-list "cider_eval_silent") (clojure-core-list :arguments) (clojure-core-list (clel-seq (clel-concat (clojure-core-list :code) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/format) (clojure-core-list "(do\n        (require '[hive-mcp.chroma :as chroma])\n        (chroma/search-similar %S :limit %d %s))") (clojure-core-list 'user/query) (clojure-core-list 'user/limit) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'if) (clojure-core-list 'clojure.core/type) (clojure-core-list (clel-seq (clel-concat (clojure-core-list 'clojure.core/format) (clojure-core-list ":type %S") (clojure-core-list 'clojure.core/type)))) (clojure-core-list "")))))))))))) (lambda (response)
     (if (plist-get response :error) (progn
   (message "Semantic search failed, falling back to local: %s" (plist-get response :error))
-  (-local-search query limit type)) (-display-results (plist-get response :result) "Semantic Search"))))))
+  (hive-mcp-chroma---local-search query limit type)) (hive-mcp-chroma---display-results (plist-get response :result) "Semantic Search"))))))
 
 (defun hive-mcp-chroma---local-search (query limit type)
   "Fallback local search using mcp_memory_query."
@@ -180,7 +193,7 @@
     (let* ((entries (plist-get response :result))
         (filtered (seq-filter (lambda (entry)
     (string-match-p (regexp-quote query) (or (plist-get entry :content) ""))) entries)))
-    (-display-results (seq-take filtered (or limit 10)) "Local Search (fallback)"))))))
+    (hive-mcp-chroma---display-results (seq-take filtered (or limit 10)) "Local Search (fallback)"))))))
 
 (defun hive-mcp-chroma---display-results (results source)
   "Display search RESULTS from SOURCE in a buffer."
@@ -226,11 +239,11 @@
     (insert (format "Host: %s:%d\n" hive-mcp-chroma-host hive-mcp-chroma-port))
     (insert (format "Embedding Provider: %s\n" hive-mcp-chroma-embedding-provider))
     (insert "\n--- Checks ---\n")
-    (insert (format "Docker: %s\n" (if (-docker-available-p) "OK" "Not found")))
-    (insert (format "docker-compose: %s\n" (if (-compose-available-p) "OK" "Not found")))
-    (insert (format "Ollama: %s\n" (if (-ollama-available-p) "OK" "Not found")))
-    (insert (format "Chroma health: %s\n" (if (-health-check) "OK" "Not responding")))
-    (insert (format "docker-compose.yml: %s\n" (if (file-exists-p (-docker-compose-file)) "Found" "Not found")))
+    (insert (format "Docker: %s\n" (if (hive-mcp-chroma---docker-available-p) "OK" "Not found")))
+    (insert (format "docker-compose: %s\n" (if (hive-mcp-chroma---compose-available-p) "OK" "Not found")))
+    (insert (format "Ollama: %s\n" (if (hive-mcp-chroma---ollama-available-p) "OK" "Not found")))
+    (insert (format "Chroma health: %s\n" (if (hive-mcp-chroma---health-check) "OK" "Not responding")))
+    (insert (format "docker-compose.yml: %s\n" (if (file-exists-p (hive-mcp-chroma---docker-compose-file)) "Found" "Not found")))
     (goto-char (point-min))))
     (display-buffer buf)))
 
@@ -238,7 +251,9 @@
   "MCP Chroma menu."
   (interactive)
   (if (require 'transient nil t) (progn
-  (transient-define-prefix hive-mcp-chroma--menu (nil) "MCP Chroma menu." (list "hive-mcp + Chroma" (list "Container" ("s" "Start" hive-mcp-chroma-start) ("S" "Stop" hive-mcp-chroma-stop) ("r" "Restart" hive-mcp-chroma-restart) ("i" "Status" hive-mcp-chroma-status)) (list "Search" ("/" "Semantic search" hive-mcp-chroma-search) ("I" "Index all entries" hive-mcp-chroma-index-all))))
+  (transient-define-prefix hive-mcp-chroma--menu ()
+  "MCP Chroma menu."
+  ["hive-mcp + Chroma" ["Container" ("s" "Start" hive-mcp-chroma-start) ("S" "Stop" hive-mcp-chroma-stop) ("r" "Restart" hive-mcp-chroma-restart) ("i" "Status" hive-mcp-chroma-status)] ["Search" ("/" "Semantic search" hive-mcp-chroma-search) ("I" "Index all entries" hive-mcp-chroma-index-all)]])
   (hive-mcp-chroma--menu)) (message "Transient not available")))
 
 (defvar hive-mcp-chroma-mode-map (let* ((map (make-sparse-keymap)))
@@ -262,7 +277,7 @@
   (require 'hive-mcp-api nil t)
   (require 'json)
   (require 'url)
-  (let* ((script-path (expand-file-name "scripts/chroma-check.bb" (-project-root)))
+  (let* ((script-path (expand-file-name "scripts/chroma-check.bb" (hive-mcp-chroma---project-root)))
         (status-json (when (file-exists-p script-path)
     (shell-command-to-string (format "bb %s status 2>/dev/null" script-path))))
         (status (when (and status-json (not (string-empty-p status-json)))
@@ -273,7 +288,8 @@
         (model (alist-get 'ollama-model status))
         (chroma (alist-get 'chroma-running status)))
     (setq hive-mcp-chroma-embedding-provider (cond
-  (((and ollama model) 'ollama) (t 'mock))))
+  ((and ollama model) 'ollama)
+  (t 'mock)))
     (setq hive-mcp-chroma--status (if chroma 'running 'stopped))
     (setq hive-mcp-chroma--fallback-active (not chroma))
     (when (and hive-mcp-chroma-auto-start docker compose (not chroma))
@@ -283,10 +299,16 @@
     (setq hive-mcp-chroma--status 'running)
     (setq hive-mcp-chroma--fallback-active nil))))
     (when (eq hive-mcp-chroma--status 'running)
-    (-configure-mcp))
+    (hive-mcp-chroma---configure-mcp))
     (cond
-  (((eq hive-mcp-chroma--status 'running) (message "hive-mcp-chroma: Semantic search enabled (Chroma + %s)" hive-mcp-chroma-embedding-provider)) ((not docker) (message "hive-mcp-chroma: Docker not available, using local memory fallback") (message "  See: https://github.com/BuddhiLW/hive-mcp#semantic-memory-search")))
-  (((not ollama) (message "hive-mcp-chroma: Ollama not installed, using mock embeddings") (message "  Install: curl -fsSL https://ollama.com/install.sh | sh")) (t (message "hive-mcp-chroma: Using local memory fallback"))))) (message "hive-mcp-chroma: bb script not found, manual setup required"))))
+  ((eq hive-mcp-chroma--status 'running) (message "hive-mcp-chroma: Semantic search enabled (Chroma + %s)" hive-mcp-chroma-embedding-provider))
+  ((not docker) (progn
+  (message "hive-mcp-chroma: Docker not available, using local memory fallback")
+  (message "  See: https://github.com/BuddhiLW/hive-mcp#semantic-memory-search")))
+  ((not ollama) (progn
+  (message "hive-mcp-chroma: Ollama not installed, using mock embeddings")
+  (message "  Install: curl -fsSL https://ollama.com/install.sh | sh")))
+  (t (message "hive-mcp-chroma: Using local memory fallback")))) (message "hive-mcp-chroma: bb script not found, manual setup required"))))
 
 (defun hive-mcp-chroma---addon-shutdown ()
   "Shutdown Chroma addon."

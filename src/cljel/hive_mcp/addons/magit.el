@@ -50,7 +50,8 @@
   :group 'hive-mcp-magit
   :type 'boolean)
 
-(defvar hive-mcp-magit--last-operation nil)
+(defvar hive-mcp-magit--last-operation nil
+  "Last git operation performed.")
 
 (defun hive-mcp-magit---magit-available-p ()
   "Return non-nil if Magit is available and preferred."
@@ -58,234 +59,237 @@
 
 (defun hive-mcp-magit---repo-root ()
   "Return the git repository root directory."
-  (if (-magit-available-p) (magit-toplevel) (let* ((root (locate-dominating-file default-directory ".git")))
+  (if (hive-mcp-magit---magit-available-p) (magit-toplevel) (let* ((root (locate-dominating-file default-directory ".git")))
     (when root
     (expand-file-name root)))))
 
 (defun hive-mcp-magit---ensure-repo ()
   "Ensure we are in a git repository."
-  (unless (-repo-root)
+  (unless (hive-mcp-magit---repo-root)
     (error "Not in a git repository")))
 
 (defun hive-mcp-magit---shell-command (cmd)
   "Execute git CMD and return trimmed output."
-  (let* ((default-directory (or (-repo-root) default-directory)))
+  (let* ((default-directory (or (hive-mcp-magit---repo-root) default-directory)))
     (string-trim (shell-command-to-string cmd))))
 
 (defun hive-mcp-magit---shell-lines (cmd)
   "Execute git CMD and return list of output lines."
-  (let* ((output (-shell-command cmd)))
+  (let* ((output (hive-mcp-magit---shell-command cmd)))
     (unless (string-empty-p output)
     (split-string output "\n" t))))
 
 (defun hive-mcp-magit---get-staged-files ()
   "Return list of staged files."
-  (-shell-lines "git diff --cached --name-only 2>/dev/null"))
+  (hive-mcp-magit---shell-lines "git diff --cached --name-only 2>/dev/null"))
 
 (defun hive-mcp-magit---get-unstaged-files ()
   "Return list of unstaged modified files."
-  (-shell-lines "git diff --name-only 2>/dev/null"))
+  (hive-mcp-magit---shell-lines "git diff --name-only 2>/dev/null"))
 
 (defun hive-mcp-magit---get-untracked-files ()
   "Return list of untracked files."
-  (-shell-lines "git ls-files --others --exclude-standard 2>/dev/null"))
+  (hive-mcp-magit---shell-lines "git ls-files --others --exclude-standard 2>/dev/null"))
 
 (defun hive-mcp-magit---get-current-branch ()
   "Return current branch name."
-  (if (-magit-available-p) (magit-get-current-branch) (-shell-command "git rev-parse --abbrev-ref HEAD 2>/dev/null")))
+  (if (hive-mcp-magit---magit-available-p) (magit-get-current-branch) (hive-mcp-magit---shell-command "git rev-parse --abbrev-ref HEAD 2>/dev/null")))
 
 (defun hive-mcp-magit---get-upstream-branch ()
   "Return upstream tracking branch."
-  (if (-magit-available-p) (magit-get-upstream-branch) (let* ((result (-shell-command "git rev-parse --abbrev-ref @{upstream} 2>/dev/null")))
+  (if (hive-mcp-magit---magit-available-p) (magit-get-upstream-branch) (let* ((result (hive-mcp-magit---shell-command "git rev-parse --abbrev-ref @{upstream} 2>/dev/null")))
     (unless (string-empty-p result)
     result))))
 
 (defun hive-mcp-magit---get-stash-list ()
   "Return list of stashes."
-  (-shell-lines "git stash list --oneline 2>/dev/null"))
+  (hive-mcp-magit---shell-lines "git stash list --oneline 2>/dev/null"))
 
 (defun hive-mcp-magit---get-recent-commits (&optional count)
   "Return last COUNT commits as list of plists."
   (let* ((n (or count hive-mcp-magit-log-count))
         (format-str "%H%x00%h%x00%an%x00%ae%x00%s%x00%ai")
-        (lines (-shell-lines (format "git log -n%d --format='%s' 2>/dev/null" n format-str))))
+        (lines (hive-mcp-magit---shell-lines (format "git log -n%d --format='%s' 2>/dev/null" n format-str))))
     (mapcar (lambda (line)
     (let* ((parts (split-string line "\x00")))
     (list :hash (nth 0 parts) :short-hash (nth 1 parts) :author (nth 2 parts) :email (nth 3 parts) :subject (nth 4 parts) :date (nth 5 parts)))) lines)))
 
 (defun hive-mcp-magit---get-ahead-behind ()
   "Return commits ahead/behind upstream as plist."
-  (let* ((result (-shell-command "git rev-list --left-right --count @{upstream}...HEAD 2>/dev/null")))
+  (let* ((result (hive-mcp-magit---shell-command "git rev-list --left-right --count @{upstream}...HEAD 2>/dev/null")))
     (if (string-empty-p result) (list :ahead 0 :behind 0) (let* ((parts (split-string result)))
     (list :behind (string-to-number (or (nth 0 parts) "0")) :ahead (string-to-number (or (nth 1 parts) "0")))))))
 
 (defun hive-mcp-magit---list-local-branches ()
   "Return list of local branch names."
-  (if (-magit-available-p) (magit-list-local-branch-names) (-shell-lines "git branch --format='%(refname:short)' 2>/dev/null")))
+  (if (hive-mcp-magit---magit-available-p) (magit-list-local-branch-names) (hive-mcp-magit---shell-lines "git branch --format='%(refname:short)' 2>/dev/null")))
 
 (defun hive-mcp-magit---list-remote-branches ()
   "Return list of remote branch names."
-  (if (-magit-available-p) (magit-list-remote-branch-names) (-shell-lines "git branch -r --format='%(refname:short)' 2>/dev/null")))
+  (if (hive-mcp-magit---magit-available-p) (magit-list-remote-branch-names) (hive-mcp-magit---shell-lines "git branch -r --format='%(refname:short)' 2>/dev/null")))
 
 (defun hive-mcp-magit---create-branch (name &optional start-point)
   "Create branch NAME at START-POINT."
-  (-ensure-repo)
+  (hive-mcp-magit---ensure-repo)
   (let* ((start (or start-point "HEAD")))
-    (-shell-command (format "git branch %s %s 2>&1" (shell-quote-argument name) (shell-quote-argument start)))))
+    (hive-mcp-magit---shell-command (format "git branch %s %s 2>&1" (shell-quote-argument name) (shell-quote-argument start)))))
 
 (defun hive-mcp-magit---checkout-branch (name)
   "Checkout branch NAME."
-  (-ensure-repo)
-  (-shell-command (format "git checkout %s 2>&1" (shell-quote-argument name))))
+  (hive-mcp-magit---ensure-repo)
+  (hive-mcp-magit---shell-command (format "git checkout %s 2>&1" (shell-quote-argument name))))
 
 (defun hive-mcp-magit---stage-file (file)
   "Stage FILE for commit."
-  (-ensure-repo)
-  (let* ((result (-shell-command (format "git add %s 2>&1" (shell-quote-argument file)))))
-    (when (-magit-available-p)
+  (hive-mcp-magit---ensure-repo)
+  (let* ((result (hive-mcp-magit---shell-command (format "git add %s 2>&1" (shell-quote-argument file)))))
+    (when (hive-mcp-magit---magit-available-p)
     (magit-refresh))
     result))
 
 (defun hive-mcp-magit---stage-all ()
   "Stage all modified files."
-  (-ensure-repo)
-  (if (-magit-available-p) (magit-stage-modified t) (-shell-command "git add -u 2>&1")))
+  (hive-mcp-magit---ensure-repo)
+  (if (hive-mcp-magit---magit-available-p) (magit-stage-modified t) (hive-mcp-magit---shell-command "git add -u 2>&1")))
 
 (defun hive-mcp-magit---unstage-file (file)
   "Unstage FILE."
-  (-ensure-repo)
-  (let* ((result (-shell-command (format "git reset HEAD %s 2>&1" (shell-quote-argument file)))))
-    (when (-magit-available-p)
+  (hive-mcp-magit---ensure-repo)
+  (let* ((result (hive-mcp-magit---shell-command (format "git reset HEAD %s 2>&1" (shell-quote-argument file)))))
+    (when (hive-mcp-magit---magit-available-p)
     (magit-refresh))
     result))
 
 (defun hive-mcp-magit---unstage-all ()
   "Unstage all staged files."
-  (-ensure-repo)
-  (if (-magit-available-p) (magit-unstage-all) (-shell-command "git reset HEAD 2>&1")))
+  (hive-mcp-magit---ensure-repo)
+  (if (hive-mcp-magit---magit-available-p) (magit-unstage-all) (hive-mcp-magit---shell-command "git reset HEAD 2>&1")))
 
 (defun hive-mcp-magit---commit (message)
   "Create commit with MESSAGE."
-  (-ensure-repo)
-  (let* ((staged (-get-staged-files)))
+  (hive-mcp-magit---ensure-repo)
+  (let* ((staged (hive-mcp-magit---get-staged-files)))
     (unless staged
     (error "No staged changes to commit"))
-    (let* ((result (-shell-command (format "git commit -m %s 2>&1" (shell-quote-argument message)))))
-    (when (-magit-available-p)
+    (let* ((result (hive-mcp-magit---shell-command (format "git commit -m %s 2>&1" (shell-quote-argument message)))))
+    (when (hive-mcp-magit---magit-available-p)
     (magit-refresh))
     result)))
 
 (defun hive-mcp-magit---commit-all (message)
   "Stage all changes and commit with MESSAGE."
-  (-ensure-repo)
-  (let* ((result (-shell-command (format "git commit -am %s 2>&1" (shell-quote-argument message)))))
-    (when (-magit-available-p)
+  (hive-mcp-magit---ensure-repo)
+  (let* ((result (hive-mcp-magit---shell-command (format "git commit -am %s 2>&1" (shell-quote-argument message)))))
+    (when (hive-mcp-magit---magit-available-p)
     (magit-refresh))
     result))
 
 (defun hive-mcp-magit---diff-staged ()
   "Get diff of staged changes."
-  (-ensure-repo)
-  (-shell-command (format "git diff --cached -U%d 2>/dev/null" hive-mcp-magit-diff-context-lines)))
+  (hive-mcp-magit---ensure-repo)
+  (hive-mcp-magit---shell-command (format "git diff --cached -U%d 2>/dev/null" hive-mcp-magit-diff-context-lines)))
 
 (defun hive-mcp-magit---diff-unstaged ()
   "Get diff of unstaged changes."
-  (-ensure-repo)
-  (-shell-command (format "git diff -U%d 2>/dev/null" hive-mcp-magit-diff-context-lines)))
+  (hive-mcp-magit---ensure-repo)
+  (hive-mcp-magit---shell-command (format "git diff -U%d 2>/dev/null" hive-mcp-magit-diff-context-lines)))
 
 (defun hive-mcp-magit---fetch (&optional remote)
   "Fetch from REMOTE (default: all remotes)."
-  (-ensure-repo)
-  (let* ((result (if remote (-shell-command (format "git fetch %s 2>&1" (shell-quote-argument remote))) (-shell-command "git fetch --all 2>&1"))))
-    (when (-magit-available-p)
+  (hive-mcp-magit---ensure-repo)
+  (let* ((result (if remote (hive-mcp-magit---shell-command (format "git fetch %s 2>&1" (shell-quote-argument remote))) (hive-mcp-magit---shell-command "git fetch --all 2>&1"))))
+    (when (hive-mcp-magit---magit-available-p)
     (magit-refresh))
     result))
 
 (defun hive-mcp-magit---pull ()
   "Pull from upstream."
-  (-ensure-repo)
-  (let* ((result (-shell-command "git pull 2>&1")))
-    (when (-magit-available-p)
+  (hive-mcp-magit---ensure-repo)
+  (let* ((result (hive-mcp-magit---shell-command "git pull 2>&1")))
+    (when (hive-mcp-magit---magit-available-p)
     (magit-refresh))
     result))
 
 (defun hive-mcp-magit---push (&optional set-upstream)
   "Push to remote.  SET-UPSTREAM to set tracking if needed."
-  (-ensure-repo)
-  (let* ((branch (-get-current-branch))
-        (upstream (-get-upstream-branch))
+  (hive-mcp-magit---ensure-repo)
+  (let* ((branch (hive-mcp-magit---get-current-branch))
+        (upstream (hive-mcp-magit---get-upstream-branch))
         (cmd (if (or upstream (not set-upstream)) "git push 2>&1" (format "git push -u origin %s 2>&1" (shell-quote-argument branch))))
-        (result (-shell-command cmd)))
-    (when (-magit-available-p)
+        (result (hive-mcp-magit---shell-command cmd)))
+    (when (hive-mcp-magit---magit-available-p)
     (magit-refresh))
     result))
 
 (defun hive-mcp-magit-api-status (&optional directory)
   "Return comprehensive repository status as plist.\nDIRECTORY overrides `default-directory' if provided."
   (let* ((default-directory (or directory default-directory)))
-    (-ensure-repo)
-    (let* ((branch (-get-current-branch))
-        (upstream (-get-upstream-branch))
-        (ahead-behind (-get-ahead-behind)))
-    (list :repository (-repo-root) :branch branch :upstream upstream :ahead (plist-get ahead-behind :ahead) :behind (plist-get ahead-behind :behind) :staged (-get-staged-files) :staged-count (length (-get-staged-files)) :unstaged (-get-unstaged-files) :unstaged-count (length (-get-unstaged-files)) :untracked (-get-untracked-files) :untracked-count (length (-get-untracked-files)) :stashes (-get-stash-list) :recent-commits (-get-recent-commits 5) :clean (and (null (-get-staged-files)) (null (-get-unstaged-files)) (null (-get-untracked-files))) :magit-available (-magit-available-p)))))
+    (hive-mcp-magit---ensure-repo)
+    (let* ((branch (hive-mcp-magit---get-current-branch))
+        (upstream (hive-mcp-magit---get-upstream-branch))
+        (ahead-behind (hive-mcp-magit---get-ahead-behind)))
+    (list :repository (hive-mcp-magit---repo-root) :branch branch :upstream upstream :ahead (plist-get ahead-behind :ahead) :behind (plist-get ahead-behind :behind) :staged (hive-mcp-magit---get-staged-files) :staged-count (length (hive-mcp-magit---get-staged-files)) :unstaged (hive-mcp-magit---get-unstaged-files) :unstaged-count (length (hive-mcp-magit---get-unstaged-files)) :untracked (hive-mcp-magit---get-untracked-files) :untracked-count (length (hive-mcp-magit---get-untracked-files)) :stashes (hive-mcp-magit---get-stash-list) :recent-commits (hive-mcp-magit---get-recent-commits 5) :clean (and (null (hive-mcp-magit---get-staged-files)) (null (hive-mcp-magit---get-unstaged-files)) (null (hive-mcp-magit---get-untracked-files))) :magit-available (hive-mcp-magit---magit-available-p)))))
 
 (defun hive-mcp-magit-api-branches (&optional directory)
   "Return branch information as plist.\nDIRECTORY overrides `default-directory' if provided."
   (let* ((default-directory (or directory default-directory)))
-    (-ensure-repo)
-    (list :current (-get-current-branch) :upstream (-get-upstream-branch) :local (-list-local-branches) :remote (-list-remote-branches))))
+    (hive-mcp-magit---ensure-repo)
+    (list :current (hive-mcp-magit---get-current-branch) :upstream (hive-mcp-magit---get-upstream-branch) :local (hive-mcp-magit---list-local-branches) :remote (hive-mcp-magit---list-remote-branches))))
 
 (defun hive-mcp-magit-api-log (&optional count directory)
   "Return recent COUNT commits.\nDIRECTORY overrides `default-directory' if provided."
   (let* ((default-directory (or directory default-directory)))
-    (-ensure-repo)
-    (-get-recent-commits count)))
+    (hive-mcp-magit---ensure-repo)
+    (hive-mcp-magit---get-recent-commits count)))
 
 (defun hive-mcp-magit-api-diff (&optional target directory)
   "Return diff for TARGET (staged, unstaged, or all).\nDIRECTORY overrides `default-directory' if provided."
   (let* ((default-directory (or directory default-directory)))
-    (-ensure-repo)
+    (hive-mcp-magit---ensure-repo)
     (pcase target
-  ((or (quote nil) (quote staged)) (-diff-staged))
-  ((quote unstaged) (-diff-unstaged))
-  ((quote all) (clel-concat (-diff-staged) "\n---\n" (-diff-unstaged)))
-  ('_ (-diff-staged)))))
+  ((or (quote nil) (quote staged)) (hive-mcp-magit---diff-staged))
+  ((quote unstaged) (hive-mcp-magit---diff-unstaged))
+  ((quote all) (clel-concat (hive-mcp-magit---diff-staged) "\n---\n" (hive-mcp-magit---diff-unstaged)))
+  ('_ (hive-mcp-magit---diff-staged)))))
 
 (defun hive-mcp-magit-api-stage (files &optional directory)
   "Stage FILES for commit.\nDIRECTORY overrides `default-directory' if provided."
   (let* ((default-directory (or directory default-directory)))
-    (-ensure-repo)
+    (hive-mcp-magit---ensure-repo)
     (cond
-  (((eq files 'all) (-stage-all)) ((stringp files) (-stage-file files))))))
+  ((eq files 'all) (hive-mcp-magit---stage-all))
+  ((stringp files) (hive-mcp-magit---stage-file files))
+  ((listp files) (dolist (f files)
+    (hive-mcp-magit---stage-file f))))))
 
 (defun hive-mcp-magit-api-commit (message &optional options directory)
   "Create commit with MESSAGE.\nOPTIONS may contain :all to stage all changes first.\nDIRECTORY overrides `default-directory' if provided."
   (let* ((default-directory (or directory default-directory)))
-    (-ensure-repo)
-    (if (plist-get options :all) (-commit-all message) (-commit message))))
+    (hive-mcp-magit---ensure-repo)
+    (if (plist-get options :all) (hive-mcp-magit---commit-all message) (hive-mcp-magit---commit message))))
 
 (defun hive-mcp-magit-api-push (&optional options directory)
   "Push to remote.\nOPTIONS may contain :set-upstream to set tracking.\nDIRECTORY overrides `default-directory' if provided."
   (let* ((default-directory (or directory default-directory)))
-    (-ensure-repo)
-    (-push (plist-get options :set-upstream))))
+    (hive-mcp-magit---ensure-repo)
+    (hive-mcp-magit---push (plist-get options :set-upstream))))
 
 (defun hive-mcp-magit-api-pull (&optional directory)
   "Pull from upstream.\nDIRECTORY overrides `default-directory' if provided."
   (let* ((default-directory (or directory default-directory)))
-    (-ensure-repo)
-    (-pull)))
+    (hive-mcp-magit---ensure-repo)
+    (hive-mcp-magit---pull)))
 
 (defun hive-mcp-magit-api-fetch (&optional remote directory)
   "Fetch from REMOTE (default: all remotes).\nDIRECTORY overrides `default-directory' if provided."
   (let* ((default-directory (or directory default-directory)))
-    (-ensure-repo)
-    (-fetch remote)))
+    (hive-mcp-magit---ensure-repo)
+    (hive-mcp-magit---fetch remote)))
 
 (defun hive-mcp-magit-status ()
   "Display repository status."
   (interactive)
-  (let* ((status (api-status))
+  (let* ((status (hive-mcp-magit-api-status))
         (buf (get-buffer-create "*MCP Git Status*")))
     (with-current-buffer buf
     (let* ((inhibit-read-only t))
@@ -314,37 +318,39 @@
 (defun hive-mcp-magit-commit-interactive ()
   "Interactive commit with prompted message."
   (interactive)
-  (-ensure-repo)
+  (hive-mcp-magit---ensure-repo)
   (let* ((message (clel-read-string "Commit message: ")))
     (when (string-empty-p message)
     (error "Commit message cannot be empty"))
-    (message "%s" (api-commit message))))
+    (message "%s" (hive-mcp-magit-api-commit message))))
 
 (defun hive-mcp-magit-stage-current-file ()
   "Stage the current buffer's file."
   (interactive)
   (if-let-star (list file (buffer-file-name)) (progn
-  (api-stage file)
+  (hive-mcp-magit-api-stage file)
   (message "Staged: %s" (file-name-nondirectory file))) (error "Buffer is not visiting a file")))
 
 (defun hive-mcp-magit-open-magit-status ()
   "Open Magit status if available, otherwise show MCP status."
   (interactive)
-  (if (-magit-available-p) (magit-status) (status)))
+  (if (hive-mcp-magit---magit-available-p) (magit-status) (hive-mcp-magit-status)))
 
 (defun hive-mcp-magit-transient ()
   "MCP Magit menu."
   (interactive)
   (if (require 'transient nil t) (progn
-  (transient-define-prefix hive-mcp-magit--menu (nil) "MCP Magit menu." (list "hive-mcp + Magit" (list "Status" ("s" "MCP Status" hive-mcp-magit-status) ("S" "Magit status" hive-mcp-magit-open-magit-status)) (list "Stage & Commit" ("a" "Stage file" hive-mcp-magit-stage-current-file) ("A" "Stage all" (lambda (_unused)
+  (transient-define-prefix hive-mcp-magit--menu ()
+  "MCP Magit menu."
+  ["hive-mcp + Magit" ["Status" ("s" "MCP Status" hive-mcp-magit-status) ("S" "Magit status" hive-mcp-magit-open-magit-status)] ["Stage & Commit" ("a" "Stage file" hive-mcp-magit-stage-current-file) ("A" "Stage all" (lambda (_unused)
     (interactive)
-    (message "%s" (hive-mcp-magit-api-stage 'all)))) ("c" "Commit" hive-mcp-magit-commit-interactive)) (list "Remote" ("f" "Fetch" (lambda (_unused)
+    (message "%s" (hive-mcp-magit-api-stage 'all)))) ("c" "Commit" hive-mcp-magit-commit-interactive)] ["Remote" ("f" "Fetch" (lambda (_unused)
     (interactive)
     (message "%s" (hive-mcp-magit-api-fetch)))) ("p" "Pull" (lambda (_unused)
     (interactive)
     (message "%s" (hive-mcp-magit-api-pull)))) ("P" "Push" (lambda (_unused)
     (interactive)
-    (message "%s" (hive-mcp-magit-api-push)))))))
+    (message "%s" (hive-mcp-magit-api-push))))]])
   (hive-mcp-magit--menu)) (message "Transient not available")))
 
 (defvar hive-mcp-magit-mode-map (let* ((map (make-sparse-keymap)))

@@ -24,7 +24,7 @@
 
 (declare-function projectile-invalidate-cache "projectile")
 
-(defvar projectile-known-projects nil)
+(defvar projectile-known-projects)
 
 (declare-function hive-mcp-addon-register "hive-mcp-addons")
 
@@ -50,7 +50,8 @@
   :group 'hive-mcp-projectile
   :type 'boolean)
 
-(defvar hive-mcp-projectile--initialized nil)
+(defvar hive-mcp-projectile--initialized nil
+  "Whether the addon has been initialized.")
 
 (defun hive-mcp-projectile---ensure-projectile ()
   "Ensure projectile is available."
@@ -58,7 +59,7 @@
 
 (defun hive-mcp-projectile---in-project-p ()
   "Return non-nil if currently in a projectile project."
-  (and (-ensure-projectile) (projectile-project-p)))
+  (and (hive-mcp-projectile---ensure-projectile) (projectile-project-p)))
 
 (defun hive-mcp-projectile---ripgrep-available-p ()
   "Return non-nil if ripgrep is available."
@@ -66,21 +67,21 @@
 
 (defun hive-mcp-projectile---get-project-root ()
   "Get current projectile project root, or nil."
-  (when (-ensure-projectile)
+  (when (hive-mcp-projectile---ensure-projectile)
     (condition-case nil
     (projectile-project-root)
   (error nil))))
 
 (defun hive-mcp-projectile---get-project-name ()
   "Get current projectile project name, or nil."
-  (when (-ensure-projectile)
+  (when (hive-mcp-projectile---ensure-projectile)
     (condition-case nil
     (projectile-project-name)
   (error nil))))
 
 (defun hive-mcp-projectile---get-project-type ()
   "Get current projectile project type as a string."
-  (when (-ensure-projectile)
+  (when (hive-mcp-projectile---ensure-projectile)
     (condition-case nil
     (let* ((type (projectile-project-type)))
     (if type (symbol-name type) "generic"))
@@ -97,7 +98,7 @@
 
 (defun hive-mcp-projectile---list-files (&optional pattern)
   "List project files, optionally filtered by PATTERN."
-  (when (-in-project-p)
+  (when (hive-mcp-projectile---in-project-p)
     (let* ((files (projectile-current-project-files))
         (filtered (if pattern (seq-filter (lambda (f)
     (or (string-match-p (regexp-quote pattern) f) (string-match-p (wildcard-to-regexp pattern) f))) files) files)))
@@ -105,7 +106,7 @@
 
 (defun hive-mcp-projectile---find-file-matches (filename)
   "Find files in project matching FILENAME."
-  (when (-in-project-p)
+  (when (hive-mcp-projectile---in-project-p)
     (let* ((files (projectile-current-project-files))
         (matches (seq-filter (lambda (f)
     (or (string= (file-name-nondirectory f) filename) (string-match-p (regexp-quote filename) (file-name-nondirectory f)))) files)))
@@ -113,15 +114,15 @@
 
 (defun hive-mcp-projectile---recent-files ()
   "Get recently visited files in current project."
-  (when (-in-project-p)
+  (when (hive-mcp-projectile---in-project-p)
     (condition-case nil
     (projectile-recentf-files)
   (error nil))))
 
 (defun hive-mcp-projectile---search (pattern)
   "Search project for PATTERN using rg or grep."
-  (when-let-star (list root (-get-project-root)) (let* ((default-directory root)
-        (cmd (if (-ripgrep-available-p) (format "rg --line-number --no-heading --color=never -e %s ." (shell-quote-argument pattern)) (format "grep -r -n -H -e %s ." (shell-quote-argument pattern))))
+  (when-let-star (list root (hive-mcp-projectile---get-project-root)) (let* ((default-directory root)
+        (cmd (if (hive-mcp-projectile---ripgrep-available-p) (format "rg --line-number --no-heading --color=never -e %s ." (shell-quote-argument pattern)) (format "grep -r -n -H -e %s ." (shell-quote-argument pattern))))
         (output (shell-command-to-string cmd))
         (lines (split-string output "\n" t))
         (results nil))
@@ -132,39 +133,39 @@
 
 (defun hive-mcp-projectile-api-project-info ()
   "Get current project info as plist."
-  (when (-in-project-p)
-    (let* ((root (-get-project-root)))
-    (list :name (-get-project-name) :root root :type (-get-project-type) :extended-types (-detect-extended-type root) :file-count (length (projectile-current-project-files)) :in-project t))))
+  (when (hive-mcp-projectile---in-project-p)
+    (let* ((root (hive-mcp-projectile---get-project-root)))
+    (list :name (hive-mcp-projectile---get-project-name) :root root :type (hive-mcp-projectile---get-project-type) :extended-types (hive-mcp-projectile---detect-extended-type root) :file-count (length (projectile-current-project-files)) :in-project t))))
 
 (defun hive-mcp-projectile-api-list-projects ()
   "List all known projectile projects."
-  (if (-ensure-projectile) (let* ((projects (or (and (boundp 'projectile-known-projects) projectile-known-projects) nil)))
+  (if (hive-mcp-projectile---ensure-projectile) (let* ((projects (or (and (boundp 'projectile-known-projects) projectile-known-projects) nil)))
     (apply #'vector (mapcar (lambda (root)
-    (list :root root :name (file-name-nondirectory (directory-file-name root)) :exists (file-directory-p root) :types (-detect-extended-type root))) projects))) (list )))
+    (list :root root :name (file-name-nondirectory (directory-file-name root)) :exists (file-directory-p root) :types (hive-mcp-projectile---detect-extended-type root))) projects))) (list )))
 
 (defun hive-mcp-projectile-api-project-files (&optional pattern)
   "List files in current project, optionally filtered by PATTERN."
-  (if (-in-project-p) (apply #'vector (-list-files pattern)) (list )))
+  (if (hive-mcp-projectile---in-project-p) (apply #'vector (hive-mcp-projectile---list-files pattern)) (list )))
 
 (defun hive-mcp-projectile-api-find-file (filename)
   "Find files matching FILENAME in current project."
-  (if (-in-project-p) (let* ((matches (-find-file-matches filename))
-        (root (-get-project-root)))
+  (if (hive-mcp-projectile---in-project-p) (let* ((matches (hive-mcp-projectile---find-file-matches filename))
+        (root (hive-mcp-projectile---get-project-root)))
     (apply #'vector (mapcar (lambda (f)
     (list :relative f :absolute (expand-file-name f root))) matches))) (list )))
 
 (defun hive-mcp-projectile-api-recent-files ()
   "Get recently visited files in current project."
-  (if (-in-project-p) (apply #'vector (or (-recent-files) '())) (list )))
+  (if (hive-mcp-projectile---in-project-p) (apply #'vector (or (hive-mcp-projectile---recent-files) '())) (list )))
 
 (defun hive-mcp-projectile-api-search (pattern)
   "Search current project for PATTERN."
-  (if (-in-project-p) (apply #'vector (-search pattern)) (list )))
+  (if (hive-mcp-projectile---in-project-p) (apply #'vector (hive-mcp-projectile---search pattern)) (list )))
 
 (defun hive-mcp-projectile-show-info ()
   "Display current project info."
   (interactive)
-  (if (-in-project-p) (let* ((info (api-project-info))
+  (if (hive-mcp-projectile---in-project-p) (let* ((info (hive-mcp-projectile-api-project-info))
         (buf (get-buffer-create "*MCP Project Info*")))
     (with-current-buffer buf
     (erase-buffer)
@@ -180,7 +181,7 @@
 (defun hive-mcp-projectile-list-projects ()
   "Display all known projects."
   (interactive)
-  (let* ((projects (api-list-projects))
+  (let* ((projects (hive-mcp-projectile-api-list-projects))
         (buf (get-buffer-create "*MCP Known Projects*")))
     (with-current-buffer buf
     (erase-buffer)
@@ -194,7 +195,7 @@
 (defun hive-mcp-projectile-search-interactive (pattern)
   "Search project for PATTERN and display results."
   (interactive "sSearch pattern: ")
-  (if (-in-project-p) (let* ((results (api-search pattern))
+  (if (hive-mcp-projectile---in-project-p) (let* ((results (hive-mcp-projectile-api-search pattern))
         (buf (get-buffer-create "*MCP Project Search*")))
     (with-current-buffer buf
     (erase-buffer)
@@ -211,7 +212,9 @@
   "MCP Projectile menu."
   (interactive)
   (if (require 'transient nil t) (progn
-  (transient-define-prefix hive-mcp-projectile--menu (nil) "MCP Projectile menu." (list "hive-mcp + Projectile" (list "Info" ("i" "Project info" hive-mcp-projectile-show-info) ("p" "List projects" hive-mcp-projectile-list-projects)) (list "Search" ("s" "Search" hive-mcp-projectile-search-interactive))))
+  (transient-define-prefix hive-mcp-projectile--menu ()
+  "MCP Projectile menu."
+  ["hive-mcp + Projectile" ["Info" ("i" "Project info" hive-mcp-projectile-show-info) ("p" "List projects" hive-mcp-projectile-list-projects)] ["Search" ("s" "Search" hive-mcp-projectile-search-interactive)]])
   (hive-mcp-projectile--menu)) (message "Transient not available")))
 
 (defun hive-mcp-projectile---addon-init ()
@@ -229,7 +232,7 @@
   :lighter " MCP-Proj"
   :global t
   :group 'hive-mcp-projectile
-  (if hive-mcp-projectile-mode (-addon-init) (message "hive-mcp-projectile disabled")))
+  (if hive-mcp-projectile-mode (hive-mcp-projectile---addon-init) (message "hive-mcp-projectile disabled")))
 
 (with-eval-after-load 'hive-mcp-addons
   (hive-mcp-addon-register 'projectile :version "0.1.0" :description "Projectile project management integration" :requires '(projectile hive-mcp-api) :provides '(hive-mcp-projectile-mode hive-mcp-projectile-transient) :init #'-addon-init :shutdown #'-addon-shutdown))

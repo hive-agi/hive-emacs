@@ -142,7 +142,8 @@
     (hive-mcp-memory-add 'snippet truncated all-tags)
     (message "[ai-bridge] Stored notable response from %s" source)))))
 
-(defvar hive-mcp-ai--interaction-log nil)
+(defvar hive-mcp-ai--interaction-log nil
+  "Log of recent AI interactions for audit.")
 
 (defun hive-mcp-ai-bridge-ai-log-interaction (&rest args)
   (let ((source (nth 0 args)) (action (nth 1 args)) (details (nthcdr 2 args)))
@@ -192,9 +193,11 @@
   ((quote org-ai) (replace-regexp-in-string "^## " "** " (replace-regexp-in-string "^# " "* " context)))
   ('_ context)))
 
-(defvar hive-mcp-ai-pre-request-hook nil)
+(defvar hive-mcp-ai-pre-request-hook nil
+  "Hook run before any AI request.\nFunctions receive (source prompt) arguments.")
 
-(defvar hive-mcp-ai-post-response-hook nil)
+(defvar hive-mcp-ai-post-response-hook nil
+  "Hook run after AI response.\nFunctions receive (source response) arguments.")
 
 (defun hive-mcp-ai-bridge-ai-run-pre-request-hooks (source prompt)
   "Run pre-request hooks for SOURCE with PROMPT.\nReturns possibly modified prompt."
