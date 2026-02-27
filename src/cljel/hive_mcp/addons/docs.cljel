@@ -149,7 +149,7 @@ Returns a list of matching symbols with basic info."
                           :docstring-preview
                           (when-let* [doc (-get-docstring sym)]
                             (if (> (length doc) 100)
-                                (concat (substring doc 0 100) "...")
+                                (elisp-concat (substring doc 0 100) "...")
                               doc))))
                   limited))))
 
@@ -160,7 +160,7 @@ Returns list of functions with signatures."
   (let* [prefix (if (symbolp package-or-prefix)
                     (symbol-name package-or-prefix)
                   package-or-prefix)
-         prefix-regexp (concat "^" (regexp-quote prefix))
+         prefix-regexp (elisp-concat "^" (regexp-quote prefix))
          functions (cl-remove-if-not
                     (lambda (sym)
                       (and (fboundp sym)
@@ -190,7 +190,7 @@ Returns list of key sequences that invoke the command."
                 :docstring-preview
                 (when-let* [doc (documentation sym t)]
                   (if (> (length doc) 200)
-                      (concat (substring doc 0 200) "...")
+                      (elisp-concat (substring doc 0 200) "...")
                     doc))
                 :bindings
                 (mapcar (lambda (key)
@@ -235,7 +235,7 @@ FILE-OR-FEATURE can be a filename or a feature symbol."
          ;; Prefer .el source over .elc compiled
          file (when lib-file
                 (if (string-suffix-p ".elc" lib-file)
-                    (let [src (concat (file-name-sans-extension lib-file) ".el")]
+                    (let [src (elisp-concat (file-name-sans-extension lib-file) ".el")]
                       (if (file-exists-p src) src lib-file))
                   lib-file))]
     (if file

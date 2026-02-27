@@ -160,14 +160,14 @@ Applies defaults and validates required params."
     (dolist [param params]
       (let [name (plist-get param :name)
             default (plist-get param :default)]
-        (unless (plist-get env (intern (concat ":" name)))
+        (unless (plist-get env (intern (elisp-concat ":" name)))
           (when default
-            (setq env (plist-put env (intern (concat ":" name)) default))))))
+            (setq env (plist-put env (intern (elisp-concat ":" name)) default))))))
     ;; Check required params
     (dolist [param params]
       (when (plist-get param :required)
         (let [name (plist-get param :name)]
-          (unless (plist-get env (intern (concat ":" name)))
+          (unless (plist-get env (intern (elisp-concat ":" name)))
             (error "Required parameter missing: %s" name)))))
     env))
 
@@ -222,7 +222,7 @@ Checks for custom handler first, then falls through to built-in types."
   "Prompt user for input using message from STEP, store result in ENV."
   (let [msg (plist-get step :message)
         default (plist-get step :default)
-        result (read-string (concat msg ": ") default)]
+        result (read-string (elisp-concat msg ": ") default)]
     (plist-put env (plist-get step :var) result)))
 
 (defn- -step-confirm [step env]
@@ -272,7 +272,7 @@ Returns ENV if confirmed, otherwise signals error."
       "\\${\\([^}]+\\)}"
       (lambda (match)
         (let [var-name (match-string 1 match)
-              var-key (intern (concat ":" var-name))
+              var-key (intern (elisp-concat ":" var-name))
               value (plist-get env var-key)]
           (if value (format "%s" value) match)))
       template)
@@ -477,7 +477,7 @@ PROVIDED takes precedence. Converts gathered data to wrap args format."
                    (mapcar (lambda (n)
                              (let [content (plist-get n :content)]
                                (if (> (length content) 100)
-                                 (concat (substring content 0 97) "...")
+                                 (elisp-concat (substring content 0 97) "...")
                                  content)))
                            (seq-take notes 5)))))
     ;; Add git commits as context
@@ -751,6 +751,6 @@ Idempotent: only registers if not already present."
              hive-mcp-workflow-registry)))
 
 ;; Auto-register builtins on load
-(hive-mcp-workflows--register-builtins)
+(hive-mcp-workflows---register-builtins)
 
 (provide 'hive-mcp-workflows)

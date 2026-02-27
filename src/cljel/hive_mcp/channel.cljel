@@ -157,9 +157,9 @@ MSG should be an alist like ((\"type\" . \"event\"))."
    ((listp obj)
     (if (and (consp (car obj)) (not (listp (cdar obj))))
         ;; Dictionary
-        (concat "d"
+        (elisp-concat "d"
                 (mapconcat (lambda (pair)
-                             (concat (hive-mcp-channel--bencode-fallback
+                             (elisp-concat (hive-mcp-channel--bencode-fallback
                                       (if (symbolp (car pair))
                                           (symbol-name (car pair))
                                         (car pair)))
@@ -167,11 +167,11 @@ MSG should be an alist like ((\"type\" . \"event\"))."
                            obj "")
                 "e")
       ;; List
-      (concat "l"
+      (elisp-concat "l"
               (mapconcat #'hive-mcp-channel--bencode-fallback obj "")
               "e")))
    ((vectorp obj)
-    (concat "l"
+    (elisp-concat "l"
             (mapconcat #'hive-mcp-channel--bencode-fallback (append obj nil) "")
             "e"))
    (t (error "Cannot bencode: %S" obj))))
@@ -290,7 +290,7 @@ _PROC is the process (unused, required by Emacs process API)."
   (let [type-str (or (cdr (assoc "type" msg))
                      (cdr (assoc 'type msg)))
         type (when type-str
-               (intern (concat ":" type-str)))]
+               (intern (elisp-concat ":" type-str)))]
     (when type
       (let [handlers (gethash type hive-mcp-channel--handlers)]
         (dolist (handler handlers)
@@ -438,7 +438,7 @@ DATA is an alist of event properties.
 This enables local elisp components to react to swarm events immediately."
   (let [type-key (if (keywordp event-type)
                      event-type
-                   (intern (concat ":" event-type)))
+                   (intern (elisp-concat ":" event-type)))
         handlers (gethash type-key hive-mcp-channel--handlers)]
     (dolist (handler handlers)
       (condition-case err
@@ -450,11 +450,11 @@ This enables local elisp components to react to swarm events immediately."
 (defn emit-swarm-event [event-type data]
   "Emit a swarm event of EVENT-TYPE with DATA."
   (hive-mcp-channel-send
-   `(("type" . ,(if (keywordp event-type)
-                    (substring (symbol-name event-type) 1)
-                  event-type))
-     ("timestamp" . ,(float-time))
-     ,@data)))
+   (append (list (cons "type" (if (keywordp event-type)
+                                  (substring (symbol-name event-type) 1)
+                                event-type))
+                 (cons "timestamp" (float-time)))
+           data)))
 
 ;;;###autoload
 (defn subscribe-swarm-events [handler]
@@ -500,11 +500,11 @@ when the package loads."
 (defn status []
   "Return a status alist for the channel connection."
   (interactive)
-  (let [status `((connected . ,(hive-mcp-channel-connected-p))
-                 (degraded . ,hive-mcp-channel--degraded-mode)
-                 (reconnect-count . ,hive-mcp-channel--reconnect-count)
-                 (queued-messages . ,(length hive-mcp-channel--message-queue))
-                 (type . ,hive-mcp-channel-type))]
+  (let [status (list (cons 'connected (hive-mcp-channel-connected-p))
+                     (cons 'degraded hive-mcp-channel--degraded-mode)
+                     (cons 'reconnect-count hive-mcp-channel--reconnect-count)
+                     (cons 'queued-messages (length hive-mcp-channel--message-queue))
+                     (cons 'type hive-mcp-channel-type))]
     (when (called-interactively-p 'any)
       (message "hive-mcp-channel: %s"
                (if (hive-mcp-channel-connected-p)

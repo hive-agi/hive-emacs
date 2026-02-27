@@ -431,7 +431,7 @@ Optional SESSION contains the MCP session context."
                                (let [file-path (buffer-file-name)]
                                  (claude-code-ide-mcp--send-notification
                                   "workspace/didChangeActiveEditor"
-                                  `((uri . ,(concat "file://" file-path))
+                                  `((uri . ,(elisp-concat "file://" file-path))
                                     (path . ,file-path)
                                     (name . ,(buffer-name)))))))))))
       (claude-code-ide-debug "Warning: Could not find session for WebSocket connection"))))
@@ -584,7 +584,7 @@ Optional SESSION contains the MCP session context."
                 (claude-code-ide-mcp-server-update-last-active-buffer session-id current-buffer))
               (claude-code-ide-mcp--send-notification
                "workspace/didChangeActiveEditor"
-               `((uri . ,(concat "file://" file-path))
+               `((uri . ,(elisp-concat "file://" file-path))
                  (path . ,file-path)
                  (name . ,(buffer-name current-buffer)))))))))))
 

@@ -157,7 +157,7 @@ Returns diagnostics in VS Code format."
 
 (defn file-path-to-uri [file-path]
   "Convert a FILE-PATH to a file URI."
-  (concat "file://" (url-hexify-string file-path)))
+  (elisp-concat "file://" (url-hexify-string file-path)))
 
 (defn handler [params &optional session]
   "Handle getDiagnostics tool request with PARAMS.

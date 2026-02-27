@@ -186,7 +186,7 @@ AGENT-ID optionally links this session to a swarm agent."
                                  "-p" (number-to-string port))
          ;; Create timer and store reference for cleanup
          timer (run-with-timer 2 1
-                                (lambda (_x)
+                                (lambda ()
                                   (condition-case err
                                       (-try-connect-session name)
                                     (error
@@ -767,7 +767,7 @@ Returns comprehensive information including source location, spec, etc."
                              "spec" "see-also" "added" "deprecated"))
                 (let [val (nrepl-dict-get info key)]
                   (when val
-                    (setq result (plist-put result (intern (concat ":" key)) val)))))
+                    (setq result (plist-put result (intern (elisp-concat ":" key)) val)))))
               result)
           (list :error (format "No info found for '%s'" symbol-name))))
     (error "CIDER not connected")))

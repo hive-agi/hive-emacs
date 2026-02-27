@@ -176,7 +176,7 @@
                                   total todo in-prog done
                                   (if (> total 0) (round (* 100 (/ (float done) total))) 0))
                           'face 'hive-mcp-kanban-stats))
-      (insert (make-string (- 122 (current-column)) ?\s))
+      (insert (make-string (- 122 (current-column)) 32))
       (insert (propertize "\u2551\n" 'face 'hive-mcp-kanban-border)))
 
     (insert (propertize "\u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563\n"
@@ -192,12 +192,12 @@
         (push (cons name (point)) column-positions)
         (insert (propertize header 'face 'hive-mcp-kanban-column-header
                             'column-name name))
-        (insert (make-string (- col-width (length header)) ?\s))))
+        (insert (make-string (- col-width (length header)) 32))))
     (insert (propertize "\u2551\n" 'face 'hive-mcp-kanban-border))
 
     (insert (propertize "\u2560" 'face 'hive-mcp-kanban-border))
     (dotimes [_ 4]
-      (insert (propertize (make-string col-width ?\u2500) 'face 'hive-mcp-kanban-border)))
+      (insert (propertize (make-string col-width 9472) 'face 'hive-mcp-kanban-border)))
     (insert (propertize "\u2563\n" 'face 'hive-mcp-kanban-border))
 
     ;; Find max tasks in any column
@@ -215,7 +215,7 @@
                 (let* [title (or (cdr (assoc 'title task)) "Untitled")
                        id (cdr (assoc 'id task))
                        truncated (if (> (length title) (- col-width 4))
-                                     (concat (substring title 0 (- col-width 7)) "...")
+                                     (elisp-concat (substring title 0 (- col-width 7)) "...")
                                    title)
                        start-pos (point)]
                   (insert (propertize (format " * %s" truncated)
@@ -225,9 +225,9 @@
                                       'column-name col-name
                                       'mouse-face 'hive-mcp-kanban-task-highlight
                                       'help-echo (format "Task: %s\nID: %s\nClick to open" title id)))
-                  (insert (make-string (- col-width (+ 3 (length truncated))) ?\s))
+                  (insert (make-string (- col-width (+ 3 (length truncated))) 32))
                   (push (cons id (cons start-pos (point))) task-positions))
-              (insert (make-string col-width ?\s)))))
+              (insert (make-string col-width 32)))))
         (insert (propertize "\u2551\n" 'face 'hive-mcp-kanban-border)))
 
       ;; Show "more" indicator if needed
@@ -241,8 +241,8 @@
               (if (equal (car c) col-name)
                   (let [more-text (format " ... +%d more" extra)]
                     (insert (propertize more-text 'face 'font-lock-comment-face))
-                    (insert (make-string (- col-width (length more-text)) ?\s)))
-                (insert (make-string col-width ?\s))))
+                    (insert (make-string (- col-width (length more-text)) 32)))
+                (insert (make-string col-width 32))))
             (insert (propertize "\u2551\n" 'face 'hive-mcp-kanban-border))))))
 
     ;; Footer
@@ -251,7 +251,7 @@
     (insert (propertize "\u2551 " 'face 'hive-mcp-kanban-border))
     (insert (propertize "[n/p] Navigate  [h/l] Columns  [RET] Open  [>/<] Move  [c] Create  [d] Delete  [g] Refresh  [q] Quit  [?] Help"
                         'face 'font-lock-comment-face))
-    (insert (make-string (- 122 (current-column)) ?\s))
+    (insert (make-string (- 122 (current-column)) 32))
     (insert (propertize "\u2551\n" 'face 'hive-mcp-kanban-border))
     (insert (propertize "\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\n"
                         'face 'hive-mcp-kanban-border))

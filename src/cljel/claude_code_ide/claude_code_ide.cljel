@@ -641,16 +641,16 @@ If SYSTEM-PROMPT-FILE is provided, add the --system-prompt flag with the file pa
   (let [claude-cmd claude-code-ide-cli-path]
     ;; Add debug flag if enabled
     (when claude-code-ide-cli-debug
-      (setq claude-cmd (concat claude-cmd " -d")))
+      (setq claude-cmd (elisp-concat claude-cmd " -d")))
     ;; Add resume flag if requested
     (when resume
-      (setq claude-cmd (concat claude-cmd " -r")))
+      (setq claude-cmd (elisp-concat claude-cmd " -r")))
     ;; Add continue flag if requested
     (when continue
-      (setq claude-cmd (concat claude-cmd " -c")))
+      (setq claude-cmd (elisp-concat claude-cmd " -c")))
     ;; Add system-prompt file if provided
     (if (and system-prompt-file (file-exists-p system-prompt-file))
-        (setq claude-cmd (concat claude-cmd " --system-prompt \"$(cat "
+        (setq claude-cmd (elisp-concat claude-cmd " --system-prompt \"$(cat "
                                  (shell-quote-argument system-prompt-file) ")\""))
       ;; No preset file - add append-system-prompt with Emacs context
       (let [emacs-prompt "IMPORTANT: Connected to Emacs via claude-code-ide.el integration. Emacs uses mixed coordinates: Lines: 1-based (line 1 = first line), Columns: 0-based (column 0 = first column). Example: First character in file is at line 1, column 0. Available: xref (LSP), tree-sitter, imenu, project.el, flycheck/flymake diagnostics. Context-aware with automatic project/file/selection tracking."
@@ -659,14 +659,14 @@ If SYSTEM-PROMPT-FILE is provided, add the --system-prompt flag with the file pa
         (setq combined-prompt emacs-prompt)
         ;; Append user's custom prompt if set
         (when claude-code-ide-system-prompt
-          (setq combined-prompt (concat combined-prompt "\n\n" claude-code-ide-system-prompt)))
+          (setq combined-prompt (elisp-concat combined-prompt "\n\n" claude-code-ide-system-prompt)))
         ;; Add the combined prompt to the command
-        (setq claude-cmd (concat claude-cmd " --append-system-prompt "
+        (setq claude-cmd (elisp-concat claude-cmd " --append-system-prompt "
                                  (shell-quote-argument combined-prompt)))))
     ;; Add any extra flags
     (when (and claude-code-ide-cli-extra-flags
                (not (string-empty-p claude-code-ide-cli-extra-flags)))
-      (setq claude-cmd (concat claude-cmd " " claude-code-ide-cli-extra-flags)))
+      (setq claude-cmd (elisp-concat claude-cmd " " claude-code-ide-cli-extra-flags)))
     ;; Add MCP tools config if enabled
     (when (claude-code-ide-mcp-server-ensure-server)
       (when-let [config (claude-code-ide-mcp-server-get-config session-id)]
@@ -675,7 +675,7 @@ If SYSTEM-PROMPT-FILE is provided, add the --system-prompt flag with the file pa
           ;; For vterm, we need to escape for sh -c context
           (setq json-str (replace-regexp-in-string "\\\\" "\\\\\\\\" json-str))
           (setq json-str (replace-regexp-in-string "\"" "\\\\\"" json-str))
-          (setq claude-cmd (concat claude-cmd " --mcp-config \"" json-str "\""))
+          (setq claude-cmd (elisp-concat claude-cmd " --mcp-config \"" json-str "\""))
           ;; Add allowedTools flag if configured
           (let [allowed-tools
                 (cond
@@ -688,7 +688,7 @@ If SYSTEM-PROMPT-FILE is provided, add the --system-prompt flag with the file pa
                  ;; String pattern or nil
                  (t claude-code-ide-mcp-allowed-tools))]
             (when (and allowed-tools (not (string-empty-p allowed-tools)))
-              (setq claude-cmd (concat claude-cmd " --allowedTools " allowed-tools)))))))
+              (setq claude-cmd (elisp-concat claude-cmd " --allowedTools " allowed-tools)))))))
     claude-cmd))
 
 (defn- -terminal-position-keeper [window-list]

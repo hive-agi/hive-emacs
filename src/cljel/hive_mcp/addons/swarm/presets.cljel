@@ -369,7 +369,7 @@ INJECTED-CONTEXT is prepended if non-nil."
         (concat
          ;; Injected context comes first (axioms, conventions, decisions)
          (when injected-context
-           (concat injected-context "\n\n---\n\n"))
+           (elisp-concat injected-context "\n\n---\n\n"))
          (or preset-body "")
          hive-mcp-swarm-presets--auto-shout-footer)))))
 
@@ -381,7 +381,7 @@ Returns ~300 token prompt instead of ~5K full content."
   (let [preset-names (string-join presets ", ")]
     (concat
      (when injected-context
-       (concat injected-context "\n\n---\n\n"))
+       (elisp-concat injected-context "\n\n---\n\n"))
      (format hive-mcp-swarm-presets--lazy-instructions preset-names)
      hive-mcp-swarm-presets--auto-shout-footer)))
 
@@ -415,7 +415,7 @@ or nil if no presets found."
           (if header
               (concat
                (when injected-context
-                 (concat injected-context "\n\n---\n\n"))
+                 (elisp-concat injected-context "\n\n---\n\n"))
                header
                hive-mcp-swarm-presets--auto-shout-footer)
             ;; Fallback to local lazy prompt builder (not full mode!)

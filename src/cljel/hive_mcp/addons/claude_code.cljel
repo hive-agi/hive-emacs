@@ -16,7 +16,9 @@
    - Auto-logging of conversations to project memory")
 
 ;; Only require claude-code if available (optional dependency)
-(require 'claude-code nil t)
+;; condition-case needed: (require ... nil t) only suppresses "not found",
+;; not errors within the loaded package itself
+(condition-case nil (require 'claude-code) (error nil))
 
 ;; Soft dependencies - load if available
 (declare-function hive-mcp-api-get-context "hive-mcp-api")

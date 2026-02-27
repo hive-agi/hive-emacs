@@ -266,7 +266,7 @@ ARGUMENTS should contain:
   "Get the currently selected text and its context."
   (let [file-path (or (buffer-file-name) "")
         file-url (when (buffer-file-name)
-                   (concat "file://" (buffer-file-name)))]
+                   (elisp-concat "file://" (buffer-file-name)))]
     (if (use-region-p)
         (let* [start (region-beginning)
                end (region-end)
@@ -313,7 +313,7 @@ ARGUMENTS should contain:
                   (name . ,(buffer-name buffer))
                   (active . ,(eq buffer (current-buffer)))
                   (isDirty . ,(if (buffer-modified-p buffer) t :json-false))
-                  (fileUrl . ,(concat "file://" file)))
+                  (fileUrl . ,(elisp-concat "file://" file)))
                 editors))))
     `((editors . ,(vconcat (nreverse editors))))))
 

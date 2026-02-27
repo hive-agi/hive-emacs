@@ -359,7 +359,7 @@ DIRECTORY overrides `default-directory' if provided."
     (pcase target
       ((or 'nil 'staged) (-diff-staged))
       ('unstaged (-diff-unstaged))
-      ('all (concat (-diff-staged)
+      ('all (elisp-concat (-diff-staged)
                     "\n---\n"
                     (-diff-unstaged)))
       (_ (-diff-staged)))))

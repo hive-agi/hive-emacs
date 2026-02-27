@@ -181,7 +181,7 @@ Returns a cons cell suitable for `gptel-directives'."
   (when (-ensure-bridge)
     (let [context (hive-mcp-ai-build-context)]
       (cons "Memory-Aware"
-            (concat "You are a helpful assistant with access to project knowledge.\n\n"
+            (elisp-concat "You are a helpful assistant with access to project knowledge.\n\n"
                     (or context "")
                     "\n\nUse this context to provide informed, project-specific responses.")))))
 

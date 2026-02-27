@@ -364,15 +364,15 @@ RIGHT-TITLE and RIGHT-CONTENT for right column."
   (let [format (-detect-format)]
     (pcase format
       ('beamer
-       (let [pdf-file (concat (file-name-sans-extension buffer-file-name) ".pdf")]
+       (let [pdf-file (elisp-concat (file-name-sans-extension buffer-file-name) ".pdf")]
          (if (file-exists-p pdf-file)
              (find-file-other-window pdf-file)
            (when (y-or-n-p "PDF not found. Export first?")
              (org-beamer-export-to-pdf)
              (find-file-other-window
-              (concat (file-name-sans-extension buffer-file-name) ".pdf"))))))
+              (elisp-concat (file-name-sans-extension buffer-file-name) ".pdf"))))))
       ('revealjs
-       (let [html-file (concat (file-name-sans-extension buffer-file-name) ".html")]
+       (let [html-file (elisp-concat (file-name-sans-extension buffer-file-name) ".html")]
          (unless (file-exists-p html-file)
            (if (fboundp 'org-reveal-export-to-html)
                (org-reveal-export-to-html)
@@ -399,7 +399,7 @@ Use after making changes to see updates immediately."
     (pcase format
       ('beamer
        (org-beamer-export-to-pdf)
-       (let [pdf-file (concat (file-name-sans-extension buffer-file-name) ".pdf")]
+       (let [pdf-file (elisp-concat (file-name-sans-extension buffer-file-name) ".pdf")]
          ;; Revert PDF buffer if already open
          (when-let* [pdf-buf (get-file-buffer pdf-file)]
            (with-current-buffer pdf-buf
@@ -409,7 +409,7 @@ Use after making changes to see updates immediately."
        (if (fboundp 'org-reveal-export-to-html)
            (progn
              (org-reveal-export-to-html)
-             (let [html-file (concat (file-name-sans-extension buffer-file-name) ".html")]
+             (let [html-file (elisp-concat (file-name-sans-extension buffer-file-name) ".html")]
                (browse-url-of-file html-file)
                (message "Reveal.js refreshed and opened: %s" html-file)))
          (error "ox-reveal not installed")))
@@ -428,7 +428,7 @@ If FILE is an .org file, opens the corresponding .html file."
   (interactive "fFile: ")
   (let [html-file (if (string-suffix-p ".html" file)
                       file
-                    (concat (file-name-sans-extension file) ".html"))]
+                    (elisp-concat (file-name-sans-extension file) ".html"))]
     (if (file-exists-p html-file)
         (progn
           (browse-url-of-file html-file)
@@ -544,7 +544,7 @@ Use this from Claude to refresh a presentation after edits."
     (pcase format
       ('revealjs
        (org-reveal-export-to-html)
-       (concat (file-name-sans-extension file) ".html"))
+       (elisp-concat (file-name-sans-extension file) ".html"))
       ('beamer
        (error "Use api-export-pdf for Beamer presentations"))
       (_ (error "Unknown format")))))
@@ -556,7 +556,7 @@ Use this from Claude to refresh a presentation after edits."
     (pcase format
       ('beamer
        (org-beamer-export-to-pdf)
-       (concat (file-name-sans-extension file) ".pdf"))
+       (elisp-concat (file-name-sans-extension file) ".pdf"))
       ('revealjs
        (error "Use api-export-html for Reveal.js presentations"))
       (_ (error "Unknown format")))))
@@ -565,7 +565,7 @@ Use this from Claude to refresh a presentation after edits."
   "API: Open the HTML version of FILE in browser."
   (let [html-file (if (string-suffix-p ".html" file)
                       file
-                    (concat (file-name-sans-extension file) ".html"))]
+                    (elisp-concat (file-name-sans-extension file) ".html"))]
     (browse-url-of-file html-file)
     (format "Opened in browser: %s" html-file)))
 
@@ -576,8 +576,8 @@ Use this from Claude to refresh a presentation after edits."
     (let [format (-detect-format)]
       `((file . ,file)
         (format . ,format)
-        (html-exists . ,(file-exists-p (concat (file-name-sans-extension file) ".html")))
-        (pdf-exists . ,(file-exists-p (concat (file-name-sans-extension file) ".pdf")))))))
+        (html-exists . ,(file-exists-p (elisp-concat (file-name-sans-extension file) ".html")))
+        (pdf-exists . ,(file-exists-p (elisp-concat (file-name-sans-extension file) ".pdf")))))))
 
 ;; ============================================================================
 ;; Addon Lifecycle

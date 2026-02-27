@@ -182,7 +182,7 @@ Returns formatted context string suitable for injection."
         (push (format "## Related Context\n%s" semantic) sections)))
 
     (when sections
-      (concat "# Project Knowledge\n\n"
+      (elisp-concat "# Project Knowledge\n\n"
               (mapconcat #'identity (nreverse sections) "\n\n")))))
 
 (defn ai-inject-context [prompt & include-semantic]
@@ -192,7 +192,7 @@ Returns the augmented prompt string."
   (let [context (hive-mcp-ai-bridge-ai-build-context
                   (when include-semantic prompt))]
     (if context
-      (concat context "\n\n---\n\n" prompt)
+      (elisp-concat context "\n\n---\n\n" prompt)
       prompt)))
 
 ;; ============================================================================
@@ -218,9 +218,9 @@ Rate-limited: only stores if not throttled for SOURCE."
   (when (and hive-mcp-ai-store-notable-responses
              (hive-mcp-ai-bridge--memory-available-p)
              (hive-mcp-ai-bridge-ai-response-notable-p response)
-             (hive-mcp-ai-bridge--rate-limit-check (concat "store:" source)))
+             (hive-mcp-ai-bridge--rate-limit-check (elisp-concat "store:" source)))
     (let [truncated (if (> (length response) 2000)
-                      (concat (substring response 0 1997) "...")
+                      (elisp-concat (substring response 0 1997) "...")
                       response)
           all-tags (append (list source "ai-response") tags)]
       (hive-mcp-memory-add 'snippet truncated all-tags)
@@ -376,7 +376,7 @@ All CIDER eval calls wrapped in condition-case for safety."
     (condition-case err
       (hive-mcp-channel-send
         (append
-          (list (cons "type" (concat "ai-bridge:" event-type))
+          (list (cons "type" (elisp-concat "ai-bridge:" event-type))
                 (cons "timestamp" (float-time)))
           data))
       (error

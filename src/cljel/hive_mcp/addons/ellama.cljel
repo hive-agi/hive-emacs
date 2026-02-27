@@ -163,7 +163,7 @@ PROMPT is the original user prompt."
                      (when hive-mcp-ellama-include-semantic
                        prompt))]
         (if context
-            (concat (hive-mcp-ai-format-context-for 'ellama context)
+            (elisp-concat (hive-mcp-ai-format-context-for 'ellama context)
                     hive-mcp-ellama-context-prefix
                     prompt)
           prompt))

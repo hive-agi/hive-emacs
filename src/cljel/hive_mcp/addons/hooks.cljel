@@ -79,7 +79,7 @@ Users can add custom handlers via `hive-mcp-hooks-register'.")
 (defn- -log [format-string &rest args]
   "Log FORMAT-STRING with ARGS if logging is enabled."
   (when hive-mcp-hooks-log-events
-    (apply #'message (concat "[hive-mcp-hooks] " format-string) args)))
+    (apply #'message (elisp-concat "[hive-mcp-hooks] " format-string) args)))
 
 ;; ============================================================================
 ;; Core Event Processing

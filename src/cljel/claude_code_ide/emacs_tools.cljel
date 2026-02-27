@@ -188,7 +188,7 @@ MAX-DEPTH is the maximum depth to traverse."
       ;; Add children
       (dotimes (i child-count)
         (when-let [child (treesit-node-child node i)]
-          (setq result (concat result
+          (setq result (elisp-concat result
                                (claude-code-ide-emacs-tools-mcp-treesit--format-tree
                                 child (1+ level) max-depth)))))
       result)))

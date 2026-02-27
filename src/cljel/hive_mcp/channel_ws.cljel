@@ -254,7 +254,9 @@ Closes existing connection before reconnecting."
              (websocket-openp hive-mcp-channel-ws--connection))
     (condition-case nil
         (websocket-close hive-mcp-channel-ws--connection)
-      (error nil)))
+      (error nil))
+    ;; on-close fires synchronously and schedules a reconnect timer — cancel it
+    (hive-mcp-channel-ws--cancel-reconnect))
   (condition-case err
       (setq hive-mcp-channel-ws--connection
             (websocket-open hive-mcp-channel-ws-url
@@ -342,11 +344,11 @@ If HANDLER is nil, remove all handlers for EVENT-TYPE."
 (defn status []
   "Return status of the WebSocket channel."
   (interactive)
-  (let [status `((connected . ,(hive-mcp-channel-ws-connected-p))
-                 (degraded . ,hive-mcp-channel-ws--degraded-mode)
-                 (reconnect-count . ,hive-mcp-channel-ws--reconnect-count)
-                 (queued . ,(length hive-mcp-channel-ws--message-queue))
-                 (url . ,hive-mcp-channel-ws-url))]
+  (let [status (list (cons 'connected (hive-mcp-channel-ws-connected-p))
+                     (cons 'degraded hive-mcp-channel-ws--degraded-mode)
+                     (cons 'reconnect-count hive-mcp-channel-ws--reconnect-count)
+                     (cons 'queued (length hive-mcp-channel-ws--message-queue))
+                     (cons 'url hive-mcp-channel-ws-url))]
     (when (called-interactively-p 'any)
       (message "hive-mcp-channel-ws: %s"
                (if (hive-mcp-channel-ws-connected-p)

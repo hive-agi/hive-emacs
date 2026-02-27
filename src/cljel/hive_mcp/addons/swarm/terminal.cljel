@@ -299,7 +299,7 @@ Returns (ERROR-TYPE . ERROR-PREVIEW) if error found, nil otherwise."
                     error-type (cdr pattern-pair)]
                 (when (string-match-p (regexp-quote pattern) recent-text)
                   (let [error-preview
-                        (when (string-match (concat "^.*" (regexp-quote pattern) ".*$")
+                        (when (string-match (elisp-concat "^.*" (regexp-quote pattern) ".*$")
                                             recent-text)
                           (substring recent-text
                                      (match-beginning 0)
@@ -311,7 +311,7 @@ Returns (ERROR-TYPE . ERROR-PREVIEW) if error found, nil otherwise."
 (defn- -truncate-for-preview [text max-length]
   "Truncate TEXT to MAX-LENGTH chars, adding ellipsis if needed."
   (if (and text (> (length text) max-length))
-      (concat (substring text 0 (- max-length 3)) "...")
+      (elisp-concat (substring text 0 (- max-length 3)) "...")
     (or text "")))
 
 ;; ============================================================================

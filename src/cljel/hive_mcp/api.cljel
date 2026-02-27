@@ -573,7 +573,7 @@ Returns the user's response string."
   ;; CLARITY-I: Validate and sanitize prompt at boundary
   (let [safe-prompt (hive-mcp-api--sanitize-prompt prompt)]
     (hive-mcp-api--validate-string-or-nil default "default")
-    (read-string (concat safe-prompt ": ") default)))
+    (read-string (elisp-concat safe-prompt ": ") default)))
 
 (defn confirm [prompt]
   "Show PROMPT and ask user for yes/no confirmation.
@@ -590,7 +590,7 @@ Returns the selected option."
   ;; CLARITY-I: Validate inputs at boundary
   (let [safe-prompt (hive-mcp-api--sanitize-prompt prompt)]
     (hive-mcp-api--validate-list-of-strings options "options")
-    (completing-read (concat safe-prompt ": ") options nil t)))
+    (completing-read (elisp-concat safe-prompt ": ") options nil t)))
 
 ;;;; Buffer and File Operations API
 

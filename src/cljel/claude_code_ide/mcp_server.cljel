@@ -258,7 +258,7 @@ This is useful for generating --allowedTools lists."
                    tool-name (or (plist-get normalized :name)
                                  (symbol-name (plist-get normalized :function)))]
               (if prefix
-                  (concat prefix tool-name)
+                  (elisp-concat prefix tool-name)
                 tool-name)))
           claude-code-ide-mcp-server-tools))
 

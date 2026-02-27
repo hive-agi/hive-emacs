@@ -145,8 +145,8 @@ This enables persistent conversation history per project."
         (when (and snippets (> (length snippets) 0))
           (push (format "Code snippets: %d available" (length snippets)) parts))))
     (if parts
-        (concat "# Project Context\n"
-                (mapconcat (lambda (p) (concat "- " p)) (nreverse parts) "\n"))
+        (elisp-concat "# Project Context\n"
+                (mapconcat (lambda (p) (elisp-concat "- " p)) (nreverse parts) "\n"))
       "")))
 
 (defn- -get-context-string []

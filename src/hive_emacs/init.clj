@@ -34,11 +34,10 @@
 ;; =============================================================================
 ;; Elisp Load-Path Injection (hive-claude/lsp-mcp exemplar)
 ;; =============================================================================
-;; Compiled cljel .el files live under src/cljel/hive_mcp/ on the classpath.
+;; Compiled cljel .el files live under resources/elisp/hive_mcp/ on the classpath.
+;; Source .cljel files stay in src/cljel/hive_mcp/ (clean separation like cljs).
 ;; File names don't match feature names (e.g. presets.el provides hive-mcp-swarm-presets),
 ;; so we use (load "/abs/path") instead of (require 'feature).
-;; Stub files (incomplete compilation) are safe: defvar/defcustom don't override,
-;; and existing functions from old hive-mcp elisp remain intact.
 
 (defn- resolve-cljel-dirs
   "Locate compiled cljel elisp directories on classpath.
@@ -46,7 +45,7 @@
   []
   (let [dirs (atom [])]
     ;; hive-emacs compiled cljel elisp (marker: addons.el is always present)
-    (when-let [res-url (io/resource "cljel/hive_mcp/addons.el")]
+    (when-let [res-url (io/resource "elisp/hive_mcp/addons.el")]
       (let [cljel-base (-> (.getPath res-url)
                            (str/replace #"/hive_mcp/addons\.el$" ""))]
         (doseq [f (file-seq (io/file cljel-base))]
@@ -62,10 +61,10 @@
     @dirs))
 
 (defn- collect-cljel-files
-  "Collect compiled .el files under cljel/hive_mcp/ on classpath.
+  "Collect compiled .el files under elisp/hive_mcp/ on classpath.
    Returns absolute paths sorted by depth (parents before children)."
   []
-  (when-let [res-url (io/resource "cljel/hive_mcp/addons.el")]
+  (when-let [res-url (io/resource "elisp/hive_mcp/addons.el")]
     (let [hive-mcp-dir (-> (.getPath res-url)
                            (str/replace #"/addons\.el$" ""))]
       (->> (file-seq (io/file hive-mcp-dir))

@@ -176,7 +176,7 @@ Returns plist with :todo, :doing, :review counts."
     (dolist [task all-tasks]
       (let* [content (plist-get task :content)
              status (plist-get content :status)
-             key (intern (concat ":" status))]
+             key (intern (elisp-concat ":" status))]
         (plist-put counts key (1+ (plist-get counts key)))))
     counts))
 

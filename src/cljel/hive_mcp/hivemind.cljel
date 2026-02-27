@@ -90,7 +90,7 @@
     ;; Dispatch to hooks for state sync
     (when (fboundp 'hive-mcp-swarm-hooks-dispatch)
       (hive-mcp-swarm-hooks-dispatch
-        (intern (concat ":" event-type))
+        (intern (elisp-concat ":" event-type))
         (list :agent-id agent-id
               :event-type event-type
               :task task

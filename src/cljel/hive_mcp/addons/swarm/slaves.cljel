@@ -281,7 +281,7 @@ The coordinator tracks you by this exact ID.
 
 " slave-id work-dir slave-id slave-id work-dir)
          system-prompt (if base-prompt
-                           (concat identity-section base-prompt)
+                           (elisp-concat identity-section base-prompt)
                          identity-section)
          buffer nil]
 

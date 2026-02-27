@@ -342,7 +342,7 @@ TYPE filters by memory type (note, snippet, convention, decision)."
                 (insert (format "  Type: %s\n" (plist-get metadata :type))))
               (insert (format "  %s\n\n"
                               (if (> (length doc) 200)
-                                  (concat (substring doc 0 200) "...")
+                                  (elisp-concat (substring doc 0 200) "...")
                                 doc))))))
         (goto-char (point-min))))
     (display-buffer buf)))

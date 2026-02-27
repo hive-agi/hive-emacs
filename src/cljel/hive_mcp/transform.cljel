@@ -105,7 +105,7 @@ MAX-LEN defaults to 100."
   (let [max-len (or max-len 100)
         text (hive-mcp-transform--extract-text content)]
     (if (> (length text) max-len)
-      (concat (substring text 0 (- max-len 3)) "...")
+      (elisp-concat (substring text 0 (- max-len 3)) "...")
       text)))
 
 ;;; Entry metadata extraction
