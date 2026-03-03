@@ -17,6 +17,7 @@
    Usage:
      (init-as-addon!)   ;; called by classpath scanner"
   (:require [hive-emacs.editor-adapter :as ema]
+            [hive-emacs.vessel :as vessel]
             [taoensso.timbre :as log]
             [clojure.java.io :as io]
             [clojure.string :as str]))
@@ -158,6 +159,11 @@
                 (if (and set-editor! get-editor editor-id-fn)
                   (do
                     (set-editor! (ema/->emacsclient-editor))
+                    ;; Register EmacsVessel in IVessel registry (self-registration)
+                    (when-let [v (vessel/create-emacs-vessel)]
+                      (when-let [register! (try-resolve 'hive-mcp.protocols.vessel/register-vessel!)]
+                        (register! v)
+                        (log/info "EmacsVessel registered in vessel registry")))
                     (swap! state assoc :initialized? true)
                     (log/info "hive-emacs initialized — EmacsclientEditor wired as active IEditor")
                     {:success? true
@@ -171,10 +177,12 @@
 
         (shutdown! [_]
           (when (:initialized? @state)
+            (when-let [unregister! (try-resolve 'hive-mcp.protocols.vessel/unregister-vessel!)]
+              (unregister! :emacs))
             (when-let [clear! (try-resolve 'hive-mcp.protocols.editor/clear-editor!)]
               (clear!))
             (swap! state assoc :initialized? false)
-            (log/info "hive-emacs shut down — IEditor cleared to NoopEditor"))
+            (log/info "hive-emacs shut down — IEditor + EmacsVessel cleared"))
           nil)
 
         (tools [_]

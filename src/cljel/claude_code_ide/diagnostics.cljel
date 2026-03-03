@@ -79,21 +79,24 @@ Returns: 1 (Error), 2 (Warning), 3 (Information), 4 (Hint)."
     (with-current-buffer buffer
       (when (bound-and-true-p flycheck-mode)
         (mapcar (lambda (err)
-                  `((range . ((start . ((line . ,(flycheck-error-line err))
-                                        (character . ,(if (flycheck-error-column err)
-                                                          (flycheck-error-column err)
-                                                        1))))
-                              (end . ((line . ,(or (flycheck-error-end-line err)
-                                                   (flycheck-error-line err)))
-                                      (character . ,(if (or (flycheck-error-end-column err)
-                                                            (flycheck-error-column err))
-                                                        (or (flycheck-error-end-column err)
-                                                            (flycheck-error-column err))
-                                                      1))))))
-                    (severity . ,(claude-code-ide-diagnostics--severity-to-string
-                                  (flycheck-error-level err)))
-                    (source . ,(or (flycheck-error-checker err) "flycheck"))
-                    (message . ,(flycheck-error-message err))))
+                  (list (cons 'range
+                              (list (cons 'start
+                                          (list (cons 'line (flycheck-error-line err))
+                                                (cons 'character (if (flycheck-error-column err)
+                                                                     (flycheck-error-column err)
+                                                                   1))))
+                                    (cons 'end
+                                          (list (cons 'line (or (flycheck-error-end-line err)
+                                                                (flycheck-error-line err)))
+                                                (cons 'character (if (or (flycheck-error-end-column err)
+                                                                         (flycheck-error-column err))
+                                                                     (or (flycheck-error-end-column err)
+                                                                         (flycheck-error-column err))
+                                                                   1))))))
+                        (cons 'severity (claude-code-ide-diagnostics--severity-to-string
+                                         (flycheck-error-level err)))
+                        (cons 'source (or (flycheck-error-checker err) "flycheck"))
+                        (cons 'message (flycheck-error-message err))))
                 flycheck-current-errors)))))
 
 (defn- -get-flymake-diagnostics [buffer]
@@ -111,15 +114,18 @@ Returns: 1 (Error), 2 (Warning), 3 (Information), 4 (Hint)."
                            end-line (progn (goto-char end)
                                            (line-number-at-pos))
                            end-col (current-column)]
-                      `((range . ((start . ((line . ,beg-line)
-                                            (character . ,beg-col)))
-                                  (end . ((line . ,end-line)
-                                          (character . ,end-col)))))
-                        (severity . ,(claude-code-ide-diagnostics--severity-to-string
-                                      (flymake-diagnostic-type diag)))
-                        (source . ,(symbol-name (or (flymake-diagnostic-backend diag)
-                                                    'flymake)))
-                        (message . ,(flymake-diagnostic-text diag))))))
+                      (list (cons 'range
+                                  (list (cons 'start
+                                              (list (cons 'line beg-line)
+                                                    (cons 'character beg-col)))
+                                        (cons 'end
+                                              (list (cons 'line end-line)
+                                                    (cons 'character end-col)))))
+                            (cons 'severity (claude-code-ide-diagnostics--severity-to-string
+                                             (flymake-diagnostic-type diag)))
+                            (cons 'source (symbol-name (or (flymake-diagnostic-backend diag)
+                                                           'flymake)))
+                            (cons 'message (flymake-diagnostic-text diag))))))
                 (flymake-diagnostics))))))
 
 (defn get-all [buffer]
@@ -174,8 +180,8 @@ Optional SESSION contains the MCP session context."
           (when buffer
             (let [diags (claude-code-ide-diagnostics-get-all buffer)]
               (when (> (length diags) 0)
-                (push `((uri . ,uri)
-                        (diagnostics . ,diags))
+                (push (list (cons 'uri uri)
+                            (cons 'diagnostics diags))
                       diagnostics-by-file)))))
       ;; Get diagnostics for all files in the session's project
       (let [buffer-count 0
@@ -192,13 +198,13 @@ Optional SESSION contains the MCP session context."
               (let [diags (claude-code-ide-diagnostics-get-all buffer)]
                 (claude-code-ide-debug "Found %d diagnostics for %s" (length diags) file)
                 (when (> (length diags) 0)
-                  (push `((uri . ,(claude-code-ide-diagnostics-file-path-to-uri file))
-                          (diagnostics . ,diags))
+                  (push (list (cons 'uri (claude-code-ide-diagnostics-file-path-to-uri file))
+                              (cons 'diagnostics diags))
                         diagnostics-by-file))))))
         (claude-code-ide-debug "Checked %d/%d buffers with files" checked-count buffer-count)))
     ;; Return JSON-encoded string in content array format
     (let [json-str (if diagnostics-by-file
                        (json-encode (vconcat (nreverse diagnostics-by-file)))
                      "[]")]
-      (list `((type . "text")
-              (text . ,json-str))))))
+      (list (list (cons 'type "text")
+                  (cons 'text json-str))))))

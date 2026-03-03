@@ -132,10 +132,10 @@ Returns the expanded project root path if a project is found."
   (let* [lockfile-dir (claude-code-ide-mcp--lockfile-directory)
          lockfile-path (claude-code-ide-mcp--lockfile-path port)
          workspace-folders (vector project-dir)
-         lockfile-content `((pid . ,(emacs-pid))
-                            (workspaceFolders . ,workspace-folders)
-                            (ideName . "Emacs")
-                            (transport . "ws"))]
+         lockfile-content (list (cons 'pid (emacs-pid))
+                               (cons 'workspaceFolders workspace-folders)
+                               (cons 'ideName "Emacs")
+                               (cons 'transport "ws"))]
     (make-directory lockfile-dir t)
     (condition-case err
         (with-temp-file lockfile-path
@@ -159,17 +159,17 @@ Returns the expanded project root path if a project is found."
 
 (defn- -make-response [id result]
   "Create a JSON-RPC response with ID and RESULT."
-  `((jsonrpc . "2.0")
-    (id . ,id)
-    (result . ,result)))
+  (list (cons 'jsonrpc "2.0")
+        (cons 'id id)
+        (cons 'result result)))
 
 (defn- -make-error-response [id code message &optional data]
   "Create a JSON-RPC error response with ID, CODE, MESSAGE and optional DATA."
-  `((jsonrpc . "2.0")
-    (id . ,id)
-    (error . ((code . ,code)
-              (message . ,message)
-              ,@(when data `((data . ,data)))))))
+  (list (cons 'jsonrpc "2.0")
+        (cons 'id id)
+        (cons 'error (append (list (cons 'code code)
+                                   (cons 'message message))
+                             (when data (list (cons 'data data)))))))
 
 (defn- -send-notification [method params]
   "Send a JSON-RPC notification with METHOD and PARAMS to the current session."
@@ -183,9 +183,9 @@ Returns the expanded project root path if a project is found."
                                     claude-code-ide-mcp--buffer-cache-valid t))
                             found-session))
               client (claude-code-ide-mcp-session-client session)]
-    (let [message `((jsonrpc . "2.0")
-                    (method . ,method)
-                    (params . ,params))]
+    (let [message (list (cons 'jsonrpc "2.0")
+                        (cons 'method method)
+                        (cons 'params params))]
       (claude-code-ide-debug "Sending notification: %s" (json-encode message))
       (condition-case err
           (progn
@@ -207,14 +207,15 @@ Returns the expanded project root path if a project is found."
                      "notifications/tools/list_changed"
                      (make-hash-table :test 'equal))))
 
-  (let [response `((protocolVersion . ,claude-code-ide-mcp-version)
-                   (capabilities . ((tools . ((listChanged . t)))
-                                    (resources . ((subscribe . :json-false)
-                                                  (listChanged . :json-false)))
-                                    (prompts . ((listChanged . t)))
-                                    (logging . ,(make-hash-table :test 'equal))))
-                   (serverInfo . ((name . "claude-code-ide-mcp")
-                                  (version . "0.1.0"))))]
+  (let [response (list (cons 'protocolVersion claude-code-ide-mcp-version)
+                       (cons 'capabilities
+                             (list '(tools . ((listChanged . t)))
+                                   '(resources . ((subscribe . :json-false)
+                                                   (listChanged . :json-false)))
+                                   '(prompts . ((listChanged . t)))
+                                   (cons 'logging (make-hash-table :test 'equal))))
+                       '(serverInfo . ((name . "claude-code-ide-mcp")
+                                       (version . "0.1.0"))))]
     (claude-code-ide-mcp--make-response id response)))
 
 (defn- -prepare-schema-for-json [schema]
@@ -247,12 +248,12 @@ Converts :json-empty to empty hash tables."
              schema (alist-get name claude-code-ide-mcp-tool-schemas nil nil #'string=)
              prepared-schema (claude-code-ide-mcp--prepare-schema-for-json schema)
              description (alist-get name claude-code-ide-mcp-tool-descriptions nil nil #'string=)]
-        (push `((name . ,name)
-                (description . ,description)
-                (inputSchema . ,prepared-schema))
+        (push (list (cons 'name name)
+                    (cons 'description description)
+                    (cons 'inputSchema prepared-schema))
               tools)))
     (let* [tools-array (vconcat (nreverse tools))
-           response `((tools . ,tools-array))]
+           response (list (cons 'tools tools-array))]
       (claude-code-ide-mcp--make-response id response))))
 
 (defn- -handle-prompts-list [id _params]
@@ -291,7 +292,7 @@ Optional SESSION contains the MCP session context."
                           (claude-code-ide-debug "Warning: No session found, cannot store deferred response")))
                       nil)
                   ;; Normal response
-                  (claude-code-ide-mcp--make-response id `((content . ,result))))))
+                  (claude-code-ide-mcp--make-response id (list (cons 'content result))))))
           (mcp-error
            (claude-code-ide-mcp--make-error-response
             id -32603 (if (listp (cdr err))
@@ -431,9 +432,9 @@ Optional SESSION contains the MCP session context."
                                (let [file-path (buffer-file-name)]
                                  (claude-code-ide-mcp--send-notification
                                   "workspace/didChangeActiveEditor"
-                                  `((uri . ,(elisp-concat "file://" file-path))
-                                    (path . ,file-path)
-                                    (name . ,(buffer-name)))))))))))
+                                  (list (cons 'uri (elisp-concat "file://" file-path))
+                                        (cons 'path file-path)
+                                        (cons 'name (buffer-name)))))))))))
       (claude-code-ide-debug "Warning: Could not find session for WebSocket connection"))))
 
 (defn- -on-message [ws frame]
@@ -584,9 +585,9 @@ Optional SESSION contains the MCP session context."
                 (claude-code-ide-mcp-server-update-last-active-buffer session-id current-buffer))
               (claude-code-ide-mcp--send-notification
                "workspace/didChangeActiveEditor"
-               `((uri . ,(elisp-concat "file://" file-path))
-                 (path . ,file-path)
-                 (name . ,(buffer-name current-buffer)))))))))))
+               (list (cons 'uri (elisp-concat "file://" file-path))
+                     (cons 'path file-path)
+                     (cons 'name (buffer-name current-buffer)))))))))))
 
 ;;; Public API
 
@@ -677,9 +678,9 @@ Optional SESSION contains the MCP session context."
                     (1- (line-number-at-pos (point))))]
     (claude-code-ide-mcp--send-notification
      "at_mentioned"
-     `((filePath . ,file-path)
-       (lineStart . ,start-line)
-       (lineEnd . ,end-line)))))
+     (list (cons 'filePath file-path)
+           (cons 'lineStart start-line)
+           (cons 'lineEnd end-line)))))
 
 (defn complete-deferred [session tool-name result &optional unique-key]
   "Complete a deferred response for SESSION and TOOL-NAME with RESULT."
@@ -695,7 +696,7 @@ Optional SESSION contains the MCP session context."
             (let [client (claude-code-ide-mcp-session-client session)]
               (remhash lookup-key session-deferred)
               (if client
-                  (let* [response (claude-code-ide-mcp--make-response id `((content . ,result)))
+                  (let* [response (claude-code-ide-mcp--make-response id (list (cons 'content result)))
                          json-response (json-encode response)]
                     (claude-code-ide-debug "Sending deferred response: %s" json-response)
                     (websocket-send-text client json-response))

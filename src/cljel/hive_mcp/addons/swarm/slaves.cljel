@@ -73,9 +73,9 @@ Functions provided:
 ;; ID Generation
 ;; ============================================================================
 
-(defn generate-id [name]
-  "Generate unique slave ID for NAME."
-  (format "swarm-%s-%d" name (floor (float-time))))
+(defn generate-id [ling-name]
+  "Generate unique slave ID for LING-NAME."
+  (format "swarm-%s-%d" ling-name (floor (float-time))))
 
 (defn generate-task-id [slave-id]
   "Generate unique task ID for SLAVE-ID."
@@ -157,8 +157,8 @@ Kill some slaves with `hive-mcp-swarm-kill' before spawning more."
 ;; Spawn Functions
 ;; ============================================================================
 
-(cl-defun hive-mcp-swarm-slaves-spawn (name &key presets cwd role terminal backend model kanban-task-id injected-context)
-  "Spawn a new Claude slave with NAME - FULLY ASYNC.
+(cl-defun hive-mcp-swarm-slaves-spawn (ling-name &key presets cwd role terminal backend model kanban-task-id injected-context)
+  "Spawn a new Claude slave with LING-NAME - FULLY ASYNC.
 
 PRESETS is a list of preset names to apply.
 CWD is the working directory (defaults to current project root).
@@ -194,7 +194,7 @@ Returns the slave-id IMMEDIATELY.  The actual spawn happens async."
   ;; Merge with default presets (ling, mcp-first by default)
   (setq presets (hive-mcp-swarm-presets-merge-defaults (or presets '())))
 
-  (let* [slave-id (hive-mcp-swarm-slaves/generate-id name)
+  (let* [slave-id (hive-mcp-swarm-slaves/generate-id ling-name)
          work-dir (or cwd (-project-root) default-directory)
          ;; Backend priority: explicit backend > terminal arg > default terminal
          term-backend (or backend terminal hive-mcp-swarm-terminal)
@@ -204,7 +204,7 @@ Returns the slave-id IMMEDIATELY.  The actual spawn happens async."
     ;; Register slave IMMEDIATELY with "spawning" status
     (puthash slave-id
              (list :slave-id slave-id
-                   :name name
+                   :name ling-name
                    :role role
                    :presets presets
                    :status 'spawning
@@ -233,15 +233,15 @@ Returns the slave-id IMMEDIATELY.  The actual spawn happens async."
              parent-id)
 
     ;; Emit slave-spawned event
-    (hive-mcp-swarm-events-emit-slave-spawned slave-id name presets work-dir kanban-task-id)
+    (hive-mcp-swarm-events-emit-slave-spawned slave-id ling-name presets work-dir kanban-task-id)
 
     ;; FULLY ASYNC: Defer ALL work to timer so we return IMMEDIATELY
     (let [ctx injected-context]
       (run-with-timer
        0 nil
-       (lambda (_unused)
+       (lambda ()
          (condition-case err
-             (hive-mcp-swarm-slaves--do-spawn-async slave-id name presets work-dir term-backend ctx)
+             (hive-mcp-swarm-slaves---do-spawn-async slave-id ling-name presets work-dir term-backend ctx)
            (error
             ;; Mark slave as errored
             (when-let* [slave (gethash slave-id hive-mcp-swarm--slaves)]
@@ -254,11 +254,11 @@ Returns the slave-id IMMEDIATELY.  The actual spawn happens async."
 
     slave-id))
 
-(defn- -do-spawn-async [slave-id name presets work-dir term-backend &optional injected-context]
+(defn- -do-spawn-async [slave-id ling-name presets work-dir term-backend &optional injected-context]
   "Actually spawn the slave buffer for SLAVE-ID.
 Called async from `hive-mcp-swarm-slaves-spawn'."
   (let* [slave (gethash slave-id hive-mcp-swarm--slaves)
-         buffer-name (format "%s%s*" hive-mcp-swarm-buffer-prefix name)
+         buffer-name (format "%s%s*" hive-mcp-swarm-buffer-prefix ling-name)
          base-prompt (hive-mcp-swarm-presets-build-system-prompt presets injected-context)
          ;; CRITICAL FIX: Inject actual slave-id into system prompt
          identity-section (format "## YOUR IDENTITY AND ENVIRONMENT (CRITICAL)
@@ -361,7 +361,7 @@ The coordinator tracks you by this exact ID.
          (with-current-buffer buffer
            (vterm-mode)
            (run-at-time 0.5 nil
-                        (lambda (_unused)
+                        (lambda ()
                           (condition-case err
                               (when (buffer-live-p buffer)
                                 (with-current-buffer buffer
@@ -375,7 +375,7 @@ The coordinator tracks you by this exact ID.
            (eat-mode)
            (eat-exec buffer "swarm-shell" "/bin/bash" nil '("-l")))
          (run-at-time 0.5 nil
-                      (lambda (_unused)
+                      (lambda ()
                         (condition-case err
                             (when (buffer-live-p buffer)
                               (with-current-buffer buffer
@@ -392,7 +392,7 @@ The coordinator tracks you by this exact ID.
          (let [model (or (plist-get slave :model)
                          (bound-and-true-p hive-mcp-ellama-default-model)
                          "devstral")]
-           (hive-mcp-ellama-swarm-spawn slave-id name model)
+           (hive-mcp-ellama-swarm-spawn slave-id ling-name model)
            (plist-put slave :model model)
            (plist-put slave :backend 'ollama)
            (plist-put slave :status 'idle)))))
@@ -403,7 +403,7 @@ The coordinator tracks you by this exact ID.
   ;; Schedule status transition to idle
   (run-at-time
    3 nil
-   (lambda (_unused)
+   (lambda ()
      (condition-case err
          (when-let* [s (gethash slave-id hive-mcp-swarm--slaves)]
            (when (memq (plist-get s :status) '(starting spawning))

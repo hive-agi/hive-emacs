@@ -169,7 +169,7 @@ LEVEL is the current indentation level.
 MAX-DEPTH is the maximum depth to traverse."
   (if (or (not node) (>= level max-depth))
       ""
-    (let* [indent (make-string (* level 2) ?\s)
+    (let* [indent (make-string (* level 2) 32)
            type (treesit-node-type node)
            named (if (treesit-node-check node 'named) " (named)" "")
            start (treesit-node-start node)

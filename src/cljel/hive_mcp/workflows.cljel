@@ -68,13 +68,13 @@ Each entry is TYPE -> function taking (step env) and returning env.")
   "Register workflow NAME with SPEC.
 Thread-safe: overwrites existing entry atomically."
   (puthash name spec hive-mcp-workflow-registry)
-  (hive-mcp-workflow--save)
+  (hive-mcp-workflows---save)
   (message "Workflow '%s' registered" name))
 
 (defn workflow-unregister [name]
   "Remove workflow NAME from registry."
   (remhash name hive-mcp-workflow-registry)
-  (hive-mcp-workflow--save))
+  (hive-mcp-workflows---save))
 
 (defn workflow-get [name]
   "Get workflow spec by NAME."
@@ -102,7 +102,7 @@ Runs before/after hooks around execution."
   (if-let [spec (gethash name hive-mcp-workflow-registry)]
     (do
       (run-hook-with-args 'hive-mcp-workflow-before-hook name args)
-      (let [result (hive-mcp-workflow--execute spec args)]
+      (let [result (hive-mcp-workflows---execute spec args)]
         (run-hook-with-args 'hive-mcp-workflow-after-hook name result)
         result))
     (error "Unknown workflow: %s" name)))
@@ -124,13 +124,13 @@ State transitions are guarded: checks current step state before advancing."
       ;; Otherwise execute step-by-step
       (let [steps (plist-get spec :steps)
             on-error (or (plist-get spec :on-error) :stop)
-            env (hive-mcp-workflows--init-env spec args)
+            env (hive-mcp-workflows---init-env spec args)
             step-num 0]
         (catch 'workflow-abort
           (dolist [step steps]
             (setq step-num (1+ step-num))
             (condition-case err
-              (setq env (hive-mcp-workflows--run-step step env))
+              (setq env (hive-mcp-workflows---run-step step env))
               (error
                 (pcase on-error
                   (:stop
@@ -181,19 +181,19 @@ Checks for custom handler first, then falls through to built-in types."
       ;; Built-in step types
       (pcase type
         (:elisp
-          (hive-mcp-workflows--step-elisp step env))
+          (hive-mcp-workflows---step-elisp step env))
         (:shell
-          (hive-mcp-workflows--step-shell step env))
+          (hive-mcp-workflows---step-shell step env))
         (:prompt
-          (hive-mcp-workflows--step-prompt step env))
+          (hive-mcp-workflows---step-prompt step env))
         (:confirm
-          (hive-mcp-workflows--step-confirm step env))
+          (hive-mcp-workflows---step-confirm step env))
         (:condition
-          (hive-mcp-workflows--step-condition step env))
+          (hive-mcp-workflows---step-condition step env))
         (:memory-add
-          (hive-mcp-workflows--step-memory-add step env))
+          (hive-mcp-workflows---step-memory-add step env))
         (:notify
-          (hive-mcp-workflows--step-notify step env))
+          (hive-mcp-workflows---step-notify step env))
         (_
           (error "Unknown step type: %s" type))))))
 
@@ -212,7 +212,7 @@ Checks for custom handler first, then falls through to built-in types."
 (defn- -step-shell [step env]
   "Execute shell command from STEP with ENV variable substitution."
   (let [cmd-template (plist-get step :command)
-        cmd (hive-mcp-workflows--substitute-vars cmd-template env)
+        cmd (hive-mcp-workflows---substitute-vars cmd-template env)
         result (string-trim (shell-command-to-string cmd))]
     (if-let [var (plist-get step :var)]
       (plist-put env var result)
@@ -237,14 +237,14 @@ Returns ENV if confirmed, otherwise signals error."
   (let [test-fn (plist-get step :test)]
     (if (funcall test-fn env)
       (when-let [then-step (plist-get step :then)]
-        (hive-mcp-workflows--run-step then-step env))
+        (hive-mcp-workflows---run-step then-step env))
       (when-let [else-step (plist-get step :else)]
-        (hive-mcp-workflows--run-step else-step env)))))
+        (hive-mcp-workflows---run-step else-step env)))))
 
 (defn- -step-memory-add [step env]
   "Add memory entry from STEP, substituting variables from ENV."
   (let [type (plist-get step :mem-type)
-        content (hive-mcp-workflows--substitute-vars
+        content (hive-mcp-workflows---substitute-vars
                   (plist-get step :content) env)
         tags (plist-get step :tags)]
     (hive-mcp-memory-add (intern type) content tags))
@@ -252,7 +252,7 @@ Returns ENV if confirmed, otherwise signals error."
 
 (defn- -step-notify [step env]
   "Show notification from STEP message, substituting variables from ENV."
-  (let [msg (hive-mcp-workflows--substitute-vars
+  (let [msg (hive-mcp-workflows---substitute-vars
               (plist-get step :message) env)
         level (or (plist-get step :level) 'info)]
     (pcase level
@@ -752,5 +752,12 @@ Idempotent: only registers if not already present."
 
 ;; Auto-register builtins on load
 (hive-mcp-workflows---register-builtins)
+
+;; ============================================================================
+;; Compatibility aliases (hive-mcp.el uses hive-mcp-workflow- prefix)
+;; ============================================================================
+(defalias 'hive-mcp-workflow--load #'hive-mcp-workflows---load)
+(defalias 'hive-mcp-workflow--register-builtins #'hive-mcp-workflows---register-builtins)
+(defalias 'hive-mcp-workflow-run-interactive #'hive-mcp-workflows-workflow-run-interactive)
 
 (provide 'hive-mcp-workflows)

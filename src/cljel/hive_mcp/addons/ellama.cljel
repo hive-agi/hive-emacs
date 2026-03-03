@@ -159,14 +159,14 @@ Includes num_ctx for larger context windows."
 PROMPT is the original user prompt."
   (if (and hive-mcp-ellama-inject-context
            (-ensure-bridge))
-      (let [context (hive-mcp-ai-build-context
-                     (when hive-mcp-ellama-include-semantic
-                       prompt))]
-        (if context
-            (elisp-concat (hive-mcp-ai-format-context-for 'ellama context)
-                    hive-mcp-ellama-context-prefix
-                    prompt)
-          prompt))
+    (let [context (hive-mcp-ai-build-context
+                   (when hive-mcp-ellama-include-semantic
+                     prompt))]
+      (if context
+        (elisp-concat (hive-mcp-ai-format-context-for 'ellama context)
+                      hive-mcp-ellama-context-prefix
+                      prompt)
+        prompt))
     prompt))
 
 ;; ============================================================================
@@ -208,11 +208,11 @@ Uses llm-chat-async directly for reliable model selection."
        provider
        (llm-make-chat-prompt prompt)
        (lambda (response)
-         (-handle-response response)
-         (when callback
-           (funcall callback response)))
+               (-handle-response response)
+               (when callback
+                 (funcall callback response)))
        (lambda (err)
-         (message "[hive-mcp-ellama] Error: %s" err))))))
+               (message "[hive-mcp-ellama] Error: %s" err))))))
 
 (defn dispatch-with-context [prompt &optional model callback]
   "Send PROMPT to Ollama with memory context injected.
@@ -226,8 +226,8 @@ CALLBACK is called with the response when complete."
   "Interactively select an Ollama model."
   (interactive)
   (let* [choices (mapcar (lambda (m)
-                            (format "%s - %s" (car m) (cdr m)))
-                          hive-mcp-ellama-models)
+                                 (format "%s - %s" (car m) (cdr m)))
+                         hive-mcp-ellama-models)
          choice (completing-read "Model: " choices nil t)
          model (car (split-string choice " - "))]
     (setq hive-mcp-ellama-default-model model)
@@ -262,7 +262,7 @@ Returns a task-id."
          model (plist-get worker :model)
          task-id (format "ollama-task-%s-%d" worker-id (floor (float-time)))]
     (unless worker
-      (error "Worker not found: %s" worker-id))
+            (error "Worker not found: %s" worker-id))
     ;; Update worker status
     (plist-put worker :status 'working)
     (plist-put worker :task task-id)
@@ -272,23 +272,23 @@ Returns a task-id."
      model
      (lambda (response)
        ;; Update worker with result
-       (plist-put worker :status 'idle)
-       (plist-put worker :result response)
-       (plist-put worker :task nil)
-       (when callback
-         (funcall callback response))))
+             (plist-put worker :status 'idle)
+             (plist-put worker :result response)
+             (plist-put worker :task nil)
+             (when callback
+               (funcall callback response))))
     task-id))
 
 (defn swarm-status []
   "Get status of all Ollama swarm workers."
   (let [workers '()]
     (maphash (lambda (id worker)
-               (push (list :worker-id id
-                           :name (plist-get worker :name)
-                           :model (plist-get worker :model)
-                           :status (plist-get worker :status)
-                           :task (plist-get worker :task))
-                     workers))
+                     (push (list :worker-id id
+                                 :name (plist-get worker :name)
+                                 :model (plist-get worker :model)
+                                 :status (plist-get worker :status)
+                                 :task (plist-get worker :task))
+                           workers))
              hive-mcp-ellama--workers)
     (list :total (hash-table-count hive-mcp-ellama--workers)
           :workers (nreverse workers))))
@@ -312,20 +312,20 @@ Returns a task-id."
   "Read file at PATH via MCP.
 Used by Ollama workers for file operations."
   (when (fboundp 'hive-mcp-api-call)
-    (hive-mcp-api-call "read_file" `(:path ,path))))
+    (hive-mcp-api-call "read_file" (list :path path))))
 
 (defn -tool-edit [path old-string new-string]
   "Edit file at PATH, replacing OLD-STRING with NEW-STRING via MCP."
   (when (fboundp 'hive-mcp-api-call)
     (hive-mcp-api-call "file_edit"
-                       `(:file_path ,path
-                         :old_string ,old-string
-                         :new_string ,new-string))))
+                       (list :file_path path
+                             :old_string old-string
+                             :new_string new-string))))
 
 (defn -tool-bash [command]
   "Run shell COMMAND via MCP."
   (when (fboundp 'hive-mcp-api-call)
-    (hive-mcp-api-call "bash" `(:command ,command))))
+    (hive-mcp-api-call "bash" (list :command command))))
 
 ;; ============================================================================
 ;; Interactive Commands
@@ -343,7 +343,7 @@ Used by Ollama workers for file operations."
   (when (-ensure-bridge)
     (let [results (hive-mcp-ai-build-context query)]
       (if results
-          (insert results)
+        (insert results)
         (message "No relevant memory found")))))
 
 (defn store-region [beg end]
@@ -364,7 +364,7 @@ Used by Ollama workers for file operations."
   (when (-ensure-ellama)
     ;; Set default provider if not already set
     (unless (bound-and-true-p ellama-provider)
-      (setq ellama-provider (make-provider)))
+            (setq ellama-provider (make-provider)))
     ;; Hook into ellama completion
     (advice-add 'ellama-chat :around #'-chat-advice)))
 
@@ -377,7 +377,7 @@ Used by Ollama workers for file operations."
 ORIG-FUN is the original function, PROMPT is the user prompt, ARGS are extra args."
   (setq hive-mcp-ellama--last-prompt prompt)
   (let [augmented (if hive-mcp-ellama-inject-context
-                      (-build-context-prompt prompt)
+                    (-build-context-prompt prompt)
                     prompt)]
     (apply orig-fun augmented args)))
 
@@ -398,10 +398,10 @@ When enabled:
   :global t
   :group 'hive-mcp-ellama
   (if hive-mcp-ellama-mode
-      (progn
-        (-setup)
-        (setq hive-mcp-ellama--initialized t)
-        (message "hive-mcp-ellama: enabled"))
+    (progn
+     (-setup)
+     (setq hive-mcp-ellama--initialized t)
+     (message "hive-mcp-ellama: enabled"))
     (-teardown)
     (message "hive-mcp-ellama: disabled")))
 
@@ -411,19 +411,19 @@ When enabled:
 
 (with-eval-after-load 'transient
   (transient-define-prefix hive-mcp-ellama-menu ()
-    "MCP integration menu for ellama/Ollama."
-    ["hive-mcp + ellama"
-     ["Chat"
-      ("c" "Chat with context" hive-mcp-ellama-chat-with-context)
-      ("q" "Query memory" hive-mcp-ellama-query-memory)
-      ("m" "Select model" hive-mcp-ellama-select-model)]
-     ["Store"
-      ("s" "Store region" hive-mcp-ellama-store-region)]
-     ["Swarm"
-      ("S" "Swarm status" (lambda (_unused) (interactive) (message "%s" (swarm-status))))
-      ("K" "Kill all workers" hive-mcp-ellama-swarm-kill-all)]
-     ["Toggle"
-      ("t" "Toggle mode" hive-mcp-ellama-mode)]]))
+                           "MCP integration menu for ellama/Ollama."
+                           ["hive-mcp + ellama"
+                            ["Chat"
+                             ("c" "Chat with context" hive-mcp-ellama-chat-with-context)
+                             ("q" "Query memory" hive-mcp-ellama-query-memory)
+                             ("m" "Select model" hive-mcp-ellama-select-model)]
+                            ["Store"
+                             ("s" "Store region" hive-mcp-ellama-store-region)]
+                            ["Swarm"
+                             ("S" "Swarm status" (lambda (_unused) (interactive) (message "%s" (swarm-status))))
+                             ("K" "Kill all workers" hive-mcp-ellama-swarm-kill-all)]
+                            ["Toggle"
+                             ("t" "Toggle mode" hive-mcp-ellama-mode)]]))
 
 ;; ============================================================================
 ;; Addon Lifecycle

@@ -323,7 +323,7 @@ Returns (ERROR-TYPE . ERROR-PREVIEW) if error found, nil otherwise."
   (with-current-buffer buffer
     (vterm-send-string text)
     (run-at-time hive-mcp-swarm-terminal-send-delay nil
-                 (lambda (_unused)
+                 (lambda ()
                    (condition-case err
                        (when (buffer-live-p buffer)
                          (with-current-buffer buffer
@@ -338,7 +338,7 @@ Returns (ERROR-TYPE . ERROR-PREVIEW) if error found, nil otherwise."
     (when (and (boundp 'eat-terminal) eat-terminal)
       (eat-term-send-string eat-terminal text)
       (run-at-time hive-mcp-swarm-terminal-send-delay nil
-                   (lambda (_unused)
+                   (lambda ()
                      (condition-case err
                          (when (and (buffer-live-p buffer)
                                     (boundp 'eat-terminal)
@@ -444,7 +444,7 @@ CALLBACK receives (buffer success-p) arguments."
     (setq timer
           (run-with-timer
            0 check-interval
-           (lambda (_unused)
+           (lambda ()
              (condition-case err
                  (cond
                   ;; Buffer died

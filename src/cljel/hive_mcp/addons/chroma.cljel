@@ -240,23 +240,23 @@ Checks in order:
   (when (fboundp 'hive-mcp--send-request)
     (hive-mcp--send-request
      "tools/call"
-     `(:name "cider_eval_silent"
-       :arguments (:code ,(format "(do
+     (list :name "cider_eval_silent"
+           :arguments (list :code (format "(do
         (require '[hive-mcp.chroma :as chroma])
         (chroma/configure! {:host \"%s\" :port %d})
         %s
         :configured)"
-                                  hive-mcp-chroma-host
-                                  hive-mcp-chroma-port
-                                  (pcase hive-mcp-chroma-embedding-provider
-                                    ('ollama (format "(require '[hive-mcp.embeddings.ollama :as ollama])
+                                          hive-mcp-chroma-host
+                                          hive-mcp-chroma-port
+                                          (pcase hive-mcp-chroma-embedding-provider
+                                            ('ollama (format "(require '[hive-mcp.embeddings.ollama :as ollama])
                                                       (chroma/set-embedding-provider!
                                                         (ollama/->OllamaEmbedder \"%s\"))"
-                                                     hive-mcp-chroma-ollama-model))
-                                    ('mock "(require '[hive-mcp.test-fixtures :as fixtures])
+                                                             hive-mcp-chroma-ollama-model))
+                                            ('mock "(require '[hive-mcp.test-fixtures :as fixtures])
                                             (chroma/set-embedding-provider!
                                               (fixtures/->MockEmbedder))")
-                                    (_ "")))))
+                                            (_ "")))))
      (lambda (response)
        (if (plist-get response :error)
            (message "Failed to configure Chroma: %s" (plist-get response :error))
@@ -285,12 +285,12 @@ TYPE filters by memory type (note, snippet, convention, decision)."
   (when (fboundp 'hive-mcp--send-request)
     (hive-mcp--send-request
      "tools/call"
-     `(:name "cider_eval_silent"
-       :arguments (:code ,(format "(do
+     (list :name "cider_eval_silent"
+           :arguments (list :code (format "(do
         (require '[hive-mcp.chroma :as chroma])
         (chroma/search-similar %S :limit %d %s))"
-                                  query limit
-                                  (if type (format ":type %S" type) ""))))
+                                          query limit
+                                          (if type (format ":type %S" type) ""))))
      (lambda (response)
        (if (plist-get response :error)
            (progn
@@ -306,9 +306,9 @@ TYPE filters by memory type (note, snippet, convention, decision)."
   (when (fboundp 'hive-mcp--send-request)
     (hive-mcp--send-request
      "tools/call"
-     `(:name "mcp_memory_query"
-       :arguments (:type ,(or type "note")
-                   :limit ,(or limit 20)))
+     (list :name "mcp_memory_query"
+           :arguments (list :type (or type "note")
+                            :limit (or limit 20)))
      (lambda (response)
        (let* [entries (plist-get response :result)
               filtered (seq-filter
@@ -360,8 +360,8 @@ TYPE filters by memory type (note, snippet, convention, decision)."
     (message "Indexing all memory entries...")
     (hive-mcp--send-request
      "tools/call"
-     `(:name "cider_eval_silent"
-       :arguments (:code "(do
+     (list :name "cider_eval_silent"
+           :arguments (list :code "(do
         (require '[hive-mcp.chroma :as chroma])
         (require '[hive-mcp.memory :as memory])
         (let [entries (memory/get-all-entries)]

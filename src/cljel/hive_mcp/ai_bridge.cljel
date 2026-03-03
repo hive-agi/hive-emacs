@@ -116,48 +116,48 @@ Returns t if the call is allowed, nil if throttled."
 (defn ai-get-conventions [& limit]
   "Get conventions from memory, formatted for AI context.
 LIMIT overrides `hive-mcp-ai-context-conventions-limit'."
-  (when (hive-mcp-ai-bridge--memory-available-p)
+  (when (hive-mcp-ai-bridge---memory-available-p)
     (let [n (or limit hive-mcp-ai-context-conventions-limit)
           entries (hive-mcp-memory-query 'convention nil nil n)]
       (when entries
         (mapconcat
-          (lambda (e)
-            (format "- %s" (plist-get e :content)))
-          entries
-          "\n")))))
+         (lambda (e)
+                 (format "- %s" (plist-get e :content)))
+         entries
+         "\n")))))
 
 (defn ai-get-decisions [& limit]
   "Get recent decisions from memory, formatted for AI context.
 LIMIT overrides `hive-mcp-ai-context-decisions-limit'."
-  (when (hive-mcp-ai-bridge--memory-available-p)
+  (when (hive-mcp-ai-bridge---memory-available-p)
     (let [n (or limit hive-mcp-ai-context-decisions-limit)
           entries (hive-mcp-memory-query 'decision nil nil n)]
       (when entries
         (mapconcat
-          (lambda (e)
-            (let [created (plist-get e :created)]
-              (format "- [%s] %s"
-                      (if created (substring created 0 10) "?")
-                      (plist-get e :content))))
-          entries
-          "\n")))))
+         (lambda (e)
+                 (let [created (plist-get e :created)]
+                   (format "- [%s] %s"
+                           (if created (substring created 0 10) "?")
+                           (plist-get e :content))))
+         entries
+         "\n")))))
 
 (defn ai-semantic-search [query & limit]
   "Search memory semantically for QUERY.
 LIMIT overrides `hive-mcp-ai-context-semantic-limit'.
 Returns formatted context string or nil."
-  (when (and (hive-mcp-ai-bridge--memory-available-p)
+  (when (and (hive-mcp-ai-bridge---memory-available-p)
              (fboundp 'hive-mcp-memory-search-semantic))
     (let [n (or limit hive-mcp-ai-context-semantic-limit)
           results (hive-mcp-memory-search-semantic query n)]
       (when results
         (mapconcat
-          (lambda (r)
-            (format "- [%s] %s"
-                    (plist-get r :type)
-                    (plist-get r :content)))
-          results
-          "\n")))))
+         (lambda (r)
+                 (format "- [%s] %s"
+                         (plist-get r :type)
+                         (plist-get r :content)))
+         results
+         "\n")))))
 
 ;; ============================================================================
 ;; Context Building
@@ -183,14 +183,14 @@ Returns formatted context string suitable for injection."
 
     (when sections
       (elisp-concat "# Project Knowledge\n\n"
-              (mapconcat #'identity (nreverse sections) "\n\n")))))
+                    (mapconcat #'identity (nreverse sections) "\n\n")))))
 
 (defn ai-inject-context [prompt & include-semantic]
   "Inject memory context into PROMPT.
 If INCLUDE-SEMANTIC is non-nil, includes semantic search results.
 Returns the augmented prompt string."
   (let [context (hive-mcp-ai-bridge-ai-build-context
-                  (when include-semantic prompt))]
+                 (when include-semantic prompt))]
     (if context
       (elisp-concat context "\n\n---\n\n" prompt)
       prompt)))
@@ -216,9 +216,9 @@ SOURCE is the AI package name (e.g., \"gptel\").
 TAGS is optional list of additional tags.
 Rate-limited: only stores if not throttled for SOURCE."
   (when (and hive-mcp-ai-store-notable-responses
-             (hive-mcp-ai-bridge--memory-available-p)
+             (hive-mcp-ai-bridge---memory-available-p)
              (hive-mcp-ai-bridge-ai-response-notable-p response)
-             (hive-mcp-ai-bridge--rate-limit-check (elisp-concat "store:" source)))
+             (hive-mcp-ai-bridge---rate-limit-check (elisp-concat "store:" source)))
     (let [truncated (if (> (length response) 2000)
                       (elisp-concat (substring response 0 1997) "...")
                       response)
@@ -274,37 +274,37 @@ Rate-limited per source. Returns task-id on success, nil on failure."
   (let [preset (plist-get kwargs :preset)
         slave-id (plist-get kwargs :slave-id)
         source (plist-get kwargs :source)]
-    (when (and (hive-mcp-ai-bridge--swarm-available-p)
-               (hive-mcp-ai-bridge--rate-limit-check (or source "ai-bridge")))
+    (when (and (hive-mcp-ai-bridge---swarm-available-p)
+               (hive-mcp-ai-bridge---rate-limit-check (or source "ai-bridge")))
       (hive-mcp-ai-bridge-ai-log-interaction
-        (or source "ai-bridge")
-        "swarm-dispatch"
-        (list :task task :preset preset))
+       (or source "ai-bridge")
+       "swarm-dispatch"
+       (list :task task :preset preset))
       (let [target (or slave-id
                        ;; Find or spawn appropriate slave
-                       (hive-mcp-ai-bridge--get-or-spawn-slave preset))]
+                       (hive-mcp-ai-bridge---get-or-spawn-slave preset))]
         (when target
           (hive-mcp-swarm-dispatch target task))))))
 
 (defn- -get-or-spawn-slave [preset]
   "Get an idle slave with PRESET or spawn one.
 Returns slave-id or nil."
-  (when (hive-mcp-ai-bridge--swarm-available-p)
+  (when (hive-mcp-ai-bridge---swarm-available-p)
     (let [status (hive-mcp-swarm-status)
           slaves (plist-get status :slaves-detail)
           ;; Find idle slave with matching preset
           matching (cl-find-if
-                     (lambda (s)
-                       (and (eq (plist-get s :status) 'idle)
-                            (member preset (plist-get s :presets))))
-                     slaves)]
+                    (lambda (s)
+                            (and (eq (plist-get s :status) 'idle)
+                                 (member preset (plist-get s :presets))))
+                    slaves)]
       (if matching
         (plist-get matching :slave-id)
         ;; Spawn new slave with preset
         (when (fboundp 'hive-mcp-swarm-spawn)
           (hive-mcp-swarm-spawn
-            (or preset "ai-worker")
-            :presets (list preset)))))))
+           (or preset "ai-worker")
+           :presets (list preset)))))))
 
 ;; ============================================================================
 ;; Format Adapters
@@ -314,21 +314,21 @@ Returns slave-id or nil."
   "Format CONTEXT for specific AI PACKAGE.
 Returns appropriately formatted string."
   (pcase package
-    ('gptel
+         ('gptel
       ;; gptel uses markdown
-      context)
-    ('aider
+          context)
+         ('aider
       ;; Aider expects specific format
-      (replace-regexp-in-string "^# " "## " context))
-    ('ellama
+          (replace-regexp-in-string "^# " "## " context))
+         ('ellama
       ;; ellama uses llm.el format
-      context)
-    ('org-ai
+          context)
+         ('org-ai
       ;; org-ai uses org-mode format
-      (replace-regexp-in-string "^## " "** "
-                                (replace-regexp-in-string "^# " "* " context)))
-    (_
-      context)))
+          (replace-regexp-in-string "^## " "** "
+                                    (replace-regexp-in-string "^# " "* " context)))
+         (_
+          context)))
 
 ;; ============================================================================
 ;; Hooks Infrastructure
@@ -347,14 +347,14 @@ Functions receive (source response) arguments.")
 Returns possibly modified prompt."
   (let [result prompt]
     (dolist [fn hive-mcp-ai-pre-request-hook]
-      (when-let [modified (funcall fn source result)]
-        (setq result modified)))
+            (when-let [modified (funcall fn source result)]
+              (setq result modified)))
     result))
 
 (defn ai-run-post-response-hooks [source response]
   "Run post-response hooks for SOURCE with RESPONSE."
   (dolist [fn hive-mcp-ai-post-response-hook]
-    (funcall fn source response)))
+          (funcall fn source response)))
 
 ;; ============================================================================
 ;; Channel Events (for push-based updates)
@@ -372,15 +372,15 @@ Returns possibly modified prompt."
 (defn ai-emit-event [event-type data]
   "Emit AI bridge EVENT-TYPE with DATA through channel.
 All CIDER eval calls wrapped in condition-case for safety."
-  (when (hive-mcp-ai-bridge--channel-available-p)
+  (when (hive-mcp-ai-bridge---channel-available-p)
     (condition-case err
-      (hive-mcp-channel-send
-        (append
-          (list (cons "type" (elisp-concat "ai-bridge:" event-type))
-                (cons "timestamp" (float-time)))
-          data))
-      (error
-        (message "[ai-bridge] Channel emit error: %s" (error-message-string err))))))
+                    (hive-mcp-channel-send
+                     (append
+                      (list (cons "type" (elisp-concat "ai-bridge:" event-type))
+                            (cons "timestamp" (float-time)))
+                      data))
+                    (error
+                     (message "[ai-bridge] Channel emit error: %s" (error-message-string err))))))
 
 ;; ============================================================================
 ;; API
@@ -388,9 +388,9 @@ All CIDER eval calls wrapped in condition-case for safety."
 
 (defn ai-bridge-status []
   "Get AI bridge status."
-  (list :memory-available (hive-mcp-ai-bridge--memory-available-p)
-        :swarm-available (hive-mcp-ai-bridge--swarm-available-p)
-        :channel-available (hive-mcp-ai-bridge--channel-available-p)
+  (list :memory-available (hive-mcp-ai-bridge---memory-available-p)
+        :swarm-available (hive-mcp-ai-bridge---swarm-available-p)
+        :channel-available (hive-mcp-ai-bridge---channel-available-p)
         :log-entries (length hive-mcp-ai--interaction-log)
         :settings (list :conventions-limit hive-mcp-ai-context-conventions-limit
                         :decisions-limit hive-mcp-ai-context-decisions-limit

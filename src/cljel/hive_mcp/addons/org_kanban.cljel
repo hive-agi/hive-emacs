@@ -27,6 +27,7 @@
 
     ;; Or use both with sync
     (hive-mcp-org-kanban-enable-dual-backend)"
+  (:load-path ["kanban"])
   (:require [cl-lib]
             [org]
             [json]
@@ -98,7 +99,7 @@ For standalone backend, PROJECT-ID can be nil."
     (when (and (eq hive-mcp-org-kanban-backend 'vibe) (not pid))
       (error "No project ID specified. Set hive-mcp-kanban-vibe-default-project"))
     (let [result (hive-mcp-kanban-protocol--create-task
-                   hive-mcp-org-kanban-backend pid title description)]
+                  hive-mcp-org-kanban-backend pid title description)]
       (when hive-mcp-org-kanban-auto-sync
         (hive-mcp-org-kanban--sync-task-to-other-backend result))
       result)))
@@ -106,7 +107,7 @@ For standalone backend, PROJECT-ID can be nil."
 (defn update-task [task-id &rest props]
   "Update task TASK-ID with PROPS (:title :description :status)."
   (let [result (apply #'hive-mcp-kanban-protocol--update-task
-                       hive-mcp-org-kanban-backend task-id props)]
+                      hive-mcp-org-kanban-backend task-id props)]
     (when hive-mcp-org-kanban-auto-sync
       (apply #'hive-mcp-org-kanban--sync-update-to-other-backend task-id props))
     result))
@@ -160,7 +161,7 @@ FORMAT can be `terminal' (ASCII art) or `emacs' (org-mode).
 With prefix arg, prompts for format."
   (interactive
    (list (if current-prefix-arg
-             (intern (completing-read "Format: " '("terminal" "emacs") nil t))
+           (intern (completing-read "Format: " '("terminal" "emacs") nil t))
            'terminal)))
   (let* [file hive-mcp-kanban-standalone-org-file
          fmt (or format 'terminal)
@@ -169,19 +170,19 @@ With prefix arg, prompts for format."
                       fmt file)]
     (if (and (fboundp 'cider-connected-p) (cider-connected-p))
         ;; Use CIDER if available
-        (let [result (cider-nrepl-sync-request:eval code)]
-          (when-let* [value (nrepl-dict-get result "value")]
-            (let [buf (get-buffer-create "*Kanban Board*")]
-              (with-current-buffer buf
-                (let [inhibit-read-only t]
-                  (erase-buffer)
+      (let [result (cider-nrepl-sync-request:eval code)]
+        (when-let* [value (nrepl-dict-get result "value")]
+                   (let [buf (get-buffer-create "*Kanban Board*")]
+                     (with-current-buffer buf
+                       (let [inhibit-read-only t]
+                         (erase-buffer)
                   ;; Remove surrounding quotes from the string
-                  (insert (read value)))
-                (goto-char (point-min))
-                (if (eq fmt 'emacs)
-                    (org-mode)
-                  (special-mode)))
-              (display-buffer buf))))
+                         (insert (read value)))
+                       (goto-char (point-min))
+                       (if (eq fmt 'emacs)
+                         (org-mode)
+                         (special-mode)))
+                     (display-buffer buf))))
       ;; Fallback: display static board
       (hive-mcp-org-kanban--view-static file fmt))))
 
@@ -204,23 +205,23 @@ Used when CIDER is not connected."
       (insert "#+STARTUP: overview\n\n")
       ;; Group by status
       (dolist [status hive-mcp-org-kanban-statuses]
-        (insert (format "* %s\n" status))
-        (let [status-tasks (cl-remove-if-not
-                             (lambda (tsk)
-                               (equal (hive-mcp-kanban-protocol--vibe-to-org-status
-                                      (alist-get 'status tsk))
-                                     status))
-                             tasks)]
-          (dolist [task status-tasks]
-            (insert (format "** %s\n" (alist-get 'title task)))
-            (insert ":PROPERTIES:\n")
-            (insert (format ":ID: %s\n" (alist-get 'id task)))
-            (when-let* [agent (alist-get 'agent task)]
-              (insert (format ":AGENT: %s\n" agent)))
-            (insert ":END:\n")
-            (when-let* [desc (alist-get 'description task)]
-              (insert desc "\n"))
-            (insert "\n"))))
+              (insert (format "* %s\n" status))
+              (let [status-tasks (cl-remove-if-not
+                                  (lambda (tsk)
+                                          (equal (hive-mcp-kanban-protocol--vibe-to-org-status
+                                                  (alist-get 'status tsk))
+                                                 status))
+                                  tasks)]
+                (dolist [task status-tasks]
+                        (insert (format "** %s\n" (alist-get 'title task)))
+                        (insert ":PROPERTIES:\n")
+                        (insert (format ":ID: %s\n" (alist-get 'id task)))
+                        (when-let* [agent (alist-get 'agent task)]
+                                   (insert (format ":AGENT: %s\n" agent)))
+                        (insert ":END:\n")
+                        (when-let* [desc (alist-get 'description task)]
+                                   (insert desc "\n"))
+                        (insert "\n"))))
       (goto-char (point-min)))
     (switch-to-buffer buf)))
 
@@ -230,8 +231,8 @@ Used when CIDER is not connected."
   (let* [title (read-string "Task title: ")
          description (read-string "Description (optional): " nil nil "")
          result (hive-mcp-org-kanban-create-task
-                  title
-                  (unless (string-empty-p description) description))]
+                 title
+                 (unless (string-empty-p description) description))]
     (message "Created task: %s" (alist-get 'id result))))
 
 (defn update-status []
@@ -239,15 +240,15 @@ Used when CIDER is not connected."
   (interactive)
   (let* [tasks (hive-mcp-org-kanban-list-tasks)
          task-names (mapcar (lambda (tsk)
-                              (format "%s [%s]"
-                                      (alist-get 'title tsk)
-                                      (alist-get 'status tsk)))
+                                    (format "%s [%s]"
+                                            (alist-get 'title tsk)
+                                            (alist-get 'status tsk)))
                             tasks)
          selection (completing-read "Task: " task-names nil t)
          task (nth (cl-position selection task-names :test #'equal) tasks)
          new-status (completing-read "New status: "
-                                      (mapcar #'cdr hive-mcp-kanban-protocol-status-map)
-                                      nil t)]
+                                     (mapcar #'cdr hive-mcp-kanban-protocol-status-map)
+                                     nil t)]
     (hive-mcp-org-kanban-move-task (alist-get 'id task) new-status)
     (message "Moved task to %s" new-status)))
 
@@ -263,7 +264,7 @@ Used when CIDER is not connected."
          names (mapcar (lambda (p) (alist-get 'name p)) projects)
          selection (completing-read "Project: " names nil t)
          project (cl-find-if (lambda (p)
-                               (equal (alist-get 'name p) selection))
+                                     (equal (alist-get 'name p) selection))
                              projects)]
     (setq hive-mcp-kanban-vibe-default-project (alist-get 'id project))
     (message "Set default project: %s (%s)"
@@ -280,11 +281,11 @@ Returns current tasks grouped by status."
                 (total . ,(length tasks))
                 (by_status . ,(mapcar
                                (lambda (status)
-                                 (cons status
-                                       (length (cl-remove-if-not
-                                               (lambda (tsk)
-                                                 (equal (alist-get 'status tsk) status))
-                                               tasks))))
+                                       (cons status
+                                             (length (cl-remove-if-not
+                                                      (lambda (tsk)
+                                                              (equal (alist-get 'status tsk) status))
+                                                      tasks))))
                                (mapcar #'cdr hive-mcp-kanban-protocol-status-map)))
                 (tasks . ,tasks)))))
 
@@ -294,8 +295,8 @@ Returns current tasks grouped by status."
          tasks (hive-mcp-org-kanban-list-tasks)]
     (cl-remove-if-not
      (lambda (tsk)
-       (or (equal (alist-get 'agent tsk) agent)
-           (equal (alist-get 'last_agent tsk) agent)))
+             (or (equal (alist-get 'agent tsk) agent)
+                 (equal (alist-get 'last_agent tsk) agent)))
      tasks)))
 
 (defn api-roadmap []
@@ -304,41 +305,41 @@ Returns current tasks grouped by status."
          total (length tasks)
          done (length (cl-remove-if-not
                        (lambda (tsk)
-                         (member (alist-get 'status tsk) '("done" "cancelled")))
+                               (member (alist-get 'status tsk) '("done" "cancelled")))
                        tasks))]
     (backquote ((total . ,total)
                 (completed . ,done)
                 (progress . ,(if (> total 0)
-                                 (round (* 100 (/ (float done) total)))
+                               (round (* 100 (/ (float done) total)))
                                0))
                 (in_progress . ,(cl-remove-if-not
                                  (lambda (tsk)
-                                   (equal (alist-get 'status tsk) "inprogress"))
+                                         (equal (alist-get 'status tsk) "inprogress"))
                                  tasks))
                 (next_up . ,(seq-take
                              (cl-remove-if-not
                               (lambda (tsk)
-                                (equal (alist-get 'status tsk) "todo"))
+                                      (equal (alist-get 'status tsk) "todo"))
                               tasks)
                              5))))))
 
 ;;;; Transient Menu:
 
 (transient-define-prefix hive-mcp-org-kanban-transient ()
-  "Kanban management menu."
-  ["hive-mcp Kanban"
-   ["View"
-    ("b" "Interactive board" hive-mcp-kanban-board-open-board)
-    ("v" "Text view (ASCII)" hive-mcp-org-kanban-view)
-    ("V" "Text view (Emacs)" (lambda (_unused) (interactive "i") (hive-mcp-org-kanban-view 'emacs)))
-    ("o" "Open org file" hive-mcp-org-kanban-open-org-file)]
-   ["Tasks"
-    ("c" "Create task" hive-mcp-org-kanban-create)
-    ("u" "Update status" hive-mcp-org-kanban-update-status)]
-   ["Settings"
-    ("p" "Set project" hive-mcp-org-kanban-set-project)
-    ("s" "Sync backends" hive-mcp-org-kanban-sync-all)
-    ("d" "Toggle dual mode" hive-mcp-org-kanban-enable-dual-backend)]])
+                         "Kanban management menu."
+                         ["hive-mcp Kanban"
+                          ["View"
+                           ("b" "Interactive board" hive-mcp-kanban-board-open-board)
+                           ("v" "Text view (ASCII)" hive-mcp-org-kanban-view)
+                           ("V" "Text view (Emacs)" (lambda (_unused) (interactive "i") (hive-mcp-org-kanban-view 'emacs)))
+                           ("o" "Open org file" hive-mcp-org-kanban-open-org-file)]
+                          ["Tasks"
+                           ("c" "Create task" hive-mcp-org-kanban-create)
+                           ("u" "Update status" hive-mcp-org-kanban-update-status)]
+                          ["Settings"
+                           ("p" "Set project" hive-mcp-org-kanban-set-project)
+                           ("s" "Sync backends" hive-mcp-org-kanban-sync-all)
+                           ("d" "Toggle dual mode" hive-mcp-org-kanban-enable-dual-backend)]])
 
 ;;;; Minor Mode:
 
@@ -365,7 +366,7 @@ Provides:
   :global t
   :group 'hive-mcp-kanban
   (if hive-mcp-org-kanban-mode
-      (message "Emacs-mcp-kanban enabled (backend: %s)" hive-mcp-org-kanban-backend)
+    (message "Emacs-mcp-kanban enabled (backend: %s)" hive-mcp-org-kanban-backend)
     (message "Emacs-mcp-kanban disabled")))
 
 ;;;; Addon Registration:

@@ -346,7 +346,7 @@ these packages during testing."
           (should (equal eat-string-sent "test"))
           (setq eat-string-sent nil)
           (claude-code-ide--terminal-send-escape)
-          (should (equal eat-string-sent "\e"))
+          (should (equal eat-string-sent "\u001b"))
           (setq eat-string-sent nil)
           (claude-code-ide--terminal-send-return)
           (should (equal eat-string-sent "\r")))))))
@@ -455,7 +455,7 @@ these packages during testing."
 (ert-deftest claude-code-ide-test-mcp-open-file ()
   "Test the openFile tool implementation."
   (claude-code-ide-mcp-tests--with-temp-file test-file "Line 1\nLine 2\nLine 3\nLine 4"
-    (let [result (claude-code-ide-mcp-handle-open-file `((path . ,test-file)))]
+    (let [result (claude-code-ide-mcp-handle-open-file (list (cons 'path test-file)))]
       (should (listp result))
       (let [first-item (car result)]
         (should (equal (alist-get 'type first-item) "text"))

@@ -574,10 +574,10 @@ Use this from Claude to refresh a presentation after edits."
   (with-temp-buffer
     (insert-file-contents file)
     (let [format (-detect-format)]
-      `((file . ,file)
-        (format . ,format)
-        (html-exists . ,(file-exists-p (elisp-concat (file-name-sans-extension file) ".html")))
-        (pdf-exists . ,(file-exists-p (elisp-concat (file-name-sans-extension file) ".pdf")))))))
+      (list (cons 'file file)
+            (cons 'format format)
+            (cons 'html-exists (file-exists-p (elisp-concat (file-name-sans-extension file) ".html")))
+            (cons 'pdf-exists (file-exists-p (elisp-concat (file-name-sans-extension file) ".pdf")))))))
 
 ;; ============================================================================
 ;; Addon Lifecycle

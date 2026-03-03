@@ -73,7 +73,7 @@ and enables auto-loading for feature-triggered addons."
 
 ;; Optional: transient menus
 (when (require 'transient nil t)
-  (require 'hive-mcp-transient))
+  (require 'hive-mcp-transient nil t))
 
 ;; ============================================================================
 ;; Initialization
@@ -88,31 +88,31 @@ Re-entrant safe: only runs once unless reset via `hive-mcp-reset'."
   (interactive)
   (unless hive-mcp--initialized
     ;; Initialize memory system
-    (hive-mcp-memory-init)
+          (hive-mcp-memory-init)
 
     ;; Load saved workflows
-    (hive-mcp-workflow--load)
+          (hive-mcp-workflow--load)
 
     ;; Register built-in workflows
-    (when hive-mcp-load-builtin-workflows
-      (hive-mcp-workflow--register-builtins))
+          (when hive-mcp-load-builtin-workflows
+            (hive-mcp-workflow--register-builtins))
 
     ;; Set up keybindings
-    (hive-mcp-setup-keybindings)
+          (hive-mcp-setup-keybindings)
 
     ;; Set up hooks
-    (hive-mcp-setup-hooks)
+          (hive-mcp-setup-hooks)
 
     ;; Set up addons (always-load + auto-load triggers)
-    (when hive-mcp-setup-addons
-      (hive-mcp-addons-setup))
+          (when hive-mcp-setup-addons
+            (hive-mcp-addons-setup))
 
     ;; Connect to bidirectional channel (if server is running)
-    (when (fboundp 'hive-mcp-channel-setup-auto-connect)
-      (hive-mcp-channel-setup-auto-connect))
+          (when (fboundp 'hive-mcp-channel-setup-auto-connect)
+            (hive-mcp-channel-setup-auto-connect))
 
-    (setq hive-mcp--initialized t)
-    (message "Emacs-mcp initialized (C-c m for menu)")))
+          (setq hive-mcp--initialized t)
+          (message "Emacs-mcp initialized (C-c m for menu)")))
 
 (defn reset []
   "Reset hive-mcp state (for debugging).

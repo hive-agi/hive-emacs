@@ -79,11 +79,11 @@
 (defn save-to-memory [content type &optional tags]
   "Save CONTENT to hive-mcp memory as TYPE with optional TAGS."
   (interactive
-    (list (if (use-region-p)
-              (buffer-substring-no-properties (region-beginning) (region-end))
-            (read-string "Content: "))
-          (completing-read "Type: " '("note" "snippet" "decision") nil t)
-          (split-string (read-string "Tags (comma-separated): ") "," t " ")))
+   (list (if (use-region-p)
+           (buffer-substring-no-properties (region-beginning) (region-end))
+           (read-string "Content: "))
+         (completing-read "Type: " '("note" "snippet" "decision") nil t)
+         (split-string (read-string "Tags (comma-separated): ") "," t " ")))
   (when (ensure-api)
     (hive-mcp-api-memory-add type content tags)
     (message "Saved to memory as %s" type)))
@@ -151,12 +151,12 @@
 
 (with-eval-after-load 'hive-mcp-addons
   (hive-mcp-addon-register
-    'eca
-    :version "0.1.0"
-    :description "ECA integration"
-    :requires '(hive-mcp-api)
-    :provides '(hive-mcp-eca-mode)
-    :init #'-addon-init
-    :shutdown #'-addon-shutdown))
+   'eca
+   :version "0.1.0"
+   :description "ECA integration"
+   :requires '(hive-mcp-api)
+   :provides '(hive-mcp-eca-mode)
+   :init #'-addon-init
+   :shutdown #'-addon-shutdown))
 
 (provide 'hive-mcp-eca)

@@ -48,7 +48,7 @@ For auto-loading when a trigger package loads, add an entry to
 (defn- -ensure-api []
   "Ensure hive-mcp-api is available."
   (unless (featurep 'hive-mcp-api)
-    (require 'hive-mcp-api nil t))
+          (require 'hive-mcp-api nil t))
   (featurep 'hive-mcp-api))
 
 ;; ============================================================================
@@ -64,7 +64,7 @@ For auto-loading when a trigger package loads, add an entry to
   "Save CONTENT to hive-mcp memory as TYPE with optional TAGS."
   (interactive
    (list (if (use-region-p)
-             (buffer-substring-no-properties (region-beginning) (region-end))
+           (buffer-substring-no-properties (region-beginning) (region-end))
            (read-string "Content: "))
          (completing-read "Type: " '("note" "snippet" "decision") nil t)
          (split-string (read-string "Tags (comma-separated): ") "," t " ")))
@@ -110,11 +110,11 @@ For auto-loading when a trigger package loads, add an entry to
   :global t
   :group 'hive-mcp-template
   (if hive-mcp-template-mode
-      (progn
+    (progn
         ;; Enable: add advice, hooks, keybindings
         ;; (advice-add 'target-function :around #'hive-mcp-template--add-context-advice)
-        (setq hive-mcp-template--initialized t)
-        (message "hive-mcp-template enabled"))
+     (setq hive-mcp-template--initialized t)
+     (message "hive-mcp-template enabled"))
     ;; Disable: remove advice, hooks
     ;; (advice-remove 'target-function #'hive-mcp-template--add-context-advice)
     (message "hive-mcp-template disabled")))

@@ -96,17 +96,17 @@ Dispatches to appropriate handler based on event type."
                   event)]
     (-log "Processing event: %s" type-str)
     (condition-case err
-        (pcase type-str
-          ("hook/commit" (-handle-commit data))
-          ("hook/wrap" (-handle-wrap data))
-          ("hook/notify" (-handle-notify data))
+                    (pcase type-str
+                           ("hook/commit" (-handle-commit data))
+                           ("hook/wrap" (-handle-wrap data))
+                           ("hook/notify" (-handle-notify data))
           ;; Check for custom handlers
-          (_
-           (when-let* [handler (cdr (assoc type-str hive-mcp-hooks--handler-alist))]
-             (funcall handler data))))
-      (error
-       (message "[hive-mcp-hooks] Error processing %s: %s"
-                type-str (error-message-string err))))))
+                           (_
+                            (when-let* [handler (cdr (assoc type-str hive-mcp-hooks--handler-alist))]
+                                       (funcall handler data))))
+                    (error
+                     (message "[hive-mcp-hooks] Error processing %s: %s"
+                              type-str (error-message-string err))))))
 
 ;; ============================================================================
 ;; Hook Handlers
@@ -132,23 +132,23 @@ DATA may contain:
     (-log "Commit hook: action=%s dir=%s" action directory)
     (let [default-directory directory]
       (pcase action
-        ("stage"
-         (if files
+             ("stage"
+              (if files
              ;; Stage specific files
-             (dolist (file files)
-               (-git-stage file))
+                (dolist (file files)
+                        (-git-stage file))
            ;; Stage all if enabled
-           (when hive-mcp-hooks-commit-auto-stage
-             (-git-stage-all))))
-        ("commit"
-         (when commit-msg
-           (-git-commit commit-msg)))
-        ("amend"
-         (-git-amend commit-msg))
-        ("status"
-         (-show-git-status directory))
-        (_
-         (-log "Unknown commit action: %s" action))))))
+                (when hive-mcp-hooks-commit-auto-stage
+                  (-git-stage-all))))
+             ("commit"
+              (when commit-msg
+                (-git-commit commit-msg)))
+             ("amend"
+              (-git-amend commit-msg))
+             ("status"
+              (-show-git-status directory))
+             (_
+              (-log "Unknown commit action: %s" action))))))
 
 (defn- -handle-wrap [data]
   "Handle a hook/wrap event with DATA.
@@ -166,22 +166,22 @@ DATA may contain:
                           hive-mcp-hooks-wrap-auto-save)]
     (-log "Wrap hook: action=%s session=%s" action session-id)
     (pcase action
-      ("gather"
+           ("gather"
        ;; Prepare for wrap - save buffers, collect state
-       (when save-buffers
-         (save-some-buffers t))
-       (-notify "Wrap: Gathering session data..."))
-      ("crystallize"
+            (when save-buffers
+              (save-some-buffers t))
+            (-notify "Wrap: Gathering session data..."))
+           ("crystallize"
        ;; Crystallization phase
-       (-notify "Wrap: Crystallizing session..."))
-      ("complete"
+            (-notify "Wrap: Crystallizing session..."))
+           ("complete"
        ;; Wrap completed
-       (when save-buffers
-         (save-some-buffers t))
-       (-notify "Wrap: Session complete for %s"
-                (or session-id "current session")))
-      (_
-       (-log "Unknown wrap action: %s" action)))))
+            (when save-buffers
+              (save-some-buffers t))
+            (-notify "Wrap: Session complete for %s"
+                     (or session-id "current session")))
+           (_
+            (-log "Unknown wrap action: %s" action)))))
 
 (defn- -handle-notify [data]
   "Handle a hook/notify event with DATA.
@@ -199,12 +199,12 @@ DATA may contain:
                    (cdr (assoc 'title data)))]
     (-log "Notify: [%s] %s" level msg)
     (pcase level
-      ("error"
-       (-notify-error msg title))
-      ("warning"
-       (-notify-warning msg title))
-      (_
-       (-notify msg)))))
+           ("error"
+            (-notify-error msg title))
+           ("warning"
+            (-notify-warning msg title))
+           (_
+            (-notify msg)))))
 
 ;; ============================================================================
 ;; Git Operations
@@ -214,7 +214,7 @@ DATA may contain:
   "Stage FILE for commit."
   (let [output (shell-command-to-string (format "git add %s 2>&1" (shell-quote-argument file)))]
     (unless (string-empty-p output)
-      (-log "git add %s: %s" file output))))
+            (-log "git add %s: %s" file output))))
 
 (defn- -git-stage-all []
   "Stage all modified files."
@@ -231,7 +231,7 @@ DATA may contain:
 (defn- -git-amend [&optional message]
   "Amend the last commit, optionally with new MESSAGE."
   (let* [cmd (if message
-                 (format "git commit --amend -m %s 2>&1" (shell-quote-argument message))
+               (format "git commit --amend -m %s 2>&1" (shell-quote-argument message))
                "git commit --amend --no-edit 2>&1")
          output (shell-command-to-string cmd)]
     (-log "git commit --amend: %s" output)))
@@ -240,7 +240,7 @@ DATA may contain:
   "Show git status for DIRECTORY.
 Uses Magit if available, otherwise falls back to shell."
   (if (fboundp 'magit-status)
-      (magit-status directory)
+    (magit-status directory)
     (let [default-directory directory]
       (shell-command "git status"))))
 
@@ -281,14 +281,14 @@ EVENT is the decoded channel message."
   (when (require 'hive-mcp-channel nil t)
     ;; Register for each hook type
     (dolist (type '(:hook/commit :hook/wrap :hook/notify))
-      (hive-mcp-channel-on type #'hive-mcp-hooks-process))
+            (hive-mcp-channel-on type #'hive-mcp-hooks-process))
     (-log "Registered with channel")))
 
 (defn- -unregister-from-channel []
   "Unregister hook handlers from the channel."
   (when (require 'hive-mcp-channel nil t)
     (dolist (type '(:hook/commit :hook/wrap :hook/notify))
-      (hive-mcp-channel-off type #'hive-mcp-hooks-process))
+            (hive-mcp-channel-off type #'hive-mcp-hooks-process))
     (-log "Unregistered from channel")))
 
 ;; ============================================================================
@@ -312,9 +312,9 @@ HANDLER receives the event data as an alist."
 Registers handlers with the channel if connected."
   (interactive)
   (unless hive-mcp-hooks--initialized
-    (-register-with-channel)
-    (setq hive-mcp-hooks--initialized t)
-    (-log "Initialized")))
+          (-register-with-channel)
+          (setq hive-mcp-hooks--initialized t)
+          (-log "Initialized")))
 
 (defn shutdown []
   "Shutdown the hooks module."
@@ -341,17 +341,17 @@ by both Emacs and Clojure sides."
 ACTION should be 'gather', 'crystallize', or 'complete'."
   (emit-hook-event
    "hook/wrap"
-   `(("action" . ,action)
-     ("session-id" . ,session-id)
-     ("timestamp" . ,(truncate (float-time))))))
+   (list (cons "action" action)
+         (cons "session-id" session-id)
+         (cons "timestamp" (truncate (float-time))))))
 
 (defn trigger-notify [message &optional level title]
   "Trigger a notification hook with MESSAGE, LEVEL, and TITLE."
   (emit-hook-event
    "hook/notify"
-   `(("message" . ,message)
-     ("level" . ,(or level "info"))
-     ("title" . ,title))))
+   (list (cons "message" message)
+         (cons "level" (or level "info"))
+         (cons "title" title))))
 
 ;; ============================================================================
 ;; Addon Registration

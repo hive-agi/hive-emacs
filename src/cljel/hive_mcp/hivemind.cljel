@@ -54,12 +54,12 @@
   "Show desktop notification for EVENT-TYPE from AGENT-ID."
   (when (fboundp 'notifications-notify)
     (notifications-notify
-      :title (format "Hivemind: %s" event-type)
-      :body (format "[%s] %s" agent-id (or message ""))
-      :urgency (if (string-match-p "ask\\|error\\|blocked"
-                                    (downcase (or event-type "")))
-                 'critical
-                 'normal))))
+     :title (format "Hivemind: %s" event-type)
+     :body (format "[%s] %s" agent-id (or message ""))
+     :urgency (if (string-match-p "ask\\|error\\|blocked"
+                                  (downcase (or event-type "")))
+                'critical
+                'normal))))
 
 (defn- handle-shout [event]
   "Handle a hivemind shout EVENT from an agent."
@@ -90,13 +90,13 @@
     ;; Dispatch to hooks for state sync
     (when (fboundp 'hive-mcp-swarm-hooks-dispatch)
       (hive-mcp-swarm-hooks-dispatch
-        (intern (elisp-concat ":" event-type))
-        (list :agent-id agent-id
-              :event-type event-type
-              :task task
-              :message message
-              :data data
-              :timestamp (or timestamp (float-time)))))))
+       (intern (elisp-concat ":" event-type))
+       (list :agent-id agent-id
+             :event-type event-type
+             :task task
+             :message message
+             :data data
+             :timestamp (or timestamp (float-time)))))))
 
 (defn- handle-ask [event]
   "Handle a hivemind ask EVENT requiring human response."
@@ -135,49 +135,49 @@
     (if (zerop (hash-table-count hive-mcp-hivemind--agents))
       (insert "  (no agents registered)\n")
       (maphash (lambda (id info)
-                 (insert (format "  %s: %s - %s\n"
-                                 id
-                                 (plist-get info :status)
-                                 (or (plist-get info :task) ""))))
+                       (insert (format "  %s: %s - %s\n"
+                                       id
+                                       (plist-get info :status)
+                                       (or (plist-get info :task) ""))))
                hive-mcp-hivemind--agents))
     ;; Pending asks
     (insert "\nPENDING QUESTIONS:\n")
     (if (null hive-mcp-hivemind--pending-asks)
       (insert "  (none)\n")
       (dolist (ask hive-mcp-hivemind--pending-asks)
-        (insert (format "  [%s] %s: %s\n"
-                        (plist-get ask :ask-id)
-                        (plist-get ask :agent-id)
-                        (plist-get ask :question)))))
+              (insert (format "  [%s] %s: %s\n"
+                              (plist-get ask :ask-id)
+                              (plist-get ask :agent-id)
+                              (plist-get ask :question)))))
     (display-buffer (current-buffer))))
 
 (defn respond [ask-id response]
   "Respond to ASK-ID with RESPONSE."
   (interactive
-    (let [asks hive-mcp-hivemind--pending-asks
-          ask (if (= 1 (length asks))
-                (car asks)
-                (let [id (completing-read "Ask ID: "
-                           (mapcar (lambda (a) (plist-get a :ask-id)) asks))]
-                  (seq-find (lambda (a) (string= (plist-get a :ask-id) id)) asks)))
-          options (plist-get ask :options)
-          resp (if options
-                 (completing-read (format "%s: " (plist-get ask :question)) options)
-                 (read-string (format "%s: " (plist-get ask :question))))]
-      (list (plist-get ask :ask-id) resp)))
+   (let [asks hive-mcp-hivemind--pending-asks
+         ask (if (= 1 (length asks))
+               (car asks)
+               (let [id (completing-read "Ask ID: "
+                                         (mapcar (lambda (a) (plist-get a :ask-id)) asks))]
+                 (seq-find (lambda (a) (string= (plist-get a :ask-id) id)) asks)))
+         options (plist-get ask :options)
+         resp (if options
+                (completing-read (format "%s: " (plist-get ask :question)) options)
+                (read-string (format "%s: " (plist-get ask :question))))]
+     (list (plist-get ask :ask-id) resp)))
   ;; Send response via WebSocket channel (primary)
   (if (hive-mcp-channel-ws-connected-p)
     (hive-mcp-channel-ws-send
-      (list (cons 'type "hivemind-response")
-            (cons 'ask-id ask-id)
-            (cons 'decision response)
-            (cons 'by "human")))
+     (list (cons 'type "hivemind-response")
+           (cons 'ask-id ask-id)
+           (cons 'decision response)
+           (cons 'by "human")))
     ;; Fallback to old bencode channel
     (hive-mcp-channel-send
-      (list (cons "type" "hivemind-response")
-            (cons "ask-id" ask-id)
-            (cons "decision" response)
-            (cons "by" "human"))))
+     (list (cons "type" "hivemind-response")
+           (cons "ask-id" ask-id)
+           (cons "decision" response)
+           (cons "by" "human"))))
   ;; Remove from pending
   (setq hive-mcp-hivemind--pending-asks
         (seq-remove (lambda (a) (string= (plist-get a :ask-id) ask-id))
@@ -202,13 +202,13 @@
   "Register hivemind event handlers with the channel."
   ;; WebSocket channel (primary)
   (dolist (type '("hivemind-progress" "hivemind-completed" "hivemind-error"
-                  "hivemind-blocked" "hivemind-started"))
-    (hive-mcp-channel-ws-on type #'hive-mcp-hivemind--handle-shout))
+                                      "hivemind-blocked" "hivemind-started"))
+          (hive-mcp-channel-ws-on type #'hive-mcp-hivemind--handle-shout))
   (hive-mcp-channel-ws-on "hivemind-ask" #'hive-mcp-hivemind--handle-ask)
   ;; Old bencode channel for backwards compatibility
   (dolist (type '(:hivemind-progress :hivemind-completed :hivemind-error
-                  :hivemind-blocked :hivemind-started))
-    (hive-mcp-channel-on type #'hive-mcp-hivemind--handle-shout))
+                                     :hivemind-blocked :hivemind-started))
+          (hive-mcp-channel-on type #'hive-mcp-hivemind--handle-shout))
   (hive-mcp-channel-on :hivemind-ask #'hive-mcp-hivemind--handle-ask))
 
 ;; Register on load

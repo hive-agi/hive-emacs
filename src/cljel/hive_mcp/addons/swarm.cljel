@@ -1,5 +1,6 @@
 (ns hive-mcp-swarm
   "Claude swarm orchestration for parallel task execution."
+  (:load-path ["swarm"])
   (:require [cl-lib]
             [json]
             [subr-x]
@@ -11,16 +12,6 @@
             [hive-mcp-swarm-slaves]
             [hive-mcp-swarm-tasks]
             [hive-mcp-swarm-hooks]))
-
-;; ============================================================================
-;; Load Path Setup
-;; ============================================================================
-
-;; Add swarm/ subdirectory to load-path for modular components
-(let [swarm-dir (expand-file-name "swarm" (file-name-directory
-                                           (or load-file-name buffer-file-name)))]
-  (when (file-directory-p swarm-dir)
-    (add-to-list 'load-path swarm-dir)))
 
 ;; ============================================================================
 ;; Forward Declarations
@@ -487,45 +478,45 @@ Also stops Layer 2 idle detection watcher."
   "Format SLAVE with ID as alist for status API response.
 Returns an alist suitable for JSON serialization as an object.
 Includes cwd for bootstrap sync to derive project-id (ADR-001 Phase 2)."
-  `((slave-id . ,id)
-    (name . ,(plist-get slave :name))
-    (status . ,(-get-slave-status-name slave))
-    (depth . ,(plist-get slave :depth))
-    (parent-id . ,(plist-get slave :parent-id))
-    (cwd . ,(plist-get slave :cwd))
-    (current-task . ,(plist-get slave :current-task))
-    (tasks-completed . ,(plist-get slave :tasks-completed))))
+  (list (cons 'slave-id id)
+        (cons 'name (plist-get slave :name))
+        (cons 'status (-get-slave-status-name slave))
+        (cons 'depth (plist-get slave :depth))
+        (cons 'parent-id (plist-get slave :parent-id))
+        (cons 'cwd (plist-get slave :cwd))
+        (cons 'current-task (plist-get slave :current-task))
+        (cons 'tasks-completed (plist-get slave :tasks-completed))))
 
 (defn- -format-ling-data [id slave]
   "Format SLAVE with ID as alist for lings list API response.
 Returns an alist with slave-id, name, presets, cwd, and status."
-  `((slave-id . ,id)
-    (name . ,(plist-get slave :name))
-    (presets . ,(-get-presets-or-empty slave))
-    (cwd . ,(plist-get slave :cwd))
-    (status . ,(-get-slave-status-name slave))))
+  (list (cons 'slave-id id)
+        (cons 'name (plist-get slave :name))
+        (cons 'presets (-get-presets-or-empty slave))
+        (cons 'cwd (plist-get slave :cwd))
+        (cons 'status (-get-slave-status-name slave))))
 
 (defn- -format-orphan-detail [orphan]
   "Format ORPHAN plist as alist for status API response.
 Includes orphan marker and discovery method."
-  `((slave-id . ,(plist-get orphan :slave-id))
-    (name . ,(plist-get orphan :name))
-    (status . "orphan")
-    (depth . nil)
-    (parent-id . nil)
-    (current-task . nil)
-    (tasks-completed . nil)
-    (orphan . t)
-    (discovered-via . "buffer-introspection")))
+  (list (cons 'slave-id (plist-get orphan :slave-id))
+        (cons 'name (plist-get orphan :name))
+        (cons 'status "orphan")
+        (cons 'depth nil)
+        (cons 'parent-id nil)
+        (cons 'current-task nil)
+        (cons 'tasks-completed nil)
+        (cons 'orphan t)
+        (cons 'discovered-via "buffer-introspection")))
 
 (defn- -format-orphan-ling [orphan]
   "Format ORPHAN plist as alist for lings list API response."
-  `((slave-id . ,(plist-get orphan :slave-id))
-    (name . ,(plist-get orphan :name))
-    (presets . [])
-    (cwd . nil)
-    (status . "orphan")
-    (orphan . t)))
+  (list (cons 'slave-id (plist-get orphan :slave-id))
+        (cons 'name (plist-get orphan :name))
+        (cons 'presets [])
+        (cons 'cwd nil)
+        (cons 'status "orphan")
+        (cons 'orphan t)))
 
 (defn- -count-slaves-by-status [slaves-hash]
   "Count slaves in SLAVES-HASH by status.
@@ -556,10 +547,10 @@ Returns list of alists suitable for JSON serialization."
 
 (defn- -format-pending-prompt [prompt]
   "Format PROMPT plist for API response with ISO timestamp."
-  `(:slave-id ,(plist-get prompt :slave-id)
-    :prompt ,(plist-get prompt :prompt)
-    :timestamp ,(format-time-string "%Y-%m-%dT%H:%M:%S"
-                                    (plist-get prompt :timestamp))))
+  (list :slave-id (plist-get prompt :slave-id)
+        :prompt (plist-get prompt :prompt)
+        :timestamp (format-time-string "%Y-%m-%dT%H:%M:%S"
+                                       (plist-get prompt :timestamp))))
 
 (defn- -introspect-terminal-buffers []
   "Introspect all swarm terminal buffers to find potentially unregistered lings.
@@ -644,18 +635,18 @@ CLARITY: L - Bottom-up reading via extracted helpers."
   "Build the complete status response plist.
 Arguments are counts and SLAVES-DETAIL is a vector of slave alists.
 SLAVES-DETAIL must be a vector for consistent JSON array encoding."
-  `(:session-id ,hive-mcp-swarm--session-id
-    :status ,(if (> total 0) "active" "inactive")
-    :current-depth ,hive-mcp-swarm--current-depth
-    :safeguards (:max-depth ,hive-mcp-swarm-max-depth
-                 :max-slaves ,hive-mcp-swarm-max-slaves
-                 :rate-limit (:window-seconds ,hive-mcp-swarm-rate-limit-window
-                              :max-spawns ,hive-mcp-swarm-rate-limit-max-spawns
-                              :recent-spawns ,(length hive-mcp-swarm--spawn-timestamps)))
-    :slaves (:total ,total :idle ,idle :working ,working
-             :error ,error-count :orphan ,orphan-count)
-    :tasks (:total ,(hash-table-count hive-mcp-swarm--tasks))
-    :slaves-detail ,slaves-detail))
+  (list :session-id hive-mcp-swarm--session-id
+        :status (if (> total 0) "active" "inactive")
+        :current-depth hive-mcp-swarm--current-depth
+        :safeguards (list :max-depth hive-mcp-swarm-max-depth
+                          :max-slaves hive-mcp-swarm-max-slaves
+                          :rate-limit (list :window-seconds hive-mcp-swarm-rate-limit-window
+                                            :max-spawns hive-mcp-swarm-rate-limit-max-spawns
+                                            :recent-spawns (length hive-mcp-swarm--spawn-timestamps)))
+        :slaves (list :total total :idle idle :working working
+                      :error error-count :orphan orphan-count)
+        :tasks (list :total (hash-table-count hive-mcp-swarm--tasks))
+        :slaves-detail slaves-detail))
 
 (defn list-lings []
   "List all lings (spawned slaves) with their metadata.
@@ -706,8 +697,8 @@ Returns list of alists suitable for JSON serialization."
 ;; API for MCP Tools
 ;; ============================================================================
 
-(defn api-spawn [name presets &optional cwd terminal kanban-task-id context-file]
-  "API: Spawn slave NAME with PRESETS in CWD using TERMINAL backend.
+(defn api-spawn [ling-name presets &optional cwd terminal kanban-task-id context-file]
+  "API: Spawn slave LING-NAME with PRESETS in CWD using TERMINAL backend.
 KANBAN-TASK-ID optionally links this ling to a kanban task for lifecycle tracking.
 CONTEXT-FILE is an optional path to a temp file containing pre-generated
 catchup context to inject into the system prompt (Architecture > LLM behavior).
@@ -725,12 +716,12 @@ Returns slave-id on success, or error plist on failure."
              ;; Clean up temp file after reading
              (ignore-errors (delete-file context-file))))]
     (hive-mcp-with-fallback
-        (hive-mcp-swarm-spawn name :presets presets :cwd valid-cwd
+        (hive-mcp-swarm-spawn ling-name :presets presets :cwd valid-cwd
                               ;; CLARITY-I: Guard intern against non-string terminal values
                               :terminal (when (and terminal (stringp terminal)) (intern terminal))
                               :kanban-task-id valid-kanban-id
                               :injected-context injected-context)
-      `(:error "spawn-failed" :name ,name :reason "unknown"))))
+      (list :error "spawn-failed" :name ling-name :reason "unknown"))))
 
 (defn api-dispatch [slave-id prompt &optional timeout-ms]
   "API: Dispatch PROMPT to SLAVE-ID with TIMEOUT-MS.
@@ -740,7 +731,7 @@ Returns structured response plist:
   - :status \"error\" - dispatch failed, :error included"
   (hive-mcp-with-fallback
       (hive-mcp-swarm-dispatch slave-id prompt :timeout timeout-ms)
-    `(:status "error" :error "dispatch-failed" :slave-id ,slave-id :reason "unknown")))
+    (list :status "error" :error "dispatch-failed" :slave-id slave-id :reason "unknown")))
 
 (defn api-status []
   "API: Get swarm status as JSON-serializable plist."
@@ -774,19 +765,19 @@ fallback to ensure MCP clients never receive errors."
         (cond
          ;; Task not found
          ((not task)
-          `(:task-id ,task-id :status "error" :error "Task not found"))
+          (list :task-id task-id :status "error" :error "Task not found"))
 
          ;; Already completed
          ((eq (plist-get task :status) 'completed)
-          `(:task-id ,task-id
-            :status "completed"
-            :result ,(plist-get task :result)))
+          (list :task-id task-id
+                :status "completed"
+                :result (plist-get task :result)))
 
          ;; Already timed out
          ((eq (plist-get task :status) 'timeout)
-          `(:task-id ,task-id
-            :status "timeout"
-            :error ,(plist-get task :error)))
+          (list :task-id task-id
+                :status "timeout"
+                :error (plist-get task :error)))
 
          ;; Check if timed out now
          ((and elapsed-ms (> elapsed-ms task-timeout))
@@ -799,10 +790,10 @@ fallback to ensure MCP clients never receive errors."
           ;; Emit task-failed event via channel
           (hive-mcp-swarm--emit-task-failed
            task-id slave-id (format "Timed out after %dms" elapsed-ms))
-          `(:task-id ,task-id
-            :status "timeout"
-            :error ,(format "Timed out after %dms" elapsed-ms)
-            :elapsed-ms ,elapsed-ms))
+          (list :task-id task-id
+                :status "timeout"
+                :error (format "Timed out after %dms" elapsed-ms)
+                :elapsed-ms elapsed-ms))
 
          ;; Try to get result (non-blocking check)
          (t
@@ -820,19 +811,19 @@ fallback to ensure MCP clients never receive errors."
                              (1+ (or (plist-get slave :tasks-completed) 0))))
                 ;; Emit task-completed event via channel (sub-100ms push!)
                 (hive-mcp-swarm--emit-task-completed task-id slave-id result)
-                `(:task-id ,task-id
-                  :status "completed"
-                  :result ,result
-                  :elapsed-ms ,elapsed-ms))
+                (list :task-id task-id
+                      :status "completed"
+                      :result result
+                      :elapsed-ms elapsed-ms))
             ;; Still running - return polling status
-            `(:task-id ,task-id
-              :status "polling"
-              :elapsed-ms ,elapsed-ms
-              :timeout-ms ,task-timeout
-              :message "Task still running, poll again")))))
+            (list :task-id task-id
+                  :status "polling"
+                  :elapsed-ms elapsed-ms
+                  :timeout-ms task-timeout
+                  :message "Task still running, poll again")))))
     ;; Graceful fallback on any error
-    `(:task-id ,task-id :status "error" :result nil
-      :error "collection-failed")))
+    (list :task-id task-id :status "error" :result nil
+          :error "collection-failed")))
 
 (defn api-list-presets []
   "API: List available presets."
@@ -847,13 +838,13 @@ Kill may be blocked if buffer fails safety validation
 (prevents accidentally killing coordinator)."
   (hive-mcp-with-fallback
       (if (hive-mcp-swarm-kill slave-id)
-          `(:killed ,slave-id :success t)
+          (list :killed slave-id :success t)
         ;; Kill was blocked by safety validation
-        `(:error "kill-blocked"
-          :slave-id ,slave-id
-          :reason "buffer-safety-validation-failed"
-          :message "Buffer did not pass safety checks (may have been coordinator or invalid target)"))
-    `(:error "kill-failed" :slave-id ,slave-id)))
+        (list :error "kill-blocked"
+              :slave-id slave-id
+              :reason "buffer-safety-validation-failed"
+              :message "Buffer did not pass safety checks (may have been coordinator or invalid target)"))
+    (list :error "kill-failed" :slave-id slave-id)))
 
 (defn api-kill-all []
   "API: Kill all slaves.
@@ -861,8 +852,8 @@ Returns result plist. Never fails."
   (hive-mcp-with-fallback
       (let [count (hash-table-count hive-mcp-swarm--slaves)]
         (hive-mcp-swarm-kill-all)
-        `(:killed-count ,count))
-    `(:error "kill-all-failed" :killed-count 0)))
+        (list :killed-count count))
+    (list :error "kill-all-failed" :killed-count 0)))
 
 (defn api-pending-prompts []
   "API: Get list of pending prompts awaiting human decision.
@@ -871,19 +862,19 @@ CLARITY: L - Uses extracted helper for formatting."
   (hive-mcp-with-fallback
       (let* [pending (hive-mcp-swarm-prompts/get-pending)
              prompts (mapcar #'-format-pending-prompt pending)]
-        `(:count ,(length prompts)
-          :prompts ,prompts
-          :mode ,hive-mcp-swarm-prompts-mode))
-    `(:error "pending-prompts-failed" :count 0 :prompts nil)))
+        (list :count (length prompts)
+              :prompts prompts
+              :mode hive-mcp-swarm-prompts-mode))
+    (list :error "pending-prompts-failed" :count 0 :prompts nil)))
 
 (defn api-respond-prompt [slave-id response]
   "API: Send RESPONSE to the pending prompt from SLAVE-ID.
 Returns result plist indicating success or failure."
   (hive-mcp-with-fallback
       (if (hive-mcp-swarm-prompts/respond-to slave-id response)
-          `(:success t :slave-id ,slave-id :response ,response)
-        `(:success nil :error "no-pending-prompt" :slave-id ,slave-id))
-    `(:error "respond-prompt-failed" :slave-id ,slave-id)))
+          (list :success t :slave-id slave-id :response response)
+        (list :success nil :error "no-pending-prompt" :slave-id slave-id))
+    (list :error "respond-prompt-failed" :slave-id slave-id)))
 
 ;; ============================================================================
 ;; Transient Menu

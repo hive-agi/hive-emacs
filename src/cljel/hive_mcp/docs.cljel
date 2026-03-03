@@ -113,14 +113,14 @@
                  (regexp-quote pattern))
         all-symbols (apropos-internal regexp)
         filtered (cl-remove-if-not
-                   (lambda (sym)
-                     (pcase type
-                       ('function (fboundp sym))
-                       ('variable (boundp sym))
-                       ('command (commandp sym))
-                       ('face (facep sym))
-                       (_ t)))
-                   all-symbols)
+                  (lambda (sym)
+                          (pcase type
+                                 ('function (fboundp sym))
+                                 ('variable (boundp sym))
+                                 ('command (commandp sym))
+                                 ('face (facep sym))
+                                 (_ t)))
+                  all-symbols)
         limited (seq-take filtered hive-mcp-docs-max-results)]
     (list :pattern pattern
           :type (or type "all")
@@ -128,14 +128,14 @@
           :returned (length limited)
           :symbols
           (mapcar (lambda (sym)
-                    (let [doc (hive-mcp-docs--get-docstring sym)]
-                      (list :name (symbol-name sym)
-                            :type (hive-mcp-docs--symbol-type sym)
-                            :docstring-preview
-                            (when doc
-                              (if (> (length doc) 100)
-                                (format "%s..." (substring doc 0 100))
-                                doc)))))
+                          (let [doc (hive-mcp-docs--get-docstring sym)]
+                            (list :name (symbol-name sym)
+                                  :type (hive-mcp-docs--symbol-type sym)
+                                  :docstring-preview
+                                  (when doc
+                                    (if (> (length doc) 100)
+                                      (format "%s..." (substring doc 0 100))
+                                      doc)))))
                   limited))))
 
 (defn package-functions [package-or-prefix]
@@ -146,20 +146,20 @@
                  package-or-prefix)
         prefix-regexp (format "^%s" (regexp-quote prefix))
         functions (cl-remove-if-not
-                    (lambda (sym)
-                      (and (fboundp sym)
-                           (string-match-p prefix-regexp (symbol-name sym))))
-                    (apropos-internal prefix-regexp (function fboundp)))
+                   (lambda (sym)
+                           (and (fboundp sym)
+                                (string-match-p prefix-regexp (symbol-name sym))))
+                   (apropos-internal prefix-regexp (function fboundp)))
         limited (seq-take functions hive-mcp-docs-max-results)]
     (list :prefix prefix
           :total-functions (length functions)
           :returned (length limited)
           :functions
           (mapcar (lambda (sym)
-                    (list :name (symbol-name sym)
-                          :type (hive-mcp-docs--symbol-type sym)
-                          :signature (hive-mcp-docs--function-signature sym)
-                          :interactive (commandp sym)))
+                          (list :name (symbol-name sym)
+                                :type (hive-mcp-docs--symbol-type sym)
+                                :signature (hive-mcp-docs--function-signature sym)
+                                :interactive (commandp sym)))
                   limited))))
 
 (defn find-keybindings [command]
@@ -179,7 +179,7 @@
                   doc))
               :bindings
               (mapcar (lambda (key)
-                        (list :key (key-description key)))
+                              (list :key (key-description key)))
                       keys)
               :binding-count (length keys)))
       (list :error (format "Command not found: %s" command)))))
@@ -192,15 +192,15 @@
               (intern-soft symbol-name))]
     (if (and (featurep 'info-look) sym)
       (condition-case err
-        (let [info-lookup-mode 'emacs-lisp-mode
-              info (info-lookup-symbol sym)]
-          (list :symbol (symbol-name sym)
-                :found t
-                :note "Info node opened in Emacs"))
-        (error
-          (list :symbol (format "%s" symbol-name)
-                :found nil
-                :note "No Info documentation found")))
+                      (let [info-lookup-mode 'emacs-lisp-mode
+                            info (info-lookup-symbol sym)]
+                        (list :symbol (symbol-name sym)
+                              :found t
+                              :note "Info node opened in Emacs"))
+                      (error
+                       (list :symbol (format "%s" symbol-name)
+                             :found nil
+                             :note "No Info documentation found")))
       (list :symbol (format "%s" symbol-name)
             :found nil
             :note "info-look not available or symbol invalid"))))
@@ -236,8 +236,8 @@
                       (point-max))))
           (if commentary-start
             (let [raw (buffer-substring-no-properties
-                        commentary-start
-                        (or commentary-end (point-max)))
+                       commentary-start
+                       (or commentary-end (point-max)))
                   cleaned (replace-regexp-in-string "^;;+ ?" "" raw)]
               (list :file (file-name-nondirectory file)
                     :path file
@@ -252,10 +252,10 @@
   "List all loaded features (packages) with their files."
   (let [features-info
         (mapcar (lambda (feat)
-                  (let [file (locate-library (symbol-name feat))]
-                    (list :name (symbol-name feat)
-                          :file (when file
-                                  (file-name-nondirectory file)))))
+                        (let [file (locate-library (symbol-name feat))]
+                          (list :name (symbol-name feat)
+                                :file (when file
+                                        (file-name-nondirectory file)))))
                 features)]
     (list :total (length features)
           :features (seq-take features-info 100))))
@@ -283,12 +283,12 @@
                       (plist-get result :total-matches)
                       (plist-get result :returned)))
       (mapc (lambda (sym)
-              (insert (format "%-40s [%s]\n"
-                              (plist-get sym :name)
-                              (plist-get sym :type)))
-              (let [doc (plist-get sym :docstring-preview)]
-                (when doc
-                  (insert (format "    %s\n" doc)))))
+                    (insert (format "%-40s [%s]\n"
+                                    (plist-get sym :name)
+                                    (plist-get sym :type)))
+                    (let [doc (plist-get sym :docstring-preview)]
+                      (when doc
+                        (insert (format "    %s\n" doc)))))
             (plist-get result :symbols))
       (goto-char (point-min)))
     (display-buffer "*MCP Docs Apropos*")))
@@ -304,10 +304,10 @@
                       (plist-get result :total-functions)
                       (plist-get result :returned)))
       (mapc (lambda (fn)
-              (insert (format "%s%s %s\n"
-                              (if (plist-get fn :interactive) "*" " ")
-                              (plist-get fn :name)
-                              (or (plist-get fn :signature) ""))))
+                    (insert (format "%s%s %s\n"
+                                    (if (plist-get fn :interactive) "*" " ")
+                                    (plist-get fn :name)
+                                    (or (plist-get fn :signature) ""))))
             (plist-get result :functions))
       (insert "\n* = interactive command\n")
       (goto-char (point-min)))
@@ -332,15 +332,15 @@
     (if (plist-get result :error)
       (message "%s" (plist-get result :error))
       (progn
-        (with-current-buffer (get-buffer-create "*MCP Docs Commentary*")
-          (erase-buffer)
-          (insert (format "Commentary for: %s\n" (plist-get result :file)))
-          (insert (format "Path: %s\n\n" (plist-get result :path)))
-          (insert (or (plist-get result :commentary)
-                      (plist-get result :note)
-                      "No commentary found"))
-          (goto-char (point-min)))
-        (display-buffer "*MCP Docs Commentary*")))))
+       (with-current-buffer (get-buffer-create "*MCP Docs Commentary*")
+         (erase-buffer)
+         (insert (format "Commentary for: %s\n" (plist-get result :file)))
+         (insert (format "Path: %s\n\n" (plist-get result :path)))
+         (insert (or (plist-get result :commentary)
+                     (plist-get result :note)
+                     "No commentary found"))
+         (goto-char (point-min)))
+       (display-buffer "*MCP Docs Commentary*")))))
 
 ;;; Addon Lifecycle
 

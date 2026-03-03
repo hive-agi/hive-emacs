@@ -256,8 +256,8 @@ ARGUMENTS should contain:
               (end-of-line)
               (activate-mark))))
           ;; Return in VS Code format
-          (list `((type . "text")
-                  (text . "FILE_OPENED"))))
+          (list (list (cons 'type "text")
+                      (cons 'text "FILE_OPENED"))))
       (error
        (signal 'mcp-error (list (format "Failed to open file: %s"
                                         (error-message-string err))))))))
@@ -279,25 +279,31 @@ ARGUMENTS should contain:
                end-col (save-excursion
                          (goto-char end)
                          (1+ (current-column)))]
-          `((text . ,text)
-            (filePath . ,file-path)
-            ,@(when file-url `((fileUrl . ,file-url)))
-            (selection . ((start . ((line . ,start-line)
-                                    (character . ,start-col)))
-                          (end . ((line . ,end-line)
-                                  (character . ,end-col)))
-                          (isEmpty . :json-false)))))
+          (append (list (cons 'text text)
+                        (cons 'filePath file-path))
+                  (when file-url (list (cons 'fileUrl file-url)))
+                  (list (cons 'selection
+                              (list (cons 'start
+                                          (list (cons 'line start-line)
+                                                (cons 'character start-col)))
+                                    (cons 'end
+                                          (list (cons 'line end-line)
+                                                (cons 'character end-col)))
+                                    (cons 'isEmpty :json-false))))))
       ;; No selection - return cursor position
       (let* [cursor-line (line-number-at-pos)
              cursor-col (1+ (current-column))]
-        `((text . "")
-          (filePath . ,file-path)
-          ,@(when file-url `((fileUrl . ,file-url)))
-          (selection . ((start . ((line . ,cursor-line)
-                                  (character . ,cursor-col)))
-                        (end . ((line . ,cursor-line)
-                                (character . ,cursor-col)))
-                        (isEmpty . t))))))))
+        (append (list (cons 'text "")
+                      (cons 'filePath file-path))
+                (when file-url (list (cons 'fileUrl file-url)))
+                (list (cons 'selection
+                            (list (cons 'start
+                                        (list (cons 'line cursor-line)
+                                              (cons 'character cursor-col)))
+                                  (cons 'end
+                                        (list (cons 'line cursor-line)
+                                              (cons 'character cursor-col)))
+                                  (cons 'isEmpty t)))))))))
 
 (defn handle-get-open-editors [_arguments]
   "Get list of all open editors/buffers with file paths."
@@ -309,20 +315,20 @@ ARGUMENTS should contain:
         (when (or (not project-dir)
                   (string-prefix-p (expand-file-name project-dir)
                                    (expand-file-name file)))
-          (push `((path . ,file)
-                  (name . ,(buffer-name buffer))
-                  (active . ,(eq buffer (current-buffer)))
-                  (isDirty . ,(if (buffer-modified-p buffer) t :json-false))
-                  (fileUrl . ,(elisp-concat "file://" file)))
+          (push (list (cons 'path file)
+                      (cons 'name (buffer-name buffer))
+                      (cons 'active (eq buffer (current-buffer)))
+                      (cons 'isDirty (if (buffer-modified-p buffer) t :json-false))
+                      (cons 'fileUrl (elisp-concat "file://" file)))
                 editors))))
-    `((editors . ,(vconcat (nreverse editors))))))
+    (list (cons 'editors (vconcat (nreverse editors))))))
 
 (defn handle-get-workspace-folders [_arguments]
   "Get the current workspace folders (project roots)."
   ;; Return the specific project directory for this MCP instance
   (let [project-dir (or (claude-code-ide-mcp--get-buffer-project)
                         default-directory)]
-    `((folders . ,(vconcat (list (expand-file-name project-dir)))))))
+    (list (cons 'folders (vconcat (list (expand-file-name project-dir)))))))
 
 (defn handle-get-diagnostics [arguments &optional session]
   "Get diagnostics (errors/warnings) for the current workspace.
@@ -342,8 +348,8 @@ ARGUMENTS should contain `path' of the file to save."
               (with-current-buffer buffer
                 (save-buffer)
                 ;; Return in VS Code format
-                (list `((type . "text")
-                        (text . "DOCUMENT_SAVED"))))
+                (list (list (cons 'type "text")
+                            (cons 'text "DOCUMENT_SAVED"))))
             (signal 'mcp-error (list (format "No buffer visiting %s" path)))))
       (error
        (signal 'mcp-error (list (format "Failed to save: %s"
@@ -361,8 +367,8 @@ ARGUMENTS should contain `path' or `tab_name' of the file to close."
             (progn
               (kill-buffer buffer)
               ;; Return in VS Code format
-              (list `((type . "text")
-                      (text . "TAB_CLOSED"))))
+              (list (list (cons 'type "text")
+                          (cons 'text "TAB_CLOSED"))))
           ;; Error case
           (signal 'mcp-error (list (format "No buffer visiting %s" path))))))
      (tab-name
@@ -416,16 +422,16 @@ ARGUMENTS should contain `path' or `tab_name' of the file to close."
               (claude-code-ide-mcp-handlers--cleanup-diff tab-name found-session)
 
               ;; Return in VS Code format
-              (list `((type . "text")
-                      (text . "TAB_CLOSED"))))
+              (list (list (cons 'type "text")
+                          (cons 'text "TAB_CLOSED"))))
           ;; Not a diff - treat tab_name as buffer name
           (let [buffer (get-buffer tab-name)]
             (if buffer
                 (progn
                   (kill-buffer buffer)
                   ;; Return in VS Code format
-                  (list `((type . "text")
-                          (text . "TAB_CLOSED"))))
+                  (list (list (cons 'type "text")
+                              (cons 'text "TAB_CLOSED"))))
               ;; Error case - VS Code returns isError: true
               (signal 'mcp-error (list (format "No buffer named %s" tab-name))))))))
      (t
@@ -490,14 +496,14 @@ ARGUMENTS should contain:
       ;; Store diff session info with session reference
       (let [active-diffs (claude-code-ide-mcp-handlers--get-active-diffs session)]
         (puthash tab-name
-                 `((buffer-A . ,buffer-A)
-                   (buffer-B . ,buffer-B)
-                   (old-file-path . ,old-file-path)
-                   (new-file-path . ,new-file-path)
-                   (file-exists . ,file-exists)
-                   (saved-winconf . ,saved-winconf)
-                   (session . ,session)
-                   (created-at . ,(current-time)))
+                 (list (cons 'buffer-A buffer-A)
+                       (cons 'buffer-B buffer-B)
+                       (cons 'old-file-path old-file-path)
+                       (cons 'new-file-path new-file-path)
+                       (cons 'file-exists file-exists)
+                       (cons 'saved-winconf saved-winconf)
+                       (cons 'session session)
+                       (cons 'created-at (current-time)))
                  active-diffs))
 
       ;; Set up startup hook to configure ediff after it's fully initialized
@@ -542,9 +548,9 @@ ARGUMENTS should contain:
            (signal (car err) (cdr err))))
 
         ;; Return deferred indicator with session
-        `((deferred . t)
-          (unique-key . ,tab-name)
-          (session . ,session))))))
+        (list (cons 'deferred t)
+              (cons 'unique-key tab-name)
+              (cons 'session session))))))
 
 (defn- -handle-ediff-quit [tab-name &optional session]
   "Handle ediff quit for TAB-NAME.
@@ -576,8 +582,8 @@ SESSION is the MCP session to use."
                                        (claude-code-ide-mcp-complete-deferred
                                         final-session
                                         "openDiff"
-                                        (list `((type . "text") (text . "FILE_SAVED"))
-                                              `((type . "text") (text . ,final-content)))
+                                        (list (list (cons 'type "text") (cons 'text "FILE_SAVED"))
+                                              (list (cons 'type "text") (cons 'text final-content)))
                                         tab-name)
 
                                        ;; Mark that we've responded
@@ -591,8 +597,8 @@ SESSION is the MCP session to use."
                                    (claude-code-ide-mcp-complete-deferred
                                     final-session
                                     "openDiff"
-                                    (list `((type . "text") (text . "DIFF_REJECTED"))
-                                          `((type . "text") (text . ,tab-name)))
+                                    (list (list (cons 'type "text") (cons 'text "DIFF_REJECTED"))
+                                          (list (cons 'type "text") (cons 'text tab-name)))
                                     tab-name)
 
                                    ;; Mark that we've responded
@@ -667,8 +673,8 @@ SESSION is the MCP session to use - if not provided, tries to determine it."
                        (setq closed-count (1+ closed-count)))
                      session-diffs)))))
     ;; Return success in VS Code format
-    (list `((type . "text")
-            (text . ,(format "CLOSED_%d_DIFF_TABS" closed-count))))))
+    (list (list (cons 'type "text")
+                (cons 'text (format "CLOSED_%d_DIFF_TABS" closed-count))))))
 
 (defn handle-check-document-dirty [arguments]
   "Check if document is dirty.
@@ -678,93 +684,95 @@ ARGUMENTS should contain `filePath`."
       (signal 'mcp-error '("Missing required parameter: filePath")))
     (let [buffer (find-buffer-visiting path)]
       (if buffer
-          `((isDirty . ,(if (buffer-modified-p buffer) t :json-false)))
-        `((isDirty . :json-false))))))
+          (list (cons 'isDirty (if (buffer-modified-p buffer) t :json-false)))
+        (list (cons 'isDirty :json-false))))))
 
 ;;; Tool Registry - Set the values
 
 (defn- -build-tool-list []
   "Build the tool list, conditionally including ediff tools."
-  `(("openFile" . claude-code-ide-mcp-handlers-handle-open-file)
-    ("getCurrentSelection" . claude-code-ide-mcp-handlers-handle-get-current-selection)
-    ("getOpenEditors" . claude-code-ide-mcp-handlers-handle-get-open-editors)
-    ("getWorkspaceFolders" . claude-code-ide-mcp-handlers-handle-get-workspace-folders)
-    ("getDiagnostics" . claude-code-ide-mcp-handlers-handle-get-diagnostics)
-    ("saveDocument" . claude-code-ide-mcp-handlers-handle-save-document)
-    ("close_tab" . claude-code-ide-mcp-handlers-handle-close-tab)
-    ,@(when (bound-and-true-p claude-code-ide-use-ide-diff)
-        '(("openDiff" . claude-code-ide-mcp-handlers-handle-open-diff)
-          ("closeAllDiffTabs" . claude-code-ide-mcp-handlers-handle-close-all-diff-tabs)))
-    ("checkDocumentDirty" . claude-code-ide-mcp-handlers-handle-check-document-dirty)))
+  (append (list '("openFile" . claude-code-ide-mcp-handlers-handle-open-file)
+                '("getCurrentSelection" . claude-code-ide-mcp-handlers-handle-get-current-selection)
+                '("getOpenEditors" . claude-code-ide-mcp-handlers-handle-get-open-editors)
+                '("getWorkspaceFolders" . claude-code-ide-mcp-handlers-handle-get-workspace-folders)
+                '("getDiagnostics" . claude-code-ide-mcp-handlers-handle-get-diagnostics)
+                '("saveDocument" . claude-code-ide-mcp-handlers-handle-save-document)
+                '("close_tab" . claude-code-ide-mcp-handlers-handle-close-tab))
+          (when (bound-and-true-p claude-code-ide-use-ide-diff)
+            '(("openDiff" . claude-code-ide-mcp-handlers-handle-open-diff)
+              ("closeAllDiffTabs" . claude-code-ide-mcp-handlers-handle-close-all-diff-tabs)))
+          (list '("checkDocumentDirty" . claude-code-ide-mcp-handlers-handle-check-document-dirty))))
 
 (setq claude-code-ide-mcp-tools (claude-code-ide-mcp-handlers--build-tool-list))
 
 (defn- -build-tool-schemas []
   "Build the tool schemas, conditionally including ediff tools."
-  `(("openFile" . ((type . "object")
-                   (properties . ((path . ((type . "string")
-                                           (description . "Path to the file to open")))
-                                  (startLine . ((type . "integer")
-                                                (description . "Start line for selection")))
-                                  (endLine . ((type . "integer")
-                                              (description . "End line for selection")))
-                                  (startText . ((type . "string")
-                                                (description . "Start text pattern for selection (takes precedence over line numbers)")))
-                                  (endText . ((type . "string")
-                                              (description . "End text pattern for selection")))))
-                   (required . ["path"])))
-    ("getCurrentSelection" . ((type . "object")
-                              (properties . :json-empty)))
-    ("getOpenEditors" . ((type . "object")
-                         (properties . :json-empty)))
-    ("getWorkspaceFolders" . ((type . "object")
-                              (properties . :json-empty)))
-    ("getDiagnostics" . ((type . "object")
-                         (properties . ((uri . ((type . "string")
-                                                (description . "Optional file URI to get diagnostics for. If not provided, gets diagnostics for all files.")))))
-                         (required . [])))
-    ("saveDocument" . ((type . "object")
-                       (properties . ((path . ((type . "string")
-                                               (description . "Path to the file to save")))))
-                       (required . ["path"])))
-    ("close_tab" . ((type . "object")
+  (append
+   '(("openFile" . ((type . "object")
                     (properties . ((path . ((type . "string")
-                                            (description . "Path to the file to close")))
-                                   (tab_name . ((type . "string")
-                                                (description . "Name of the tab to close")))))
-                    (required . [])))
-    ,@(when (bound-and-true-p claude-code-ide-use-ide-diff)
-        '(("openDiff" . ((type . "object")
-                         (properties . ((old_file_path . ((type . "string")
-                                                          (description . "Path to the original file")))
-                                        (new_file_path . ((type . "string")
-                                                          (description . "Path to the new file (usually same as old)")))
-                                        (new_file_contents . ((type . "string")
-                                                              (description . "New content to diff against")))
-                                        (tab_name . ((type . "string")
-                                                     (description . "Name for the diff tab")))))
-                         (required . ["old_file_path" "new_file_path" "new_file_contents" "tab_name"])))
-          ("closeAllDiffTabs" . ((type . "object")
-                                 (properties . :json-empty)))))
-    ("checkDocumentDirty" . ((type . "object")
-                             (properties . ((filePath . ((type . "string")
-                                                         (description . "Path to the file to check")))))
-                             (required . ["filePath"])))))
+                                            (description . "Path to the file to open")))
+                                   (startLine . ((type . "integer")
+                                                 (description . "Start line for selection")))
+                                   (endLine . ((type . "integer")
+                                               (description . "End line for selection")))
+                                   (startText . ((type . "string")
+                                                 (description . "Start text pattern for selection (takes precedence over line numbers)")))
+                                   (endText . ((type . "string")
+                                               (description . "End text pattern for selection")))))
+                    (required . ["path"])))
+     ("getCurrentSelection" . ((type . "object")
+                               (properties . :json-empty)))
+     ("getOpenEditors" . ((type . "object")
+                          (properties . :json-empty)))
+     ("getWorkspaceFolders" . ((type . "object")
+                               (properties . :json-empty)))
+     ("getDiagnostics" . ((type . "object")
+                          (properties . ((uri . ((type . "string")
+                                                 (description . "Optional file URI to get diagnostics for. If not provided, gets diagnostics for all files.")))))
+                          (required . [])))
+     ("saveDocument" . ((type . "object")
+                        (properties . ((path . ((type . "string")
+                                                (description . "Path to the file to save")))))
+                        (required . ["path"])))
+     ("close_tab" . ((type . "object")
+                     (properties . ((path . ((type . "string")
+                                             (description . "Path to the file to close")))
+                                    (tab_name . ((type . "string")
+                                                 (description . "Name of the tab to close")))))
+                     (required . []))))
+   (when (bound-and-true-p claude-code-ide-use-ide-diff)
+     '(("openDiff" . ((type . "object")
+                      (properties . ((old_file_path . ((type . "string")
+                                                       (description . "Path to the original file")))
+                                     (new_file_path . ((type . "string")
+                                                       (description . "Path to the new file (usually same as old)")))
+                                     (new_file_contents . ((type . "string")
+                                                           (description . "New content to diff against")))
+                                     (tab_name . ((type . "string")
+                                                  (description . "Name for the diff tab")))))
+                      (required . ["old_file_path" "new_file_path" "new_file_contents" "tab_name"])))
+       ("closeAllDiffTabs" . ((type . "object")
+                              (properties . :json-empty)))))
+   '(("checkDocumentDirty" . ((type . "object")
+                              (properties . ((filePath . ((type . "string")
+                                                          (description . "Path to the file to check")))))
+                              (required . ["filePath"]))))))
 
 (setq claude-code-ide-mcp-tool-schemas (claude-code-ide-mcp-handlers--build-tool-schemas))
 
 (defn- -build-tool-descriptions []
   "Build the tool descriptions, conditionally including ediff tools."
-  `(("openFile" . "Open a file in the editor and optionally select a range of text")
-    ("getCurrentSelection" . "Get the currently selected text and its location")
-    ("getOpenEditors" . "Get the list of currently open editors/buffers")
-    ("getWorkspaceFolders" . "Get the current workspace/project folders")
-    ("getDiagnostics" . "Get language diagnostics from Emacs")
-    ("saveDocument" . "Save a document to disk")
-    ("close_tab" . "Close a tab/buffer")
-    ,@(when (bound-and-true-p claude-code-ide-use-ide-diff)
-        '(("openDiff" . "Open a diff view comparing old and new file contents")
-          ("closeAllDiffTabs" . "Close all open diff tabs in the current session")))
-    ("checkDocumentDirty" . "Check if a document has unsaved changes")))
+  (append
+   '(("openFile" . "Open a file in the editor and optionally select a range of text")
+     ("getCurrentSelection" . "Get the currently selected text and its location")
+     ("getOpenEditors" . "Get the list of currently open editors/buffers")
+     ("getWorkspaceFolders" . "Get the current workspace/project folders")
+     ("getDiagnostics" . "Get language diagnostics from Emacs")
+     ("saveDocument" . "Save a document to disk")
+     ("close_tab" . "Close a tab/buffer"))
+   (when (bound-and-true-p claude-code-ide-use-ide-diff)
+     '(("openDiff" . "Open a diff view comparing old and new file contents")
+       ("closeAllDiffTabs" . "Close all open diff tabs in the current session")))
+   '(("checkDocumentDirty" . "Check if a document has unsaved changes"))))
 
 (setq claude-code-ide-mcp-tool-descriptions (claude-code-ide-mcp-handlers--build-tool-descriptions))

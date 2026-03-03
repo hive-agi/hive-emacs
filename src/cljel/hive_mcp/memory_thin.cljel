@@ -532,9 +532,7 @@ Call this after CIDER connects to enable memory operations."
 If no delegate is set, signal an error with instructions."
   (if hive-mcp-memory--storage-delegate
       (apply hive-mcp-memory--storage-delegate operation args)
-    (error "hive-mcp-memory: Storage delegate not configured. \
-Use MCP tools (mcp_memory_add, mcp_memory_query) directly, \
-or set `hive-mcp-memory--storage-delegate'")))
+    (error "hive-mcp-memory: Storage delegate not configured. Use MCP tools (mcp_memory_add, mcp_memory_query) directly, or set hive-mcp-memory--storage-delegate")))
 
 ;;; ============================================================
 ;;; CRUD Operations (delegate to storage backend)

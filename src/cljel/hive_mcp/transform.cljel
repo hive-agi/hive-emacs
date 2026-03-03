@@ -32,9 +32,9 @@ Plists become alists, lists become vectors, nil becomes []."
     (and (listp val) val)
     (apply #'vector
            (mapcar (lambda (v)
-                     (if (and (listp v) (keywordp (car-safe v)))
-                       (hive-mcp-transform-plist-to-alist v)
-                       v))
+                           (if (and (listp v) (keywordp (car-safe v)))
+                             (hive-mcp-transform-plist-to-alist v)
+                             v))
                    val))
 
     ;; nil -> empty vector
@@ -148,8 +148,8 @@ EXTRA-PAIRS are additional key-value pairs."
   "Convert STATS-PLIST to alist extracting KEYS.
 KEYS is a list of keyword symbols to extract."
   (mapcar (lambda (key)
-            (cons (intern (substring (symbol-name key) 1))
-                  (plist-get stats-plist key)))
+                  (cons (intern (substring (symbol-name key) 1))
+                        (plist-get stats-plist key)))
           keys))
 
 ;;; Position transformation

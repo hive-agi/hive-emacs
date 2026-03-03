@@ -54,10 +54,10 @@ Events: after-save, compilation-finish, diagnostics-error, custom."
   "Return list of registered triggers."
   (let [triggers nil]
     (maphash (lambda (k v)
-               (push (list :name k
-                           :event (plist-get v :event)
-                           :description (plist-get v :description))
-                     triggers))
+                     (push (list :name k
+                                 :event (plist-get v :event)
+                                 :description (plist-get v :description))
+                           triggers))
              hive-mcp-trigger-registry)
     (nreverse triggers)))
 
@@ -65,14 +65,14 @@ Events: after-save, compilation-finish, diagnostics-error, custom."
   "Run all triggers matching EVENT with optional DATA."
   (maphash
    (lambda (_name spec)
-     (when (eq (plist-get spec :event) event)
-       (let [condition (plist-get spec :condition)
-             action (plist-get spec :action)]
-         (when (or (null condition) (funcall condition data))
-           (condition-case err
-               (funcall action data)
-             (error
-              (message "MCP trigger error: %s" (error-message-string err))))))))
+           (when (eq (plist-get spec :event) event)
+             (let [condition (plist-get spec :condition)
+                   action (plist-get spec :action)]
+               (when (or (null condition) (funcall condition data))
+                 (condition-case err
+                                 (funcall action data)
+                                 (error
+                                  (message "MCP trigger error: %s" (error-message-string err))))))))
    hive-mcp-trigger-registry))
 
 ;;; Keymap
@@ -130,7 +130,7 @@ Example configuration:
   "Save region or prompt for code as a snippet."
   (interactive)
   (let* [code (if (use-region-p)
-                  (buffer-substring-no-properties (region-beginning) (region-end))
+                (buffer-substring-no-properties (region-beginning) (region-end))
                 (read-string "Code: "))
          name (read-string "Snippet name: ")
          language (hive-mcp-context-language)
@@ -175,36 +175,36 @@ Example configuration:
       ;; Notes
       (insert "== Notes ==\n")
       (dolist (note (plist-get context :notes))
-        (insert (format "- %s [%s]\n"
-                        (plist-get note :content)
-                        (plist-get note :created))))
+              (insert (format "- %s [%s]\n"
+                              (plist-get note :content)
+                              (plist-get note :created))))
       (insert "\n")
 
       ;; Conventions
       (insert "== Conventions ==\n")
       (dolist (conv (plist-get context :conventions))
-        (let [c (plist-get conv :content)]
-          (insert (format "- %s\n" (plist-get c :description)))
-          (when-let* [ex (plist-get c :example)]
-            (insert (format "  Example: %s\n" ex)))))
+              (let [c (plist-get conv :content)]
+                (insert (format "- %s\n" (plist-get c :description)))
+                (when-let* [ex (plist-get c :example)]
+                           (insert (format "  Example: %s\n" ex)))))
       (insert "\n")
 
       ;; Decisions
       (insert "== Recent Decisions ==\n")
       (dolist (dec (plist-get context :recent-decisions))
-        (let [d (plist-get dec :content)]
-          (insert (format "- %s\n  %s\n"
-                          (plist-get d :title)
-                          (plist-get d :rationale)))))
+              (let [d (plist-get dec :content)]
+                (insert (format "- %s\n  %s\n"
+                                (plist-get d :title)
+                                (plist-get d :rationale)))))
       (insert "\n")
 
       ;; Snippets
       (insert "== Snippets ==\n")
       (dolist (snip (plist-get context :snippets))
-        (let [s (plist-get snip :content)]
-          (insert (format "- %s [%s]\n"
-                          (plist-get s :name)
-                          (plist-get s :language)))))
+              (let [s (plist-get snip :content)]
+                (insert (format "- %s [%s]\n"
+                                (plist-get s :name)
+                                (plist-get s :language)))))
 
       (goto-char (point-min)))
     (display-buffer buf)))
@@ -231,11 +231,11 @@ Example configuration:
       (erase-buffer)
       (insert "= Conversation History =\n\n")
       (dolist (entry (reverse history))
-        (let [c (plist-get entry :content)]
-          (insert (format "[%s] %s:\n%s\n\n"
-                          (plist-get entry :created)
-                          (plist-get c :role)
-                          (plist-get c :content)))))
+              (let [c (plist-get entry :content)]
+                (insert (format "[%s] %s:\n%s\n\n"
+                                (plist-get entry :created)
+                                (plist-get c :role)
+                                (plist-get c :content)))))
       (goto-char (point-min)))
     (display-buffer buf)))
 
@@ -268,8 +268,8 @@ BUFFER is the compilation buffer, STATUS is the result string."
 ;;;###autoload
 (defn setup-hooks []
   "Set up hive-mcp hooks."
-  (add-hook 'after-save-hook #'hive-mcp-triggers--after-save-handler)
-  (add-hook 'compilation-finish-functions #'hive-mcp-triggers--compilation-finish-handler))
+  (add-hook 'after-save-hook #'hive-mcp-triggers---after-save-handler)
+  (add-hook 'compilation-finish-functions #'hive-mcp-triggers---compilation-finish-handler))
 
 ;;; Workflow Stubs (to be defined in hive-mcp-workflows.el)
 
@@ -277,7 +277,7 @@ BUFFER is the compilation buffer, STATUS is the result string."
   "Run a workflow interactively."
   (interactive)
   (if (fboundp 'hive-mcp-workflow-run-interactive)
-      (call-interactively #'hive-mcp-workflow-run-interactive)
+    (call-interactively #'hive-mcp-workflow-run-interactive)
     (message "Workflows not loaded yet")))
 
 (defn define-workflow-interactive []
@@ -291,7 +291,15 @@ BUFFER is the compilation buffer, STATUS is the result string."
   "Open the main hive-mcp transient menu."
   (interactive)
   (if (fboundp 'hive-mcp-transient-main)
-      (hive-mcp-transient-main)
+    (hive-mcp-transient-main)
     (message "Use C-c m <key> for quick access. Menu requires transient package.")))
+
+;; Compatibility aliases (hive-mcp.el uses hive-mcp- prefix without module name)
+(defalias 'hive-mcp-setup-keybindings #'hive-mcp-triggers-setup-keybindings)
+(defalias 'hive-mcp-setup-hooks #'hive-mcp-triggers-setup-hooks)
+(defalias 'hive-mcp-add-note-interactive #'hive-mcp-triggers-add-note-interactive)
+(defalias 'hive-mcp-add-snippet-interactive #'hive-mcp-triggers-add-snippet-interactive)
+(defalias 'hive-mcp-show-context #'hive-mcp-triggers-show-context)
+(defalias 'hive-mcp-show-memory #'hive-mcp-triggers-show-memory)
 
 (provide 'hive-mcp-triggers)

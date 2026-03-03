@@ -235,7 +235,7 @@ Returns content string or nil if not found/unavailable."
         (when (fboundp 'hive-mcp-api-call-tool)
           (let [result (hive-mcp-api-call-tool
                         "preset_get"
-                        `(:name ,name))]
+                        (list :name name))]
             (when (and result (not (plist-get result :error)))
               (let [preset (plist-get result :preset)]
                 (when preset
@@ -265,7 +265,7 @@ Returns list of matching preset names or nil if Chroma unavailable."
         (when (fboundp 'hive-mcp-api-call-tool)
           (let [result (hive-mcp-api-call-tool
                         "preset_search"
-                        `(:query ,query :limit ,(or limit 5)))]
+                        (list :query query :limit (or limit 5)))]
             (when (and result (not (plist-get result :error)))
               (mapcar (lambda (r) (plist-get r :name))
                       (plist-get result :results)))))
@@ -366,7 +366,7 @@ INJECTED-CONTEXT is prepended if non-nil."
     (when (or contents injected-context)
       (let [preset-body (when contents
                           (mapconcat #'identity (nreverse contents) "\n\n---\n\n"))]
-        (concat
+        (elisp-concat
          ;; Injected context comes first (axioms, conventions, decisions)
          (when injected-context
            (elisp-concat injected-context "\n\n---\n\n"))
@@ -379,7 +379,7 @@ PRESETS is a list of preset names.
 INJECTED-CONTEXT is optional catchup context.
 Returns ~300 token prompt instead of ~5K full content."
   (let [preset-names (string-join presets ", ")]
-    (concat
+    (elisp-concat
      (when injected-context
        (elisp-concat injected-context "\n\n---\n\n"))
      (format hive-mcp-swarm-presets--lazy-instructions preset-names)
@@ -392,7 +392,7 @@ Returns header string or nil if unavailable."
       (when (fboundp 'hive-mcp-api-call-tool)
         (let [result (hive-mcp-api-call-tool
                       "preset"
-                      `(:command "header" :presets ,presets :lazy t))]
+                      (list :command "header" :presets presets :lazy t))]
           (when (and result (not (plist-get result :error)))
             (plist-get result :header))))
     (error
@@ -413,7 +413,7 @@ or nil if no presets found."
         (let [header (when presets
                        (-fetch-lazy-header presets))]
           (if header
-              (concat
+              (elisp-concat
                (when injected-context
                  (elisp-concat injected-context "\n\n---\n\n"))
                header

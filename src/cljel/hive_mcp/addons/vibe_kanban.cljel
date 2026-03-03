@@ -75,7 +75,7 @@ If nil, uses current project root or `default-directory'."
   (or hive-mcp-vibe-kanban-project-dir
       (when (fboundp 'project-root)
         (when-let* [proj (project-current)]
-          (project-root proj)))
+                   (project-root proj)))
       default-directory))
 
 (defn- -running-p []
@@ -89,21 +89,21 @@ If nil, uses current project root or `default-directory'."
   "Start vibe-kanban server asynchronously.
 Returns the process object."
   (unless (hive-mcp-vibe-kanban--running-p)
-    (let* [default-directory (hive-mcp-vibe-kanban--project-dir)
-           buf (get-buffer-create hive-mcp-vibe-kanban--buffer-name)]
-      (message "hive-mcp-vibe-kanban: Starting server...")
-      (setq hive-mcp-vibe-kanban--process
-            (apply #'start-process
-                   "vibe-kanban"
-                   buf
-                   hive-mcp-vibe-kanban-command
-                   hive-mcp-vibe-kanban-args))
+          (let* [default-directory (hive-mcp-vibe-kanban--project-dir)
+                 buf (get-buffer-create hive-mcp-vibe-kanban--buffer-name)]
+            (message "hive-mcp-vibe-kanban: Starting server...")
+            (setq hive-mcp-vibe-kanban--process
+                  (apply #'start-process
+                         "vibe-kanban"
+                         buf
+                         hive-mcp-vibe-kanban-command
+                         hive-mcp-vibe-kanban-args))
       ;; Set up process sentinel for status messages
-      (set-process-sentinel
-       hive-mcp-vibe-kanban--process
-       (lambda (proc event)
-         (message "hive-mcp-vibe-kanban: %s" (string-trim event))))
-      hive-mcp-vibe-kanban--process)))
+            (set-process-sentinel
+             hive-mcp-vibe-kanban--process
+             (lambda (proc event)
+                     (message "hive-mcp-vibe-kanban: %s" (string-trim event))))
+            hive-mcp-vibe-kanban--process)))
 
 (defn- -stop []
   "Stop the vibe-kanban server."
@@ -118,7 +118,7 @@ Returns the process object."
   "Start the vibe-kanban server."
   (interactive)
   (if (hive-mcp-vibe-kanban--running-p)
-      (message "hive-mcp-vibe-kanban: Server already running")
+    (message "hive-mcp-vibe-kanban: Server already running")
     (hive-mcp-vibe-kanban--start-async)))
 
 (defn stop []
@@ -138,15 +138,15 @@ Returns the process object."
   (interactive)
   (message "hive-mcp-vibe-kanban: %s"
            (if (hive-mcp-vibe-kanban--running-p)
-               "Running"
+             "Running"
              "Stopped")))
 
 (defn show-buffer []
   "Show the vibe-kanban output buffer."
   (interactive)
   (if-let* [buf (get-buffer hive-mcp-vibe-kanban--buffer-name)]
-      (display-buffer buf)
-    (message "hive-mcp-vibe-kanban: No output buffer")))
+           (display-buffer buf)
+           (message "hive-mcp-vibe-kanban: No output buffer")))
 
 ;;;; Addon Lifecycle Functions:
 
@@ -170,15 +170,15 @@ Returns the process object for lifecycle tracking."
 ;;;; Transient Menu:
 
 (transient-define-prefix hive-mcp-vibe-kanban-transient ()
-  "Vibe Kanban control menu."
-  ["Vibe Kanban"
-   ["Server"
-    ("s" "Start" hive-mcp-vibe-kanban-start)
-    ("S" "Stop" hive-mcp-vibe-kanban-stop)
-    ("r" "Restart" hive-mcp-vibe-kanban-restart)
-    ("?" "Status" hive-mcp-vibe-kanban-status)]
-   ["View"
-    ("b" "Show buffer" hive-mcp-vibe-kanban-show-buffer)]])
+                         "Vibe Kanban control menu."
+                         ["Vibe Kanban"
+                          ["Server"
+                           ("s" "Start" hive-mcp-vibe-kanban-start)
+                           ("S" "Stop" hive-mcp-vibe-kanban-stop)
+                           ("r" "Restart" hive-mcp-vibe-kanban-restart)
+                           ("?" "Status" hive-mcp-vibe-kanban-status)]
+                          ["View"
+                           ("b" "Show buffer" hive-mcp-vibe-kanban-show-buffer)]])
 
 ;;;; Addon Registration:
 

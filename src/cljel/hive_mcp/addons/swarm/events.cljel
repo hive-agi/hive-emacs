@@ -61,10 +61,10 @@ Events are both:
 
 This enables components like hive-mcp-olympus to react immediately
 to swarm events without waiting for server round-trip."
-  (let [event `(("type" . ,event-type)
-                ("timestamp" . ,(truncate (float-time)))
-                ("session-id" . ,hive-mcp-swarm-events--session-id)
-                ,@data)]
+  (let [event (append (list (cons "type" event-type)
+                            (cons "timestamp" (truncate (float-time)))
+                            (cons "session-id" hive-mcp-swarm-events--session-id))
+                      data)]
     ;; Always dispatch locally for immediate UI updates
     (when (fboundp 'hive-mcp-channel-dispatch-local)
       (condition-case err
@@ -91,18 +91,18 @@ registry sync per ADR-001 Phase 2).
 KANBAN-TASK-ID is the optional kanban task this ling is linked to."
   (hive-mcp-swarm-events/emit
    "slave-spawned"
-   `(("slave-id" . ,slave-id)
-     ("name" . ,name)
-     ("presets" . ,(or presets []))
-     ("cwd" . ,(or cwd ""))
-     ,@(when kanban-task-id
-         `(("kanban-task-id" . ,kanban-task-id))))))
+   (append (list (cons "slave-id" slave-id)
+                 (cons "name" name)
+                 (cons "presets" (or presets []))
+                 (cons "cwd" (or cwd "")))
+           (when kanban-task-id
+             (list (cons "kanban-task-id" kanban-task-id))))))
 
 (defn emit-slave-killed [slave-id]
   "Emit slave-killed event for SLAVE-ID."
   (hive-mcp-swarm-events/emit
    "slave-killed"
-   `(("slave-id" . ,slave-id))))
+   (list (cons "slave-id" slave-id))))
 
 (defn emit-slave-ready [slave-id]
   "Emit slave-ready event for SLAVE-ID.
@@ -110,38 +110,38 @@ This signals that preset injection is complete and the slave is ready
 to receive dispatched tasks."
   (hive-mcp-swarm-events/emit
    "slave-ready"
-   `(("slave-id" . ,slave-id))))
+   (list (cons "slave-id" slave-id))))
 
 (defn emit-task-completed [task-id slave-id result]
   "Emit task-completed event for TASK-ID from SLAVE-ID with RESULT."
   (hive-mcp-swarm-events/emit
    "task-completed"
-   `(("task-id" . ,task-id)
-     ("slave-id" . ,slave-id)
-     ("result" . ,result))))
+   (list (cons "task-id" task-id)
+         (cons "slave-id" slave-id)
+         (cons "result" result))))
 
 (defn emit-task-failed [task-id slave-id error-msg]
   "Emit task-failed event for TASK-ID from SLAVE-ID with ERROR-MSG."
   (hive-mcp-swarm-events/emit
    "task-failed"
-   `(("task-id" . ,task-id)
-     ("slave-id" . ,slave-id)
-     ("error" . ,error-msg))))
+   (list (cons "task-id" task-id)
+         (cons "slave-id" slave-id)
+         (cons "error" error-msg))))
 
 (defn emit-prompt-shown [slave-id prompt-text]
   "Emit prompt-shown event for SLAVE-ID with PROMPT-TEXT."
   (hive-mcp-swarm-events/emit
    "prompt-shown"
-   `(("slave-id" . ,slave-id)
-     ("prompt" . ,prompt-text))))
+   (list (cons "slave-id" slave-id)
+         (cons "prompt" prompt-text))))
 
 (defn emit-state-changed [slave-id old-state new-state]
   "Emit state-changed event for SLAVE-ID from OLD-STATE to NEW-STATE."
   (hive-mcp-swarm-events/emit
    "state-changed"
-   `(("slave-id" . ,slave-id)
-     ("old-state" . ,(symbol-name old-state))
-     ("new-state" . ,(symbol-name new-state)))))
+   (list (cons "slave-id" slave-id)
+         (cons "old-state" (symbol-name old-state))
+         (cons "new-state" (symbol-name new-state)))))
 
 (defn emit-auto-completed [slave-id duration-secs status]
   "Emit auto-completed event for SLAVE-ID with DURATION-SECS and STATUS.
@@ -149,19 +149,19 @@ STATUS should be a string like \"completed\", \"unknown\", etc.
 DURATION-SECS is the task duration in seconds (float)."
   (hive-mcp-swarm-events/emit
    "auto-completed"
-   `(("slave-id" . ,slave-id)
-     ("duration-secs" . ,(or duration-secs 0))
-     ("status" . ,(or status "completed"))
-     ("detection-method" . "terminal-ready-transition"))))
+   (list (cons "slave-id" slave-id)
+         (cons "duration-secs" (or duration-secs 0))
+         (cons "status" (or status "completed"))
+         (cons "detection-method" "terminal-ready-transition"))))
 
 (defn emit-auto-started [slave-id task-preview]
   "Emit auto-started event for SLAVE-ID with TASK-PREVIEW.
 TASK-PREVIEW is a truncated version of the task prompt (first 100 chars)."
   (hive-mcp-swarm-events/emit
    "auto-started"
-   `(("slave-id" . ,slave-id)
-     ("task-preview" . ,(or task-preview ""))
-     ("detection-method" . "terminal-send"))))
+   (list (cons "slave-id" slave-id)
+         (cons "task-preview" (or task-preview ""))
+         (cons "detection-method" "terminal-send"))))
 
 (defn emit-auto-error [slave-id duration-secs error-type error-preview]
   "Emit auto-error event for SLAVE-ID with error details.
@@ -170,22 +170,22 @@ ERROR-TYPE is a string like \"cli-error\", \"tool-error\", \"timeout\".
 ERROR-PREVIEW is a truncated version of the error text (first 200 chars)."
   (hive-mcp-swarm-events/emit
    "auto-error"
-   `(("slave-id" . ,slave-id)
-     ("duration-secs" . ,(or duration-secs 0))
-     ("error-type" . ,(or error-type "unknown"))
-     ("error-preview" . ,(or error-preview ""))
-     ("detection-method" . "terminal-pattern-match"))))
+   (list (cons "slave-id" slave-id)
+         (cons "duration-secs" (or duration-secs 0))
+         (cons "error-type" (or error-type "unknown"))
+         (cons "error-preview" (or error-preview ""))
+         (cons "detection-method" "terminal-pattern-match"))))
 
 (defn emit-idle-timeout [slave-id idle-duration-secs]
   "Emit idle-timeout event for SLAVE-ID (Layer 2 convergence).
 IDLE-DURATION-SECS is how long the slave has been idle (float)."
   (hive-mcp-swarm-events/emit
    "idle-timeout"
-   `(("slave-id" . ,slave-id)
-     ("idle-duration-secs" . ,(or idle-duration-secs 0))
-     ("detection-method" . "terminal-introspection")
-     ("layer" . 2)
-     ("convergence-pattern" . "4-layer-convergence"))))
+   (list (cons "slave-id" slave-id)
+         (cons "idle-duration-secs" (or idle-duration-secs 0))
+         (cons "detection-method" "terminal-introspection")
+         (cons "layer" 2)
+         (cons "convergence-pattern" "4-layer-convergence"))))
 
 (defn emit-prompt-stall [slave-id idle-duration-secs prompt-text]
   "Emit prompt-stall event for SLAVE-ID (Layer 2 convergence).
@@ -194,24 +194,24 @@ PROMPT-TEXT is the pending prompt text (truncated if long).
 This event is URGENT - the coordinator needs to respond."
   (hive-mcp-swarm-events/emit
    "prompt-stall"
-   `(("slave-id" . ,slave-id)
-     ("idle-duration-secs" . ,(or idle-duration-secs 0))
-     ("prompt-preview" . ,(if (> (length prompt-text) 100)
-                              (elisp-concat (substring prompt-text 0 97) "...")
-                            prompt-text))
-     ("detection-method" . "idle-with-pending-prompt")
-     ("layer" . 2)
-     ("convergence-pattern" . "4-layer-convergence")
-     ("urgency" . "high"))))
+   (list (cons "slave-id" slave-id)
+         (cons "idle-duration-secs" (or idle-duration-secs 0))
+         (cons "prompt-preview" (if (> (length prompt-text) 100)
+                                    (elisp-concat (substring prompt-text 0 97) "...")
+                                  prompt-text))
+         (cons "detection-method" "idle-with-pending-prompt")
+         (cons "layer" 2)
+         (cons "convergence-pattern" "4-layer-convergence")
+         (cons "urgency" "high"))))
 
 (defn emit-ling-ready-for-wrap [slave-id reason]
   "Emit ling-ready-for-wrap event for SLAVE-ID with REASON.
 REASON is a string describing why wrap is triggered."
   (hive-mcp-swarm-events/emit
    "ling-ready-for-wrap"
-   `(("slave-id" . ,slave-id)
-     ("reason" . ,(or reason "task-completed"))
-     ("session-id" . ,hive-mcp-swarm-events--session-id))))
+   (list (cons "slave-id" slave-id)
+         (cons "reason" (or reason "task-completed"))
+         (cons "session-id" hive-mcp-swarm-events--session-id))))
 
 (defn emit-dispatch-dropped [slave-id reason prompt-preview retries queued-at]
   "Emit dispatch-dropped event for SLAVE-ID with failure details.
@@ -222,15 +222,15 @@ QUEUED-AT is the epoch time when the dispatch was queued."
   (let [wait-time (- (float-time) (or queued-at (float-time)))]
     (hive-mcp-swarm-events/emit
      "dispatch-dropped"
-     `(("slave-id" . ,slave-id)
-       ("reason" . ,(or reason "unknown"))
-       ("prompt-preview" . ,(if (> (length prompt-preview) 100)
-                                (elisp-concat (substring prompt-preview 0 97) "...")
-                              prompt-preview))
-       ("retries" . ,(or retries 0))
-       ("queued-at" . ,(or queued-at 0))
-       ("wait-time-secs" . ,wait-time)
-       ("urgency" . "high")))))
+     (list (cons "slave-id" slave-id)
+           (cons "reason" (or reason "unknown"))
+           (cons "prompt-preview" (if (> (length prompt-preview) 100)
+                                      (elisp-concat (substring prompt-preview 0 97) "...")
+                                    prompt-preview))
+           (cons "retries" (or retries 0))
+           (cons "queued-at" (or queued-at 0))
+           (cons "wait-time-secs" wait-time)
+           (cons "urgency" "high")))))
 
 ;; ============================================================================
 ;; Session Management
