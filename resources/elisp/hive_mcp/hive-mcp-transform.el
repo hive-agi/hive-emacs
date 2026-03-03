@@ -52,7 +52,7 @@
   "Return a preview of CONTENT truncated to MAX-LEN characters.\nMAX-LEN defaults to 100."
   (let* ((max-len (or max-len 100))
         (text (hive-mcp-transform--extract-text content)))
-    (if (> (length text) max-len) (clel-concat (substring text 0 (- max-len 3)) "...") text)))
+    (if (> (length text) max-len) (concat (substring text 0 (- max-len 3)) "...") text)))
 
 (defun hive-mcp-transform-entry-to-metadata (entry)
   "Convert ENTRY plist to metadata-only alist.\nReturns: id, type, preview (truncated content), tags (as vector), created."

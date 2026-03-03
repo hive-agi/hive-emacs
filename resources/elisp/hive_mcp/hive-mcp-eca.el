@@ -18,7 +18,8 @@
   :group 'hive-mcp-eca
   :type 'boolean)
 
-(defvar hive-mcp-eca--initialized nil)
+(defvar hive-mcp-eca--initialized nil
+  "Whether the addon has been initialized.")
 
 (defun hive-mcp-eca-ensure-api ()
   "Ensure hive-mcp-api is available."
@@ -60,20 +61,20 @@
 (defun hive-mcp-eca-save-to-memory (content type &optional tags)
   "Save CONTENT to hive-mcp memory as TYPE with optional TAGS."
   (interactive (list (if (use-region-p) (buffer-substring-no-properties (region-beginning) (region-end)) (clel-read-string "Content: ")) (completing-read "Type: " '("note" "snippet" "decision") nil t) (split-string (clel-read-string "Tags (comma-separated): ") "," t " ")))
-  (when (ensure-api)
+  (when (hive-mcp-eca-ensure-api)
     (hive-mcp-api-memory-add type content tags)
     (message "Saved to memory as %s" type)))
 
 (defun hive-mcp-eca-query-memory (type &optional limit)
   "Query hive-mcp memory for entries of TYPE."
-  (when (ensure-api)
+  (when (hive-mcp-eca-ensure-api)
     (hive-mcp-api-memory-query type nil (or limit 10))))
 
 (defun hive-mcp-eca-inject-context ()
   "Inject MCP context into current ECA chat."
   (interactive)
-  (when-let ((ctx (get-context)))
-    (chat-send (format "Context:\n%s" ctx))))
+  (when-let ((ctx (hive-mcp-eca-get-context)))
+    (hive-mcp-eca-chat-send (format "Context:\n%s" ctx))))
 
 (defun hive-mcp-eca--enable ()
   "Enable hive-mcp-eca integration."
@@ -90,7 +91,7 @@
 (defun hive-mcp-eca--on-eca-init ()
   "Hook run after ECA initializes."
   (when hive-mcp-eca-auto-context
-    (inject-context)))
+    (hive-mcp-eca-inject-context)))
 
 (define-minor-mode hive-mcp-eca-mode
   "Minor mode for hive-mcp integration with ECA."
@@ -98,7 +99,7 @@
   :lighter " MCP-ECA"
   :global t
   :group 'hive-mcp-eca
-  (if hive-mcp-eca-mode (-enable) (-disable)))
+  (if hive-mcp-eca-mode (hive-mcp-eca--enable) (hive-mcp-eca--disable)))
 
 (defun hive-mcp-eca--addon-init ()
   "Initialize the hive-mcp-eca addon."

@@ -47,18 +47,20 @@
   :group 'hive-mcp-log
   :type 'integer)
 
-(defvar hive-mcp-log-hive-mcp-log--history nil)
+(defvar hive-mcp-log--history nil
+  "Ring buffer storing recent log entries.")
 
-(defvar hive-mcp-log-hive-mcp-log--level-priority '((debug . 0) (info . 1) (warn . 2) (error . 3))
+(defvar hive-mcp-log--level-priority '((debug . 0) (info . 1) (warn . 2) (error . 3))
   "Priority mapping for log levels.")
 
-(defvar hive-mcp-log-hive-mcp-log--level-labels '((debug . "DEBUG") (info . "INFO ") (warn . "WARN ") (error . "ERROR"))
+(defvar hive-mcp-log--level-labels '((debug . "DEBUG") (info . "INFO ") (warn . "WARN ") (error . "ERROR"))
   "Display labels for log levels.")
 
-(defvar hive-mcp-log-hive-mcp-log--buffer-name "*hive-mcp-log*"
+(defvar hive-mcp-log--buffer-name "*hive-mcp-log*"
   "Name of the dedicated log buffer.")
 
-(defvar hive-mcp-log-hive-mcp-log--mcp-call-stats nil)
+(defvar hive-mcp-log--mcp-call-stats nil
+  "Hash table tracking MCP call statistics.\nKeys are tool names, values are plists with :count, :total-ms, :max-ms.")
 
 (defun hive-mcp-log--ensure-history ()
   "Ensure the log history ring buffer exists."
@@ -150,7 +152,7 @@
   (hive-mcp-log--ensure-history)
   (let* ((n (or count 10))
         (len (ring-length hive-mcp-log--history))
-        (limit (cl-min n len)))
+        (limit (min n len)))
     (cl-loop for i from 0 below limit collect (ring-ref hive-mcp-log--history i))))
 
 (defun hive-mcp-log-log-filter-by-component (component)
@@ -187,13 +189,78 @@
     (hive-mcp-log-mode)))
     (display-buffer buf)))
 
-(defvar hive-mcp-log-hive-mcp-log-mode-map (make-sparse-keymap)
+(defvar hive-mcp-log-mode-map (make-sparse-keymap)
   "Keymap for hive-mcp-log-mode.")
 
 (defun hive-mcp-log-mcp-call-start (tool-name)
   "Record the start of an MCP call to TOOL-NAME.\nReturns a timing token to pass to `mcp-call-end'."
   (hive-mcp-log-log-debug 'mcp "Starting MCP call: %s" tool-name)
   (list :tool tool-name :start (current-time)))
+
+(defun hive-mcp-log-mcp-call-end (timing-token &optional success)
+  "Record the end of an MCP call using TIMING-TOKEN.\nSUCCESS indicates whether the call succeeded."
+  (hive-mcp-log--ensure-stats)
+  (let* ((tool-name (plist-get timing-token :tool))
+        (start-time (plist-get timing-token :start))
+        (elapsed-ms (* 1000.0 (float-time (time-subtract (current-time) start-time))))
+        (stats (gethash tool-name hive-mcp-log--mcp-call-stats)))
+    (if stats (progn
+  (plist-put stats :count (1+ (plist-get stats :count)))
+  (plist-put stats :total-ms (+ (plist-get stats :total-ms) elapsed-ms))
+  (when (> elapsed-ms (plist-get stats :max-ms))
+    (plist-put stats :max-ms elapsed-ms))) (puthash tool-name (list :count 1 :total-ms elapsed-ms :max-ms elapsed-ms) hive-mcp-log--mcp-call-stats))
+    (let* ((level (if (> elapsed-ms hive-mcp-log-timing-threshold-ms) 'warn 'debug)))
+    (hive-mcp-log-log level 'mcp "MCP call %s: %.1fms%s" tool-name elapsed-ms (if success "" " (FAILED)")))))
+
+(defun hive-mcp-log-mcp-stats ()
+  "Return MCP call statistics as an alist.\nEach entry is (TOOL-NAME . (:count N :total-ms M :max-ms X :avg-ms A))."
+  (hive-mcp-log--ensure-stats)
+  (let* ((result nil))
+    (maphash (lambda ()
+    (let* ((count (plist-get stats :count))
+        (total (plist-get stats :total-ms))
+        (avg (if (> count 0) (/ total count) 0)))
+    (push (cons tool (list :count count :total-ms total :max-ms (plist-get stats :max-ms) :avg-ms avg)) result))) hive-mcp-log--mcp-call-stats)
+    (clel-sort result (lambda ()
+    (> (plist-get (cdr a) :total-ms) (plist-get (cdr b) :total-ms))))))
+
+(defun hive-mcp-log-mcp-stats-reset ()
+  "Reset MCP call statistics."
+  (interactive)
+  (when hive-mcp-log--mcp-call-stats
+    (clrhash hive-mcp-log--mcp-call-stats))
+  (message "MCP statistics reset"))
+
+(defun hive-mcp-log-mcp-stats-report ()
+  "Display a report of MCP call statistics."
+  (interactive)
+  (let* ((stats (hive-mcp-log-mcp-stats)))
+    (if (null stats) (message "No MCP call statistics recorded") (with-output-to-temp-buffer "*hive-mcp-stats*" (princ "MCP Call Statistics\n") (princ "====================\n\n") (princ (format "%-30s %8s %10s %10s %10s\n" "Tool" "Count" "Total(ms)" "Max(ms)" "Avg(ms)")) (princ (make-string 70 45)) (princ "\n") (mapc (lambda ()
+    (let* ((tool (car entry))
+        (data (cdr entry)))
+    (princ (format "%-30s %8d %10.1f %10.1f %10.1f\n" tool (plist-get data :count) (plist-get data :total-ms) (plist-get data :max-ms) (plist-get data :avg-ms))))) stats)))))
+
+(defun hive-mcp-log-with-timing (component operation body-fn)
+  "Execute BODY-FN, logging timing for OPERATION under COMPONENT.\nReturns the result of BODY-FN.\n\nNote: This is a function version; see hive-mcp-log-with-timing macro for\nthe macro version in the compiled Elisp."
+  (let* ((start (current-time))
+        (result (funcall body-fn))
+        (elapsed-ms (* 1000.0 (float-time (time-subtract (current-time) start)))))
+    (if (> elapsed-ms hive-mcp-log-timing-threshold-ms) (hive-mcp-log-log-warn component "%s took %.1fms (threshold: %dms)" operation elapsed-ms hive-mcp-log-timing-threshold-ms) (hive-mcp-log-log-debug component "%s completed in %.1fms" operation elapsed-ms))
+    result))
+
+(defun hive-mcp-log-instrument-mcp (tool-name body-fn)
+  "Execute BODY-FN as an MCP call to TOOL-NAME with timing instrumentation.\nReturns the result of BODY-FN."
+  (let* ((token (hive-mcp-log-mcp-call-start tool-name))
+        (success nil)
+        (result nil))
+    (unwind-protect
+    (progn
+  (setq result (funcall body-fn))
+  (setq success t)
+  result)
+  (hive-mcp-log-mcp-call-end token success))))
+
+(provide 'hive-mcp-log)
 
 (provide 'hive-mcp-log)
 ;;; hive-mcp-log.el ends here

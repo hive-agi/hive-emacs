@@ -235,18 +235,18 @@ it reads :status from the lings map, not just positions."
 (defn -truncate-string [s max-len]
   "Truncate string S to MAX-LEN characters, adding ellipsis if needed."
   (if (> (length s) max-len)
-    (concat (substring s 0 (- max-len 3)) "...")
+    (elisp-concat (substring s 0 (- max-len 3)) "...")
     s))
 
 (defn -pad-string [s width]
   "Pad string S to WIDTH characters, truncating if necessary."
   (let [truncated (olympus-ui/-truncate-string s width)]
-    (concat truncated (make-string (max 0 (- width (length truncated))) ? ))))
+    (elisp-concat truncated (make-string (max 0 (- width (length truncated))) ? ))))
 
 (defn -render-cell-line [content width face]
   "Render a single line of cell content with FACE."
   (let [padded (olympus-ui/-pad-string (or content "") (- width 2))]
-    (propertize (concat "│" padded "│") 'face face)))
+    (propertize (elisp-concat "│" padded "│") 'face face)))
 
 (defn -render-cell [ling width height focused-p]
   "Render a single ling cell.
@@ -261,8 +261,8 @@ FOCUSED-P indicates if this cell should be highlighted."
         icon (olympus-ui/-status->icon status)
         border-str (make-string (- width 2) ?─)
         ;; Build cell lines
-        top-border (propertize (concat "┌" border-str "┐") 'face 'olympus-ui-cell-border)
-        bottom-border (propertize (concat "└" border-str "┘") 'face 'olympus-ui-cell-border)
+        top-border (propertize (elisp-concat "┌" border-str "┐") 'face 'olympus-ui-cell-border)
+        bottom-border (propertize (elisp-concat "└" border-str "┘") 'face 'olympus-ui-cell-border)
         ;; Status line: icon + status + name
         status-line (format "%s %s  %s"
                             icon
@@ -281,25 +281,25 @@ FOCUSED-P indicates if this cell should be highlighted."
      (olympus-ui/-render-cell-line status-line width status-face) "\n"
      (olympus-ui/-render-cell-line id-line width 'default) "\n"
      (if task-line
-       (concat (olympus-ui/-render-cell-line task-line width 'font-lock-comment-face) "\n")
+       (elisp-concat (olympus-ui/-render-cell-line task-line width 'font-lock-comment-face) "\n")
        (olympus-ui/-render-cell-line "" width 'default) "\n")
      ;; Fill remaining height
      (apply 'concat
-            (mapcar (lambda (_) (concat (olympus-ui/-render-cell-line "" width 'default) "\n"))
+            (mapcar (lambda (_) (elisp-concat (olympus-ui/-render-cell-line "" width 'default) "\n"))
                     (number-sequence 1 (- height 5))))
      bottom-border)))
 
 (defn -render-empty-cell [width height]
   "Render an empty grid cell placeholder."
   (let [border-str (make-string (- width 2) ?─)
-        top-border (propertize (concat "┌" border-str "┐") 'face 'olympus-ui-cell-border)
-        bottom-border (propertize (concat "└" border-str "┘") 'face 'olympus-ui-cell-border)
-        empty-line (propertize (concat "│" (make-string (- width 2) ? ) "│")
+        top-border (propertize (elisp-concat "┌" border-str "┐") 'face 'olympus-ui-cell-border)
+        bottom-border (propertize (elisp-concat "└" border-str "┘") 'face 'olympus-ui-cell-border)
+        empty-line (propertize (elisp-concat "│" (make-string (- width 2) ? ) "│")
                                'face 'olympus-ui-cell-border)]
     (concat
      top-border "\n"
      (apply 'concat
-            (mapcar (lambda (_) (concat empty-line "\n"))
+            (mapcar (lambda (_) (elisp-concat empty-line "\n"))
                     (number-sequence 1 (- height 2))))
      bottom-border)))
 
@@ -404,7 +404,7 @@ STATE contains :layout, :positions, :lings."
                               (let [lines (split-string cell "\n")]
                                 (push (nth line-idx lines) line-parts)))
                             (push (string-join (reverse line-parts) "  ") merged-lines)))
-                        (concat (string-join (reverse merged-lines) "\n") "\n\n")))))))
+                        (elisp-concat (string-join (reverse merged-lines) "\n") "\n\n")))))))
 
 (defn -render-keybindings []
   "Render keybinding help at bottom."

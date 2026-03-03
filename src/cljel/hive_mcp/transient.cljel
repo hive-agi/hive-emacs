@@ -1,0 +1,104 @@
+(ns hive-mcp-transient
+  "Transient menus for hive-mcp."
+  (:require [transient]))
+
+;; Declare functions from other modules
+(declare-function hive-mcp-initialize "hive-mcp" ())
+(declare-function hive-mcp-reset "hive-mcp" ())
+
+;; Memory
+(declare-function hive-mcp-add-note-interactive "hive-mcp-triggers" ())
+(declare-function hive-mcp-add-snippet-interactive "hive-mcp-triggers" ())
+(declare-function hive-mcp-add-convention-interactive "hive-mcp-triggers" ())
+(declare-function hive-mcp-add-decision-interactive "hive-mcp-triggers" ())
+(declare-function hive-mcp-show-memory "hive-mcp-triggers" ())
+
+;; Context
+(declare-function hive-mcp-show-context "hive-mcp-triggers" ())
+
+;; Workflows
+(declare-function hive-mcp-run-workflow-interactive "hive-mcp-triggers" ())
+(declare-function hive-mcp-workflows-workflow-wrap "hive-mcp-workflows" ())
+(declare-function hive-mcp-workflows-workflow-catchup "hive-mcp-workflows" ())
+
+;; Conversation
+(declare-function hive-mcp-show-conversation-history "hive-mcp-triggers" ())
+(declare-function hive-mcp-clear-conversation "hive-mcp-triggers" ())
+
+;; Hivemind
+(declare-function hive-mcp-hivemind-status "hive-mcp-hivemind" ())
+(declare-function hive-mcp-hivemind-show-log "hive-mcp-hivemind" ())
+(declare-function hive-mcp-hivemind-clear "hive-mcp-hivemind" ())
+
+;; Channel
+(declare-function hive-mcp-channel-connect "hive-mcp-channel" ())
+(declare-function hive-mcp-channel-disconnect "hive-mcp-channel" ())
+(declare-function hive-mcp-channel-connected-p "hive-mcp-channel" ())
+
+;; Kanban board
+(declare-function hive-mcp-kanban-board "hive-mcp-kanban-board" ())
+
+;; Variables
+(defvar hive-mcp--initialized)
+(defvar hive-mcp-mode)
+
+;;; Helpers
+
+(defn- status-line []
+  "Return a status string for the transient header."
+  (let [init (if (bound-and-true-p hive-mcp--initialized) "initialized" "not initialized")
+        mode (if (bound-and-true-p hive-mcp-mode) "on" "off")
+        channel (if (and (fboundp 'hive-mcp-channel-connected-p)
+                         (hive-mcp-channel-connected-p))
+                  "connected" "disconnected")]
+    (format "hive-mcp [mode: %s | %s | channel: %s]"
+            (propertize mode 'face (if (bound-and-true-p hive-mcp-mode) 'success 'warning))
+            (propertize init 'face (if (bound-and-true-p hive-mcp--initialized) 'success 'warning))
+            (propertize channel 'face (if (and (fboundp 'hive-mcp-channel-connected-p)
+                                               (hive-mcp-channel-connected-p))
+                                        'success 'transient-inactive-value)))))
+
+;;; Transient Menus
+
+(transient-define-prefix hive-mcp-transient-main []
+  "Hive MCP main menu."
+  [:description hive-mcp-transient--status-line]
+  ["Hive MCP"
+   ["Memory"
+    ("n" "Add note" hive-mcp-add-note-interactive)
+    ("s" "Add snippet" hive-mcp-add-snippet-interactive)
+    ("c" "Add convention" hive-mcp-add-convention-interactive)
+    ("d" "Add decision" hive-mcp-add-decision-interactive)
+    ("l" "Show memory" hive-mcp-show-memory)]
+   ["Workflows"
+    ("w" "Run workflow" hive-mcp-run-workflow-interactive)
+    ("W" "Wrap session" hive-mcp-workflows-workflow-wrap)
+    ("C" "Catchup" hive-mcp-workflows-workflow-catchup)]
+   ["Context & History"
+    ("x" "Show context" hive-mcp-show-context)
+    ("h" "Conversation history" hive-mcp-show-conversation-history)
+    ("H" "Clear conversation" hive-mcp-clear-conversation)]
+   ["Submenus"
+    ("S" "Swarm / Hivemind" hive-mcp-transient-hivemind-menu)
+    ("N" "Connection" hive-mcp-transient-connection-menu)
+    ("K" "Kanban" hive-mcp-transient-kanban-menu)]])
+
+(transient-define-prefix hive-mcp-transient-hivemind-menu []
+  "Hivemind swarm menu."
+  ["Hivemind"
+   ("s" "Agent status" hive-mcp-hivemind-status)
+   ("l" "Show log" hive-mcp-hivemind-show-log)
+   ("c" "Clear state" hive-mcp-hivemind-clear)])
+
+(transient-define-prefix hive-mcp-transient-connection-menu []
+  "Connection management menu."
+  ["Connection"
+   ("c" "Connect channel" hive-mcp-channel-connect)
+   ("d" "Disconnect channel" hive-mcp-channel-disconnect)
+   ("i" "Initialize hive-mcp" hive-mcp-initialize)
+   ("r" "Reset hive-mcp" hive-mcp-reset)])
+
+(transient-define-prefix hive-mcp-transient-kanban-menu []
+  "Kanban board menu."
+  ["Kanban"
+   ("b" "Open board" hive-mcp-kanban-board)])

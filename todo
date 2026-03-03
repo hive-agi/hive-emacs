@@ -1,0 +1,46 @@
+     2026","relation":"co-accessed","confidence":0.3,"created_by":"system:semantic-search","created_at":"Sat
+     Feb 28 20:29:24 GMT-03:00 2026","to":"20260228020539-57cf2a44"},{"scope":"freqtrade","source_type":"co-acc
+     ess","from":"20260224054601-40b021be","id":"fe3cbd9e-5cca-430e-9a13-31c66036c7c6","last_verified":"Sat Feb
+      28 20:29:24 GMT-03:00
+     2026","relation":"co-accessed","confidence":0.3,"created_by":"system:semantic-search","created_at":"Sat
+     Feb 28 20:29:24 GMT-03:00 2026","to":"20260220014018-125eb54e"},{"scope":"freqtrade","source_type":"co-acc
+     ess","from":"20260224054601-40b021be","id":"4af5919a-351d-48dc-8e97-1365cd2147c5","last_verified":"Sat Feb
+      28 20:29:24 GMT-03:00
+     2026","relation":"co-accessed","confidence":0.3,"created_by":"system:semantic-search","created_at":"Sat
+     Feb 28 20:29:24 GMT-03:00 2026","to":"20260224062848-1763e565"},{"scope":"freqtrade","source_type":"co-acc
+     ess","from":"20260224054601-40b021be","id":"d25a9645-3bfc-44a3-a990-d1b19c666dfe","last_verified":"Sat Feb
+      28 20:29:24 GMT-03:00
+     2026","relation":"co-accessed","confidence":0.3,"created_by":"system:semantic-search","created_at":"Sat
+     Feb 28 20:29:24 GMT-03:00 2026","to":"20260220014018-668e5864"},{"scope":"freqtrade","source_type":"co-acc
+     ess","from":"20260224054601-40b021be","id":"91c7ec5f-87ab-4f69-840d-be22292ed933","last_verified":"Sat Feb
+      28 20:29:24 GMT-03:00
+     2026","relation":"co-accessed","confidence":0.3,"created_by":"system:semantic-search","created_at":"Sat
+     Feb 28 20:29:24 GMT-03:00 2026","to":"20260223120906-55b5b823"},{"scope":"freqtrade","source_type":"co-acc
+     ess","from":"20260224054601-40b021be","id":"58a14c7e-7ec2-4ec7-accb-a25f66b4fb8f","last_verified":"Sat Feb
+      28 20:29:24 GMT-03:00
+     2026","relation":"co-accessed","confidence":0.3,"created_by":"system:semantic-search","created_at":"Sat
+     Feb 28 20:29:24 GMT-03:00 2026","to":"20260224054557-4ff59773"},{"scope":"freqtrade","source_type":"co-acc
+     ess","from":"20260224054601-40b021be","id":"dc65544b-9991-4070-a431-682dff5f4bea","last_verified":"Sat Feb
+      28 20:29:24 GMT-03:00
+     2026","relation":"co-accessed","confidence":0.3,"created_by":"system:semantic-search","created_at":"Sat
+     Feb 28 20:29:24 GMT-03:00 2026","to":"20260220014018-317b48b8"},{"scope":"freqtrade","source_type":"co-acc
+     ess","from":"20260224054601-40b021be","id":"f4ebe700-93e1-4901-896c-685a9d8fc3ed","last_verified":"Sat Feb
+      28 20:29:24 GMT-03:00
+     2026","relation":"co-accessed","confidence":0.3,"created_by":"system:semantic-search","created_at":"Sat
+     Feb 28 20:29:24 GMT-03:00 2026","to":"20260224054601-5d510cd3"}],"duration":"permanent","unhelpful-count":
+     0,"expires":"","kg_incoming":[{"scope":null,"from":"20260224054557-4ff59773","id":"ad717bb1-d97c-4734-8f97
+     -c181500fc7ed","last_verified":"Tue Feb 24 05:46:44 GMT-03:00
+     2026","relation":"applies-to","confidence":1,"created_by":null,"created_at":"Tue Feb 24 05:46:44 GMT-03:00
+      2026","to":"20260224054601-40b021be"},{"scope":null,"from":"20260228020539-5cab62fb","id":"69e5eddc-49ba-
+     4dc9-9642-8930b08f6c86","last_verified":"Sat Feb 28 02:05:58 GMT-03:00
+     2026","relation":"applies-to","confidence":0.85,"created_by":null,"created_at":"Sat Feb 28 02:05:58
+     GMT-03:00 2026","to":"20260224054601-40b021be"},{"scope":"freqtrade","source_type":"co-access","from":"202
+     60226210618-156c7444","id":"9ff2f59b-dfb9-4163-bfc2-b274036e4086","last_verified":"Sat Feb 28 20:29:23
+     GMT-03:00
+     2026","relation":"co-accessed","confidence":0.3,"created_by":"system:semantic-search","created_at":"Sat
+     Feb 28 20:29:23 GMT-03:00 2026","to":"20260224054601-40b021be"}],"staleness-beta":1,"id":"20260224054601-4
+     0b021be","knowledge-gaps":null,"source-file":"","grounded-at":"","access-count":0,"staleness-source":null,
+     "source-hash":"","project-id":"freqtrade","staleness-alpha":1,"grounded-from":""}
+
+-> remove this noise that eats up tokens from response of memory search.
+
