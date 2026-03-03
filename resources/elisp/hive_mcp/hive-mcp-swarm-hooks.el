@@ -18,7 +18,7 @@
     (error "Handler must be a function"))
   (let* ((existing (assq event-type hive-mcp-swarm-hooks--registry)))
     (if existing (unless (memq handler (cdr existing))
-    (setcdr existing (cons handler (cdr existing)))) (push (cons event-type (hive-mcp-swarm-hooks-list handler)) hive-mcp-swarm-hooks--registry)))
+    (setcdr existing (cons handler (cdr existing)))) (push (cons event-type (list handler)) hive-mcp-swarm-hooks--registry)))
   t)
 
 (defun hive-mcp-swarm-hooks-unregister (event-type handler)
@@ -49,7 +49,7 @@
   "Clear all registered hooks.\nUse for testing or shutdown."
   (setq hive-mcp-swarm-hooks--registry nil))
 
-(defun hive-mcp-swarm-hooks-list ()
+(defun hive-mcp-swarm-hooks-registered ()
   "Return the current hook registry for inspection.\nUseful for debugging."
   hive-mcp-swarm-hooks--registry)
 

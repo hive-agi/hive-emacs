@@ -82,7 +82,7 @@ Errors in handlers are caught and logged to *Messages*."
 Use for testing or shutdown."
   (setq hive-mcp-swarm-hooks--registry nil))
 
-(defn list []
+(defn registered []
   "Return the current hook registry for inspection.
 Useful for debugging."
   hive-mcp-swarm-hooks--registry)
