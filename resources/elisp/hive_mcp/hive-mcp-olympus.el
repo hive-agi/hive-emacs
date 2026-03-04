@@ -12,8 +12,8 @@
 (defalias 'hive-olympus (lambda ()
     "Open the Olympus grid UI."
     (interactive)
-    (olympus-ui-refresh)
-    (switch-to-buffer (get-buffer-create olympus-ui--buffer-name))))
+    (olympus-ui-show)
+    (pop-to-buffer (get-buffer-create olympus-ui--buffer-name))))
 
 (defalias 'hive-mcp-olympus-dashboard (lambda ()
     "Open the Olympus dashboard."

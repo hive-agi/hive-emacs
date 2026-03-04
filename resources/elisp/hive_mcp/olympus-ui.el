@@ -109,15 +109,24 @@
   (require 'hive-mcp-api nil t)))
   (fboundp 'hive-mcp-api-call))
 
+(defun olympus-ui--plist--gthash (plist)
+  "Convert a keyword-keyed PLIST to a hash-table.\nE.g. (:foo 1 :bar 2) -> {foo: 1, bar: 2}."
+  (let* ((ht (make-hash-table :test 'equal)))
+    (while plist
+    (puthash (car plist) (cadr plist) ht)
+    (setq plist (cddr plist)))
+    ht))
+
 (defun olympus-ui--fetch-status ()
-  "Fetch current Olympus status from MCP.\nReturns map with :lings, :layout, :positions, :active-tab, :layout-mode.\nThe :lings map includes :status for each ling (the fix for 'idle' display)."
+  "Fetch current Olympus status from MCP.\nReturns map with :lings, :layout, :positions, :active-tab, :layout-mode.\nThe :lings and :positions are hash-tables keyed by ling-id."
   (when (olympus-ui--ensure-api)
     (condition-case err
     (let* ((response (hive-mcp-api-call "olympus" (list :command "status"))))
     (when (and response (plist-get response :success))
     (let* ((hm-status (hive-mcp-api-call "hivemind" (list :command "status")))
-        (agents (plist-get hm-status :agents)))
-    (list :ling-count (plist-get response :ling-count) :layout (plist-get response :layout) :positions (plist-get response :positions) :active-tab (plist-get response :active-tab) :layout-mode (plist-get response :layout-mode) :lings agents))))
+        (agents-plist (plist-get hm-status :agents))
+        (positions-plist (plist-get response :positions)))
+    (list :ling-count (plist-get response :ling-count) :layout (plist-get response :layout) :positions (if (hash-table-p positions-plist) positions-plist (olympus-ui-plist--gthash (or positions-plist '()))) :active-tab (plist-get response :active-tab) :layout-mode (plist-get response :layout-mode) :lings (if (hash-table-p agents-plist) agents-plist (olympus-ui-plist--gthash (or agents-plist '())))))))
   (error (message "[olympus] Failed to fetch status: %s" err)
       nil))))
 
