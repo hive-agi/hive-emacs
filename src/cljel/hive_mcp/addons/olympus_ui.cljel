@@ -27,10 +27,7 @@
 ;; Required Libraries
 ;; ============================================================================
 
-;; Note: These are Elisp requires, handled via interop
-;; (require 'cl-lib)
-;; (require 'hive-mcp-api)
-;; (require 'hive-mcp-log)
+(require 'hive-mcp-api nil t)
 
 ;; ============================================================================
 ;; Customization Group
@@ -177,10 +174,10 @@ Map with :lings, :layout, :positions, :active-tab, :layout-mode.")
 ;; ============================================================================
 
 (defn -ensure-api []
-  "Ensure hive-mcp-api is available."
+  "Ensure hive-mcp-api is available and hive-mcp-api-call is bound."
   (when-not (featurep 'hive-mcp-api)
     (require 'hive-mcp-api nil t))
-  (featurep 'hive-mcp-api))
+  (fboundp 'hive-mcp-api-call))
 
 (defn -fetch-status []
   "Fetch current Olympus status from MCP.
@@ -201,7 +198,7 @@ The :lings map includes :status for each ling (the fix for 'idle' display)."
                     :layout-mode (plist-get response :layout-mode)
                     :lings agents))))
       (error
-       (hive-mcp-log/log-error 'olympus "Failed to fetch status: %s" err)
+       (message "[olympus] Failed to fetch status: %s" err)
        nil))))
 
 (defn -fetch-lings-with-status []
@@ -276,7 +273,7 @@ FOCUSED-P indicates if this cell should be highlighted."
         task-line (when (and olympus-ui-show-task-preview task)
                     (olympus-ui/-truncate-string task (- width 4)))]
     ;; Assemble cell
-    (concat
+    (elisp-concat
      top-border "\n"
      (olympus-ui/-render-cell-line status-line width status-face) "\n"
      (olympus-ui/-render-cell-line id-line width 'default) "\n"
@@ -296,7 +293,7 @@ FOCUSED-P indicates if this cell should be highlighted."
         bottom-border (propertize (elisp-concat "└" border-str "┘") 'face 'olympus-ui-cell-border)
         empty-line (propertize (elisp-concat "│" (make-string (- width 2) ? ) "│")
                                'face 'olympus-ui-cell-border)]
-    (concat
+    (elisp-concat
      top-border "\n"
      (apply 'concat
             (mapcar (lambda (_) (elisp-concat empty-line "\n"))
@@ -329,7 +326,7 @@ FOCUSED-P indicates if this cell should be highlighted."
              (:blocked (setq blocked-count (1+ blocked-count)))
              (:error (setq error-count (1+ error-count))))))
        lings-data))
-    (concat
+    (elisp-concat
      (propertize "╔══════════════════════════════════════════════════════════════╗\n"
                  'face 'olympus-ui-header)
      (propertize "║                     OLYMPUS GRID                             ║\n"
@@ -408,7 +405,7 @@ STATE contains :layout, :positions, :lings."
 
 (defn -render-keybindings []
   "Render keybinding help at bottom."
-  (concat
+  (elisp-concat
    "\n"
    (propertize "──────────────────────────────────────────────────────────────────\n"
                'face 'olympus-ui-cell-border)
