@@ -7,6 +7,8 @@
 
 
 
+(require 'hive-mcp-api nil t)
+
 (defgroup olympus-ui nil
   "Olympus grid UI settings."
   :group 'hive-mcp
@@ -102,10 +104,10 @@
   ('_ "?")))
 
 (defun olympus-ui--ensure-api ()
-  "Ensure hive-mcp-api is available."
+  "Ensure hive-mcp-api is available and hive-mcp-api-call is bound."
   (if (featurep 'hive-mcp-api) nil (progn
   (require 'hive-mcp-api nil t)))
-  (featurep 'hive-mcp-api))
+  (fboundp 'hive-mcp-api-call))
 
 (defun olympus-ui--fetch-status ()
   "Fetch current Olympus status from MCP.\nReturns map with :lings, :layout, :positions, :active-tab, :layout-mode.\nThe :lings map includes :status for each ling (the fix for 'idle' display)."
@@ -116,7 +118,7 @@
     (let* ((hm-status (hive-mcp-api-call "hivemind" (list :command "status")))
         (agents (plist-get hm-status :agents)))
     (list :ling-count (plist-get response :ling-count) :layout (plist-get response :layout) :positions (plist-get response :positions) :active-tab (plist-get response :active-tab) :layout-mode (plist-get response :layout-mode) :lings agents))))
-  (error (hive-mcp-log-log-error 'olympus "Failed to fetch status: %s" err)
+  (error (message "[olympus] Failed to fetch status: %s" err)
       nil))))
 
 (defun olympus-ui--fetch-lings-with-status ()
@@ -160,7 +162,7 @@
         (id-line (olympus-ui--truncate-string (or id "unknown") (- width 4)))
         (task-line (when (and olympus-ui-show-task-preview task)
     (olympus-ui--truncate-string task (- width 4)))))
-    (clel-concat top-border "\n" (olympus-ui--render-cell-line status-line width status-face) "\n" (olympus-ui--render-cell-line id-line width 'default) "\n" (if task-line (concat (olympus-ui--render-cell-line task-line width 'font-lock-comment-face) "\n") (olympus-ui--render-cell-line "" width 'default)) (apply 'concat (mapcar (lambda (_)
+    (concat top-border "\n" (olympus-ui--render-cell-line status-line width status-face) "\n" (olympus-ui--render-cell-line id-line width 'default) "\n" (if task-line (concat (olympus-ui--render-cell-line task-line width 'font-lock-comment-face) "\n") (olympus-ui--render-cell-line "" width 'default)) (apply 'concat (mapcar (lambda (_)
     (concat (olympus-ui--render-cell-line "" width 'default) "\n")) (number-sequence 1 (- height 5)))) bottom-border)))
 
 (defun olympus-ui--render-empty-cell (width height)
@@ -169,7 +171,7 @@
         (top-border (propertize (concat "┌" border-str "┐") 'face 'olympus-ui-cell-border))
         (bottom-border (propertize (concat "└" border-str "┘") 'face 'olympus-ui-cell-border))
         (empty-line (propertize (concat "│" (make-string (- width 2) -p) "│") 'face 'olympus-ui-cell-border)))
-    (clel-concat top-border "\n" (apply 'concat (mapcar (lambda (_)
+    (concat top-border "\n" (apply 'concat (mapcar (lambda (_)
     (concat empty-line "\n")) (number-sequence 1 (- height 2)))) bottom-border)))
 
 (defun olympus-ui--render-header (state)
@@ -190,7 +192,7 @@
   ('working (setq working-count (1+ working-count)))
   ('blocked (setq blocked-count (1+ blocked-count)))
   ('error (setq error-count (1+ error-count)))))) lings-data))
-    (clel-concat (propertize "╔══════════════════════════════════════════════════════════════╗\n" 'face 'olympus-ui-header) (propertize "║                     OLYMPUS GRID                             ║\n" 'face 'olympus-ui-header) (propertize "╠══════════════════════════════════════════════════════════════╣\n" 'face 'olympus-ui-header) (format "║ Lings: %d  │  " ling-count) (propertize (format "●Working: %d  " working-count) 'face 'olympus-ui-status-working) (propertize (format "◐Blocked: %d  " blocked-count) 'face 'olympus-ui-status-blocked) (propertize (format "✗Error: %d" error-count) 'face 'olympus-ui-status-error) (if tabs (format "  │  Tab: %d/%d" (1+ active-tab) tabs) "") "\n" (propertize "╚══════════════════════════════════════════════════════════════╝\n\n" 'face 'olympus-ui-header))))
+    (concat (propertize "╔══════════════════════════════════════════════════════════════╗\n" 'face 'olympus-ui-header) (propertize "║                     OLYMPUS GRID                             ║\n" 'face 'olympus-ui-header) (propertize "╠══════════════════════════════════════════════════════════════╣\n" 'face 'olympus-ui-header) (format "║ Lings: %d  │  " ling-count) (propertize (format "●Working: %d  " working-count) 'face 'olympus-ui-status-working) (propertize (format "◐Blocked: %d  " blocked-count) 'face 'olympus-ui-status-blocked) (propertize (format "✗Error: %d" error-count) 'face 'olympus-ui-status-error) (if tabs (format "  │  Tab: %d/%d" (1+ active-tab) tabs) "") "\n" (propertize "╚══════════════════════════════════════════════════════════════╝\n\n" 'face 'olympus-ui-header))))
 
 (defun olympus-ui--render-grid (state)
   "Render the full grid based on STATE.\nSTATE contains :layout, :positions, :lings."
@@ -224,7 +226,7 @@
 
 (defun olympus-ui--render-keybindings ()
   "Render keybinding help at bottom."
-  (clel-concat "\n" (propertize "──────────────────────────────────────────────────────────────────\n" 'face 'olympus-ui-cell-border) "  [r] Refresh  [a] Arrange  [f] Focus  [u] Unfocus  [n/p] Tab nav  [q] Quit\n" (propertize "──────────────────────────────────────────────────────────────────\n" 'face 'olympus-ui-cell-border)))
+  (concat "\n" (propertize "──────────────────────────────────────────────────────────────────\n" 'face 'olympus-ui-cell-border) "  [r] Refresh  [a] Arrange  [f] Focus  [u] Unfocus  [n/p] Tab nav  [q] Quit\n" (propertize "──────────────────────────────────────────────────────────────────\n" 'face 'olympus-ui-cell-border)))
 
 (defun olympus-ui--ensure-buffer ()
   "Ensure the Olympus buffer exists and return it."
