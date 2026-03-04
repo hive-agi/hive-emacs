@@ -470,10 +470,12 @@ STATE contains :layout, :positions, :lings."
 (defn focus-ling [ling-id]
   "Focus/maximize a specific ling by LING-ID."
   (interactive
-   (list (completing-read
-          "Focus ling: "
-          (when olympus-ui--current-state
-            (hash-table-keys (plist-get olympus-ui--current-state :lings))))))
+   (let [lings (when olympus-ui--current-state
+                 (plist-get olympus-ui--current-state :lings))]
+     (list (completing-read
+            "Focus ling: "
+            (when (hash-table-p lings)
+              (hash-table-keys lings))))))
   (when (olympus-ui/-ensure-api)
     (hive-mcp-api-call "olympus" (list :command "focus" :ling-id ling-id))
     (setq olympus-ui--focused-ling ling-id)
@@ -568,6 +570,20 @@ EVENT is a plist with :agent-id, :event-type, :message."
   (setq truncate-lines t)
   ;; Subscribe to real-time events
   (olympus-ui/subscribe-to-events))
+
+;; Evil integration — bind keys in normal state so they work in Doom
+(with-eval-after-load 'evil
+  (evil-define-key 'normal olympus-ui-mode-map
+    "r" #'olympus-ui/refresh
+    "g" nil  ;; free g for gg etc
+    "gr" #'olympus-ui/refresh
+    "a" #'olympus-ui/arrange
+    "f" #'olympus-ui/focus-ling
+    "u" #'olympus-ui/unfocus
+    "n" #'olympus-ui/next-tab
+    "p" #'olympus-ui/prev-tab
+    "q" #'olympus-ui/hide
+    "s" #'olympus-ui/subscribe-to-events))
 
 ;; ============================================================================
 ;; Cleanup
