@@ -271,8 +271,10 @@
 
 (defun olympus-ui-focus-ling (ling-id)
   "Focus/maximize a specific ling by LING-ID."
-  (interactive (list (completing-read "Focus ling: " (when olympus-ui--current-state
-    (hash-table-keys (plist-get olympus-ui--current-state :lings))))))
+  (interactive (let* ((lings (when olympus-ui--current-state
+    (plist-get olympus-ui--current-state :lings))))
+    (list (completing-read "Focus ling: " (when (hash-table-p lings)
+    (hash-table-keys lings))))))
   (when (olympus-ui--ensure-api)
     (hive-mcp-api-call "olympus" (list :command "focus" :ling-id ling-id))
     (setq olympus-ui--focused-ling ling-id)
@@ -345,6 +347,9 @@
   "Keymap for olympus-ui-mode.")
 
 (define-derived-mode olympus-ui-mode special-mode "Olympus" "Major mode for Olympus grid display.\n\n\\{olympus-ui-mode-map}" (setq buffer-read-only t) (setq truncate-lines t) (olympus-ui-subscribe-to-events))
+
+(with-eval-after-load 'evil
+  (evil-define-key 'normal olympus-ui-mode-map "r" #'olympus-ui-refresh "g" nil "gr" #'olympus-ui-refresh "a" #'olympus-ui-arrange "f" #'olympus-ui-focus-ling "u" #'olympus-ui-unfocus "n" #'olympus-ui-next-tab "p" #'olympus-ui-prev-tab "q" #'olympus-ui-hide "s" #'olympus-ui-subscribe-to-events))
 
 (defun olympus-ui-cleanup ()
   "Clean up Olympus UI resources."
