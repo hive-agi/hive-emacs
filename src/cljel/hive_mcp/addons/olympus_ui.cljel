@@ -29,6 +29,96 @@
 
 (require 'hive-mcp-api nil t)
 
+;; External state from swarm module
+(defvar hive-mcp-swarm--slaves)
+(defvar hive-mcp-swarm-buffer-prefix)
+
+;; ============================================================================
+;; Window Arrangement
+;; ============================================================================
+
+(defn -collect-ling-buffers []
+  "Collect live vterm buffers for all active lings.
+Returns list of (:id SLAVE-ID :buffer BUF :name NAME) plists,
+sorted by slave-id for stable ordering."
+  (let [result '()]
+    (when (and (boundp 'hive-mcp-swarm--slaves)
+               (hash-table-p hive-mcp-swarm--slaves))
+      (maphash
+       (lambda (slave-id slave)
+         (let [buf (plist-get slave :buffer)]
+           (when (and buf (buffer-live-p buf))
+             (push (list :id slave-id
+                         :buffer buf
+                         :name (or (plist-get slave :name) slave-id))
+                   result))))
+       hive-mcp-swarm--slaves))
+    (sort result (lambda (a b) (string< (plist-get a :id) (plist-get b :id))))))
+
+(defn -calculate-grid [n]
+  "Calculate rows and cols for N buffers.
+Returns (ROWS . COLS)."
+  (cond
+   ((<= n 0) '(0 . 0))
+   ((= n 1) '(1 . 1))
+   ((= n 2) '(1 . 2))
+   ((<= n 4) '(2 . 2))
+   ((<= n 6) '(2 . 3))
+   ((<= n 9) '(3 . 3))
+   (t (let [cols (ceiling (sqrt n))
+            rows (ceiling (/ (float n) cols))]
+        (cons rows cols)))))
+
+(defn -arrange-windows [buffers]
+  "Arrange BUFFERS in a grid of Emacs windows.
+BUFFERS is a list of buffer objects to tile."
+  (when buffers
+    (let* [n (length buffers)
+           grid (olympus-ui/-calculate-grid n)
+           rows (car grid)
+           cols (cdr grid)
+           ;; Start with a single window
+           _ (delete-other-windows)
+           root-window (selected-window)
+           ;; Split into rows first
+           row-windows (list root-window)]
+      ;; Create row splits
+      (dotimes (_ (1- rows))
+        (let [last-win (car (last row-windows))
+              new-win (split-window last-win nil 'below)]
+          (setq row-windows (append row-windows (list new-win)))))
+      ;; Balance row heights
+      (balance-windows)
+      ;; Split each row into columns and assign buffers
+      (let [buf-idx 0]
+        (dolist (row-win row-windows)
+          (let [col-windows (list row-win)]
+            ;; Split this row into columns
+            (dotimes (_ (1- cols))
+              (let [last-win (car (last col-windows))
+                    new-win (split-window last-win nil 'right)]
+                (setq col-windows (append col-windows (list new-win)))))
+            ;; Assign buffers to windows in this row
+            (dolist (win col-windows)
+              (when (< buf-idx n)
+                (set-window-buffer win (nth buf-idx buffers))
+                (setq buf-idx (1+ buf-idx)))))))
+      ;; Balance everything
+      (balance-windows)
+      ;; Select first window
+      (select-window (car row-windows)))))
+
+(defn arrange-windows ()
+  "Arrange all ling vterm buffers in a tiled grid.
+This is the main entry point for window arrangement."
+  (interactive)
+  (let [ling-bufs (olympus-ui/-collect-ling-buffers)]
+    (if (null ling-bufs)
+        (message "[olympus] No live ling buffers to arrange")
+      (let [buffers (mapcar (lambda (lb) (plist-get lb :buffer)) ling-bufs)]
+        (olympus-ui/-arrange-windows buffers)
+        (message "[olympus] Arranged %d ling buffers in grid" (length buffers))))))
+
 ;; ============================================================================
 ;; Customization Group
 ;; ============================================================================
@@ -128,56 +218,63 @@ Map with :lings, :layout, :positions, :active-tab, :layout-mode.")
   "WebSocket subscription handle for hivemind events.")
 
 ;; ============================================================================
-;; Status Face Mapping
+;; Status Normalization & Face Mapping
 ;; ============================================================================
 
+(defn -normalize-status [status]
+  "Normalize STATUS to a symbol.
+Handles keywords (:idle), symbols (idle), and strings (\"idle\")."
+  (cond
+   ((symbolp status)
+    (if (keywordp status)
+      (intern (substring (symbol-name status) 1))
+      status))
+   ((stringp status)
+    (intern status))
+   (t 'idle)))
+
 (defn -status->face [status]
-  "Return the face for a ling STATUS keyword."
-  (pcase status
-    ('idle 'olympus-ui-status-idle)
-    (:idle 'olympus-ui-status-idle)
-    ('working 'olympus-ui-status-working)
-    (:working 'olympus-ui-status-working)
-    ('blocked 'olympus-ui-status-blocked)
-    (:blocked 'olympus-ui-status-blocked)
-    ('error 'olympus-ui-status-error)
-    (:error 'olympus-ui-status-error)
-    ('spawning 'olympus-ui-status-spawning)
-    (:spawning 'olympus-ui-status-spawning)
-    ('starting 'olympus-ui-status-spawning)
-    (:starting 'olympus-ui-status-spawning)
-    ('initializing 'olympus-ui-status-spawning)
-    (:initializing 'olympus-ui-status-spawning)
-    (_ 'olympus-ui-status-idle)))
+  "Return the face for a ling STATUS keyword, symbol, or string."
+  (let [s (olympus-ui/-normalize-status status)]
+    (pcase s
+      ('idle 'olympus-ui-status-idle)
+      ('working 'olympus-ui-status-working)
+      ('blocked 'olympus-ui-status-blocked)
+      ('error 'olympus-ui-status-error)
+      ('spawning 'olympus-ui-status-spawning)
+      ('starting 'olympus-ui-status-spawning)
+      ('initializing 'olympus-ui-status-spawning)
+      (_ 'olympus-ui-status-idle))))
 
 (defn -status->icon [status]
   "Return a status icon character for STATUS."
-  (pcase status
-    ('idle "○")
-    (:idle "○")
-    ('working "●")
-    (:working "●")
-    ('blocked "◐")
-    (:blocked "◐")
-    ('error "✗")
-    (:error "✗")
-    ('spawning "◌")
-    (:spawning "◌")
-    ('starting "◌")
-    (:starting "◌")
-    ('initializing "◌")
-    (:initializing "◌")
-    (_ "?")))
+  (let [s (olympus-ui/-normalize-status status)]
+    (pcase s
+      ('idle "○")
+      ('working "●")
+      ('blocked "◐")
+      ('error "✗")
+      ('spawning "◌")
+      ('starting "◌")
+      ('initializing "◌")
+      (_ "?"))))
 
 ;; ============================================================================
 ;; MCP Integration
 ;; ============================================================================
 
 (defn -ensure-api []
-  "Ensure hive-mcp-api is available and hive-mcp-api-call is bound."
+  "Ensure hive-mcp-api is available, hive-mcp-api-call is bound, and CIDER is connected."
   (when-not (featurep 'hive-mcp-api)
     (require 'hive-mcp-api nil t))
-  (fboundp 'hive-mcp-api-call))
+  (and (fboundp 'hive-mcp-api-call)
+       (featurep 'cider)
+       (fboundp 'cider-connected-p)
+       (condition-case nil
+           (cider-connected-p)
+         (wrong-number-of-arguments
+          ;; CIDER/sesman session filter lambda arity mismatch — try direct REPL check
+          (car (cider-repl-buffers))))))
 
 (defn- coerce-to-hash [plist]
   "Convert a keyword-keyed PLIST to a hash-table.
@@ -197,7 +294,12 @@ The :lings and :positions are hash-tables keyed by ling-id."
         (let [response (hive-mcp-api-call "olympus" (list :command "status"))]
           (when (and response (plist-get response :success))
             ;; Also fetch hivemind status to get ling metadata
-            (let [hm-status (hive-mcp-api-call "hivemind" (list :command "status"))
+            ;; hivemind may return JSON-wrapped {:type "text" :text "{...}"} — unwrap if needed
+            (let [hm-raw (hive-mcp-api-call "hivemind" (list :command "status"))
+                  hm-status (if (plist-get hm-raw :text)
+                                (json-parse-string (plist-get hm-raw :text)
+                                                   :object-type 'plist :null-object nil)
+                              hm-raw)
                   agents-plist (plist-get hm-status :agents)
                   positions-plist (plist-get response :positions)]
               ;; Convert plists to hash-tables for rendering code
@@ -205,12 +307,12 @@ The :lings and :positions are hash-tables keyed by ling-id."
                     :layout (plist-get response :layout)
                     :positions (if (hash-table-p positions-plist)
                                  positions-plist
-                                 (olympus-ui-coerce-to-hash (or positions-plist '())))
+                                 (olympus-ui--coerce-to-hash (or positions-plist '())))
                     :active-tab (plist-get response :active-tab)
                     :layout-mode (plist-get response :layout-mode)
                     :lings (if (hash-table-p agents-plist)
                               agents-plist
-                              (olympus-ui-coerce-to-hash (or agents-plist '())))))))
+                              (olympus-ui--coerce-to-hash (or agents-plist '())))))))
       (error
        (message "[olympus] Failed to fetch status: %s" err)
        nil))))
@@ -245,14 +347,15 @@ it reads :status from the lings map, not just positions."
 
 (defn -truncate-string [s max-len]
   "Truncate string S to MAX-LEN characters, adding ellipsis if needed."
-  (if (> (length s) max-len)
-    (elisp-concat (substring s 0 (- max-len 3)) "...")
-    s))
+  (let [s (if (stringp s) s (format "%s" s))]
+    (if (> (length s) max-len)
+      (elisp-concat (substring s 0 (max 0 (- max-len 3))) "...")
+      s)))
 
 (defn -pad-string [s width]
   "Pad string S to WIDTH characters, truncating if necessary."
   (let [truncated (olympus-ui/-truncate-string s width)]
-    (elisp-concat truncated (make-string (max 0 (- width (length truncated))) ? ))))
+    (elisp-concat truncated (make-string (max 0 (- width (length truncated))) 32))))
 
 (defn -render-cell-line [content width face]
   "Render a single line of cell content with FACE."
@@ -275,11 +378,10 @@ FOCUSED-P indicates if this cell should be highlighted."
         top-border (propertize (elisp-concat "┌" border-str "┐") 'face 'olympus-ui-cell-border)
         bottom-border (propertize (elisp-concat "└" border-str "┘") 'face 'olympus-ui-cell-border)
         ;; Status line: icon + status + name
+        status-str (symbol-name (olympus-ui/-normalize-status status))
         status-line (format "%s %s  %s"
                             icon
-                            (symbol-name (if (keywordp status)
-                                           (intern (substring (symbol-name status) 1))
-                                           status))
+                            status-str
                             (olympus-ui/-truncate-string (or name id) (- width 15)))
         ;; ID line
         id-line (olympus-ui/-truncate-string (or id "unknown") (- width 4))
@@ -305,7 +407,7 @@ FOCUSED-P indicates if this cell should be highlighted."
   (let [border-str (make-string (- width 2) ?─)
         top-border (propertize (elisp-concat "┌" border-str "┐") 'face 'olympus-ui-cell-border)
         bottom-border (propertize (elisp-concat "└" border-str "┘") 'face 'olympus-ui-cell-border)
-        empty-line (propertize (elisp-concat "│" (make-string (- width 2) ? ) "│")
+        empty-line (propertize (elisp-concat "│" (make-string (- width 2) 32) "│")
                                'face 'olympus-ui-cell-border)]
     (elisp-concat
      top-border "\n"
@@ -334,11 +436,11 @@ FOCUSED-P indicates if this cell should be highlighted."
     (when lings-data
       (maphash
        (lambda (_id data)
-         (let [status (plist-get data :status)]
-           (pcase status
-             (:working (setq working-count (1+ working-count)))
-             (:blocked (setq blocked-count (1+ blocked-count)))
-             (:error (setq error-count (1+ error-count))))))
+         (let [s (olympus-ui/-normalize-status (plist-get data :status))]
+           (pcase s
+             ('working (setq working-count (1+ working-count)))
+             ('blocked (setq blocked-count (1+ blocked-count)))
+             ('error (setq error-count (1+ error-count))))))
        lings-data))
     (elisp-concat
      (propertize "╔══════════════════════════════════════════════════════════════╗\n"
@@ -423,7 +525,7 @@ STATE contains :layout, :positions, :lings."
    "\n"
    (propertize "──────────────────────────────────────────────────────────────────\n"
                'face 'olympus-ui-cell-border)
-   "  [r] Refresh  [a] Arrange  [f] Focus  [u] Unfocus  [n/p] Tab nav  [q] Quit\n"
+   "  [r] Refresh  [a] Arrange  [A] Tile windows  [f] Focus  [u] Unfocus  [n/p] Tab nav  [q] Quit\n"
    (propertize "──────────────────────────────────────────────────────────────────\n"
                'face 'olympus-ui-cell-border)))
 
@@ -443,16 +545,24 @@ STATE contains :layout, :positions, :lings."
   "Refresh the Olympus grid display."
   (interactive)
   (let [state (olympus-ui/-fetch-status)]
-    (when state
-      (setq olympus-ui--current-state state)
-      (with-current-buffer (olympus-ui/-ensure-buffer)
-        (let [inhibit-read-only t
-              pos (point)]
-          (erase-buffer)
-          (insert (olympus-ui/-render-header state))
-          (insert (olympus-ui/-render-grid state))
-          (insert (olympus-ui/-render-keybindings))
-          (goto-char (min pos (point-max))))))))
+    (with-current-buffer (olympus-ui/-ensure-buffer)
+      (let [inhibit-read-only t
+            pos (point)]
+        (erase-buffer)
+        (if state
+            (progn
+              (setq olympus-ui--current-state state)
+              (insert (olympus-ui/-render-header state))
+              (insert (olympus-ui/-render-grid state))
+              (insert (olympus-ui/-render-keybindings)))
+          ;; Degraded mode: no CIDER connection
+          (insert (propertize "  OLYMPUS" 'face '(:height 1.3 :weight bold)))
+          (insert "\n\n")
+          (insert (propertize "  CIDER not connected" 'face 'font-lock-comment-face))
+          (insert "\n\n")
+          (insert (propertize "  Connect CIDER to enable live grid view.\n" 'face 'font-lock-doc-face))
+          (insert (propertize "  M-x cider-connect-clj  or  M-x cider-jack-in-clj" 'face 'font-lock-keyword-face)))
+        (goto-char (min pos (point-max)))))))
 
 (defn show []
   "Show the Olympus grid buffer."
@@ -504,12 +614,15 @@ STATE contains :layout, :positions, :lings."
     (olympus-ui/refresh)))
 
 (defn arrange [mode]
-  "Arrange grid with MODE (:auto, :manual, :stacked)."
+  "Arrange grid with MODE (:auto, :manual, :stacked).
+Calls MCP to update layout state, then tiles ling vterm buffers in Emacs windows."
   (interactive
    (list (intern (completing-read "Arrange mode: " '("auto" "manual" "stacked")))))
+  ;; Update backend state if CIDER connected
   (when (olympus-ui/-ensure-api)
-    (hive-mcp-api-call "olympus" (list :command "arrange" :mode mode))
-    (olympus-ui/refresh)))
+    (hive-mcp-api-call "olympus" (list :command "arrange" :mode mode)))
+  ;; Actually arrange the windows regardless of CIDER connection
+  (olympus-ui/arrange-windows))
 
 (defn next-tab []
   "Navigate to next tab."
@@ -567,6 +680,7 @@ EVENT is a plist with :agent-id, :event-type, :message."
     (define-key map "r" #'olympus-ui/refresh)
     (define-key map "g" #'olympus-ui/refresh)
     (define-key map "a" #'olympus-ui/arrange)
+    (define-key map "A" #'olympus-ui/arrange-windows)
     (define-key map "f" #'olympus-ui/focus-ling)
     (define-key map "u" #'olympus-ui/unfocus)
     (define-key map "n" #'olympus-ui/next-tab)
@@ -592,6 +706,7 @@ EVENT is a plist with :agent-id, :event-type, :message."
     "g" nil  ;; free g for gg etc
     "gr" #'olympus-ui/refresh
     "a" #'olympus-ui/arrange
+    "A" #'olympus-ui/arrange-windows
     "f" #'olympus-ui/focus-ling
     "u" #'olympus-ui/unfocus
     "n" #'olympus-ui/next-tab
