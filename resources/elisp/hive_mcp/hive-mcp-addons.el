@@ -33,7 +33,7 @@
   :group 'hive-mcp
   :prefix "hive-mcp-addon-")
 
-(defcustom hive-mcp-addon-directories (list (expand-file-name "addons" (file-name-directory (or load-file-name buffer-file-name))))
+(defcustom hive-mcp-addon-directories (list (file-name-directory (or load-file-name buffer-file-name)) (expand-file-name "addons" (file-name-directory (or load-file-name buffer-file-name))))
   "Directories to search for hive-mcp addons."
   :group 'hive-mcp-addons
   :type '(repeat directory))
