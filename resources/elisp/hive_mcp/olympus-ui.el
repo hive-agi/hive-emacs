@@ -9,6 +9,72 @@
 
 (require 'hive-mcp-api nil t)
 
+(defvar hive-mcp-swarm--slaves)
+
+(defvar hive-mcp-swarm-buffer-prefix)
+
+(defun olympus-ui--collect-ling-buffers ()
+  "Collect live vterm buffers for all active lings.\nReturns list of (:id SLAVE-ID :buffer BUF :name NAME) plists,\nsorted by slave-id for stable ordering."
+  (let* ((result '()))
+    (when (and (boundp 'hive-mcp-swarm--slaves) (hash-table-p hive-mcp-swarm--slaves))
+    (maphash (lambda (slave-id slave)
+    (let* ((buf (plist-get slave :buffer)))
+    (when (and buf (buffer-live-p buf))
+    (push (list :id slave-id :buffer buf :name (or (plist-get slave :name) slave-id)) result)))) hive-mcp-swarm--slaves))
+    (clel-sort result (lambda (a b)
+    (string< (plist-get a :id) (plist-get b :id))))))
+
+(defun olympus-ui--calculate-grid (n)
+  "Calculate rows and cols for N buffers.\nReturns (ROWS . COLS)."
+  (cond
+  ((<= n 0) '(0 . 0))
+  ((equal n 1) '(1 . 1))
+  ((equal n 2) '(1 . 2))
+  ((<= n 4) '(2 . 2))
+  ((<= n 6) '(2 . 3))
+  ((<= n 9) '(3 . 3))
+  (t (let* ((cols (ceiling (sqrt n)))
+        (rows (ceiling (/ (float n) cols))))
+    (cons rows cols)))))
+
+(defun olympus-ui--arrange-windows (buffers)
+  "Arrange BUFFERS in a grid of Emacs windows.\nBUFFERS is a list of buffer objects to tile."
+  (when buffers
+    (let* ((n (length buffers))
+        (grid (olympus-ui--calculate-grid n))
+        (rows (car grid))
+        (cols (cdr grid))
+        (_ (delete-other-windows))
+        (root-window (selected-window))
+        (row-windows (list root-window)))
+    (cl-dotimes (_ (1- rows))
+    (let* ((last-win (car (clel-last row-windows)))
+        (new-win (split-window last-win nil 'below)))
+    (setq row-windows (append row-windows (list new-win)))))
+    (balance-windows)
+    (let* ((buf-idx 0))
+    (dolist (row-win row-windows)
+    (let* ((col-windows (list row-win)))
+    (cl-dotimes (_ (1- cols))
+    (let* ((last-win (car (clel-last col-windows)))
+        (new-win (split-window last-win nil 'right)))
+    (setq col-windows (append col-windows (list new-win)))))
+    (dolist (win col-windows)
+    (when (< buf-idx n)
+    (set-window-buffer win (nth buf-idx buffers))
+    (setq buf-idx (1+ buf-idx)))))))
+    (balance-windows)
+    (select-window (car row-windows)))))
+
+(defun olympus-ui-arrange-windows ()
+  "Arrange all ling vterm buffers in a tiled grid.\nThis is the main entry point for window arrangement."
+  (interactive)
+  (let* ((ling-bufs (olympus-ui--collect-ling-buffers)))
+    (if (null ling-bufs) (message "[olympus] No live ling buffers to arrange") (let* ((buffers (mapcar (lambda (lb)
+    (plist-get lb :buffer)) ling-bufs)))
+    (olympus-ui--arrange-windows buffers)
+    (message "[olympus] Arranged %d ling buffers in grid" (length buffers))))))
+
 (defgroup olympus-ui nil
   "Olympus grid UI settings."
   :group 'hive-mcp
@@ -65,51 +131,48 @@
 (defvar olympus-ui--ws-subscription nil
   "WebSocket subscription handle for hivemind events.")
 
+(defun olympus-ui--normalize-status (status)
+  "Normalize STATUS to a symbol.\nHandles keywords (:idle), symbols (idle), and strings (\"idle\")."
+  (cond
+  ((symbolp status) (if (keywordp status) (intern (substring (symbol-name status) 1)) status))
+  ((stringp status) (intern status))
+  (t 'idle)))
+
 (defun olympus-ui--status--gtface (status)
-  "Return the face for a ling STATUS keyword."
-  (pcase status
+  "Return the face for a ling STATUS keyword, symbol, or string."
+  (let* ((s (olympus-ui--normalize-status status)))
+    (pcase s
   ((quote idle) 'olympus-ui-status-idle)
-  ('idle 'olympus-ui-status-idle)
   ((quote working) 'olympus-ui-status-working)
-  ('working 'olympus-ui-status-working)
   ((quote blocked) 'olympus-ui-status-blocked)
-  ('blocked 'olympus-ui-status-blocked)
   ((quote error) 'olympus-ui-status-error)
-  ('error 'olympus-ui-status-error)
   ((quote spawning) 'olympus-ui-status-spawning)
-  ('spawning 'olympus-ui-status-spawning)
   ((quote starting) 'olympus-ui-status-spawning)
-  ('starting 'olympus-ui-status-spawning)
   ((quote initializing) 'olympus-ui-status-spawning)
-  ('initializing 'olympus-ui-status-spawning)
-  ('_ 'olympus-ui-status-idle)))
+  ('_ 'olympus-ui-status-idle))))
 
 (defun olympus-ui--status--gticon (status)
   "Return a status icon character for STATUS."
-  (pcase status
+  (let* ((s (olympus-ui--normalize-status status)))
+    (pcase s
   ((quote idle) "○")
-  ('idle "○")
   ((quote working) "●")
-  ('working "●")
   ((quote blocked) "◐")
-  ('blocked "◐")
   ((quote error) "✗")
-  ('error "✗")
   ((quote spawning) "◌")
-  ('spawning "◌")
   ((quote starting) "◌")
-  ('starting "◌")
   ((quote initializing) "◌")
-  ('initializing "◌")
-  ('_ "?")))
+  ('_ "?"))))
 
 (defun olympus-ui--ensure-api ()
-  "Ensure hive-mcp-api is available and hive-mcp-api-call is bound."
+  "Ensure hive-mcp-api is available, hive-mcp-api-call is bound, and CIDER is connected."
   (if (featurep 'hive-mcp-api) nil (progn
   (require 'hive-mcp-api nil t)))
-  (fboundp 'hive-mcp-api-call))
+  (and (fboundp 'hive-mcp-api-call) (featurep 'cider) (fboundp 'cider-connected-p) (condition-case nil
+    (cider-connected-p)
+  (wrong-number-of-arguments (car (cider-repl-buffers))))))
 
-(defun olympus-ui--plist--gthash (plist)
+(defun olympus-ui--coerce-to-hash (plist)
   "Convert a keyword-keyed PLIST to a hash-table.\nE.g. (:foo 1 :bar 2) -> {foo: 1, bar: 2}."
   (let* ((ht (make-hash-table :test 'equal)))
     (while plist
@@ -123,10 +186,11 @@
     (condition-case err
     (let* ((response (hive-mcp-api-call "olympus" (list :command "status"))))
     (when (and response (plist-get response :success))
-    (let* ((hm-status (hive-mcp-api-call "hivemind" (list :command "status")))
+    (let* ((hm-raw (hive-mcp-api-call "hivemind" (list :command "status")))
+        (hm-status (if (plist-get hm-raw :text) (json-parse-string (plist-get hm-raw :text) :object-type 'plist :null-object nil) hm-raw))
         (agents-plist (plist-get hm-status :agents))
         (positions-plist (plist-get response :positions)))
-    (list :ling-count (plist-get response :ling-count) :layout (plist-get response :layout) :positions (if (hash-table-p positions-plist) positions-plist (olympus-ui-plist--gthash (or positions-plist '()))) :active-tab (plist-get response :active-tab) :layout-mode (plist-get response :layout-mode) :lings (if (hash-table-p agents-plist) agents-plist (olympus-ui-plist--gthash (or agents-plist '())))))))
+    (list :ling-count (plist-get response :ling-count) :layout (plist-get response :layout) :positions (if (hash-table-p positions-plist) positions-plist (olympus-ui--coerce-to-hash (or positions-plist '()))) :active-tab (plist-get response :active-tab) :layout-mode (plist-get response :layout-mode) :lings (if (hash-table-p agents-plist) agents-plist (olympus-ui--coerce-to-hash (or agents-plist '())))))))
   (error (message "[olympus] Failed to fetch status: %s" err)
       nil))))
 
@@ -144,12 +208,13 @@
 
 (defun olympus-ui--truncate-string (s max-len)
   "Truncate string S to MAX-LEN characters, adding ellipsis if needed."
-  (if (> (length s) max-len) (concat (substring s 0 (- max-len 3)) "...") s))
+  (let* ((s (if (stringp s) s (format "%s" s))))
+    (if (> (length s) max-len) (concat (substring s 0 (max 0 (- max-len 3))) "...") s)))
 
 (defun olympus-ui--pad-string (s width)
   "Pad string S to WIDTH characters, truncating if necessary."
   (let* ((truncated (olympus-ui--truncate-string s width)))
-    (concat truncated (make-string (max 0 (- width (length truncated))) -p))))
+    (concat truncated (make-string (max 0 (- width (length truncated))) 32))))
 
 (defun olympus-ui--render-cell-line (content width face)
   "Render a single line of cell content with FACE."
@@ -167,7 +232,8 @@
         (border-str (make-string (- width 2) 9472))
         (top-border (propertize (concat "┌" border-str "┐") 'face 'olympus-ui-cell-border))
         (bottom-border (propertize (concat "└" border-str "┘") 'face 'olympus-ui-cell-border))
-        (status-line (format "%s %s  %s" icon (symbol-name (if (keywordp status) (intern (substring (symbol-name status) 1)) status)) (olympus-ui--truncate-string (or name id) (- width 15))))
+        (status-str (symbol-name (olympus-ui--normalize-status status)))
+        (status-line (format "%s %s  %s" icon status-str (olympus-ui--truncate-string (or name id) (- width 15))))
         (id-line (olympus-ui--truncate-string (or id "unknown") (- width 4)))
         (task-line (when (and olympus-ui-show-task-preview task)
     (olympus-ui--truncate-string task (- width 4)))))
@@ -179,7 +245,7 @@
   (let* ((border-str (make-string (- width 2) 9472))
         (top-border (propertize (concat "┌" border-str "┐") 'face 'olympus-ui-cell-border))
         (bottom-border (propertize (concat "└" border-str "┘") 'face 'olympus-ui-cell-border))
-        (empty-line (propertize (concat "│" (make-string (- width 2) -p) "│") 'face 'olympus-ui-cell-border)))
+        (empty-line (propertize (concat "│" (make-string (- width 2) 32) "│") 'face 'olympus-ui-cell-border)))
     (concat top-border "\n" (apply 'concat (mapcar (lambda (_)
     (concat empty-line "\n")) (number-sequence 1 (- height 2)))) bottom-border)))
 
@@ -196,11 +262,11 @@
         (error-count 0))
     (when lings-data
     (maphash (lambda (_id data)
-    (let* ((status (plist-get data :status)))
-    (pcase status
-  ('working (setq working-count (1+ working-count)))
-  ('blocked (setq blocked-count (1+ blocked-count)))
-  ('error (setq error-count (1+ error-count)))))) lings-data))
+    (let* ((s (olympus-ui--normalize-status (plist-get data :status))))
+    (pcase s
+  ((quote working) (setq working-count (1+ working-count)))
+  ((quote blocked) (setq blocked-count (1+ blocked-count)))
+  ((quote error) (setq error-count (1+ error-count)))))) lings-data))
     (concat (propertize "╔══════════════════════════════════════════════════════════════╗\n" 'face 'olympus-ui-header) (propertize "║                     OLYMPUS GRID                             ║\n" 'face 'olympus-ui-header) (propertize "╠══════════════════════════════════════════════════════════════╣\n" 'face 'olympus-ui-header) (format "║ Lings: %d  │  " ling-count) (propertize (format "●Working: %d  " working-count) 'face 'olympus-ui-status-working) (propertize (format "◐Blocked: %d  " blocked-count) 'face 'olympus-ui-status-blocked) (propertize (format "✗Error: %d" error-count) 'face 'olympus-ui-status-error) (if tabs (format "  │  Tab: %d/%d" (1+ active-tab) tabs) "") "\n" (propertize "╚══════════════════════════════════════════════════════════════╝\n\n" 'face 'olympus-ui-header))))
 
 (defun olympus-ui--render-grid (state)
@@ -235,7 +301,7 @@
 
 (defun olympus-ui--render-keybindings ()
   "Render keybinding help at bottom."
-  (concat "\n" (propertize "──────────────────────────────────────────────────────────────────\n" 'face 'olympus-ui-cell-border) "  [r] Refresh  [a] Arrange  [f] Focus  [u] Unfocus  [n/p] Tab nav  [q] Quit\n" (propertize "──────────────────────────────────────────────────────────────────\n" 'face 'olympus-ui-cell-border)))
+  (concat "\n" (propertize "──────────────────────────────────────────────────────────────────\n" 'face 'olympus-ui-cell-border) "  [r] Refresh  [a] Arrange  [A] Tile windows  [f] Focus  [u] Unfocus  [n/p] Tab nav  [q] Quit\n" (propertize "──────────────────────────────────────────────────────────────────\n" 'face 'olympus-ui-cell-border)))
 
 (defun olympus-ui--ensure-buffer ()
   "Ensure the Olympus buffer exists and return it."
@@ -249,16 +315,16 @@
   "Refresh the Olympus grid display."
   (interactive)
   (let* ((state (olympus-ui--fetch-status)))
-    (when state
-    (setq olympus-ui--current-state state)
     (with-current-buffer (olympus-ui--ensure-buffer)
     (let* ((inhibit-read-only t)
         (pos (point)))
     (erase-buffer)
-    (insert (olympus-ui--render-header state))
-    (insert (olympus-ui--render-grid state))
-    (insert (olympus-ui--render-keybindings))
-    (goto-char (min pos (point-max))))))))
+    (if state (progn
+  (setq olympus-ui--current-state state)
+  (insert (olympus-ui--render-header state))
+  (insert (olympus-ui--render-grid state))
+  (insert (olympus-ui--render-keybindings))) (insert (propertize "  OLYMPUS" 'face '(:height 1.3 :weight bold))))
+    (goto-char (min pos (point-max)))))))
 
 (defun olympus-ui-show ()
   "Show the Olympus grid buffer."
@@ -298,11 +364,11 @@
     (olympus-ui-refresh)))
 
 (defun olympus-ui-arrange (mode)
-  "Arrange grid with MODE (:auto, :manual, :stacked)."
+  "Arrange grid with MODE (:auto, :manual, :stacked).\nCalls MCP to update layout state, then tiles ling vterm buffers in Emacs windows."
   (interactive (list (intern (completing-read "Arrange mode: " '("auto" "manual" "stacked")))))
   (when (olympus-ui--ensure-api)
-    (hive-mcp-api-call "olympus" (list :command "arrange" :mode mode))
-    (olympus-ui-refresh)))
+    (hive-mcp-api-call "olympus" (list :command "arrange" :mode mode)))
+  (olympus-ui-arrange-windows))
 
 (defun olympus-ui-next-tab ()
   "Navigate to next tab."
@@ -346,6 +412,7 @@
     (define-key map "r" #'olympus-ui-refresh)
     (define-key map "g" #'olympus-ui-refresh)
     (define-key map "a" #'olympus-ui-arrange)
+    (define-key map "A" #'olympus-ui-arrange-windows)
     (define-key map "f" #'olympus-ui-focus-ling)
     (define-key map "u" #'olympus-ui-unfocus)
     (define-key map "n" #'olympus-ui-next-tab)
@@ -358,7 +425,7 @@
 (define-derived-mode olympus-ui-mode special-mode "Olympus" "Major mode for Olympus grid display.\n\n\\{olympus-ui-mode-map}" (setq buffer-read-only t) (setq truncate-lines t) (olympus-ui-subscribe-to-events))
 
 (with-eval-after-load 'evil
-  (evil-define-key 'normal olympus-ui-mode-map "r" #'olympus-ui-refresh "g" nil "gr" #'olympus-ui-refresh "a" #'olympus-ui-arrange "f" #'olympus-ui-focus-ling "u" #'olympus-ui-unfocus "n" #'olympus-ui-next-tab "p" #'olympus-ui-prev-tab "q" #'olympus-ui-hide "s" #'olympus-ui-subscribe-to-events))
+  (evil-define-key 'normal olympus-ui-mode-map "r" #'olympus-ui-refresh "g" nil "gr" #'olympus-ui-refresh "a" #'olympus-ui-arrange "A" #'olympus-ui-arrange-windows "f" #'olympus-ui-focus-ling "u" #'olympus-ui-unfocus "n" #'olympus-ui-next-tab "p" #'olympus-ui-prev-tab "q" #'olympus-ui-hide "s" #'olympus-ui-subscribe-to-events))
 
 (defun olympus-ui-cleanup ()
   "Clean up Olympus UI resources."
