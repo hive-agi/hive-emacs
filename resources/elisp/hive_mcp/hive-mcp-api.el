@@ -543,7 +543,78 @@
         (entry (hive-mcp-kanban-task-update task-id title priority context project-id)))
     (hive-mcp-transform-plist-to-alist entry)) (hive-mcp-transform-error-result "kanban-update-failed" 'task_id task-id)))
 
-(provide 'hive-mcp-api)
+(declare-function cider-connected-p "cider")
+
+(declare-function cider-nrepl-send-sync-request "cider")
+
+(declare-function nrepl-dict-get "nrepl-dict")
+
+(defun hive-mcp-api--plist-to-edn-map (plist)
+  "Convert elisp PLIST to EDN map string.\nE.g. (:command \"status\" :ling-id \"foo\") -> {:command \"status\" :ling-id \"foo\"}"
+  (if (null plist) "{}" (let* ((parts '()))
+    (while plist
+    (let* ((key (car plist))
+        (val (cadr plist)))
+    (push (format "%s %s" (symbol-name key) (cond
+  ((stringp val) (format "\"%s\"" (replace-regexp-in-string "\"" "\\\\\"" val)))
+  ((eq val t) "true")
+  ((eq val nil) "nil")
+  ((numberp val) (format "%s" val))
+  ((keywordp val) (symbol-name val))
+  ((symbolp val) (format "\"%s\"" (symbol-name val)))
+  (t (format "\"%s\"" val)))) parts)
+    (setq plist (cddr plist))))
+    (concat "{" (mapconcat 'identity (nreverse parts) " ") "}"))))
+
+(defun hive-mcp-api-call (tool params)
+  "Call a consolidated MCP TOOL with PARAMS via CIDER nREPL.\nTOOL is a string like \"olympus\", \"hivemind\", \"agent\", etc.\nPARAMS is a plist like (:command \"status\").\nReturns parsed JSON result as elisp plist (with keyword keys), or nil on failure."
+  (unless (and (featurep 'cider) (fboundp 'cider-connected-p) (cider-connected-p))
+    (error "CIDER not connected"))
+  (condition-case err
+    (let* ((ns (format "hive-mcp.tools.consolidated.%s" tool))
+        (fn-name (format "handle-%s" tool))
+        (edn-params (hive-mcp-api--plist-to-edn-map params))
+        (code (format "(cheshire.core/generate-string (%s/%s %s))" ns fn-name edn-params))
+        (response (cider-nrepl-send-sync-request (list "op" "eval" "code" code "ns" "user")))
+        (value (nrepl-dict-get response "value"))
+        (err-msg (nrepl-dict-get response "err")))
+    (when err-msg
+    (message "[hive-mcp-api-call] %s error: %s" tool err-msg))
+    (when value
+    (let* ((json-str (car (read-from-string value))))
+    (json-parse-string json-str :object-type 'plist :null-object nil))))
+  (error (message "[hive-mcp-api-call] Error calling %s: %s" tool err)
+      nil)))
+
+(defun hive-mcp-api-call-tool (tool-name params)
+  "Call a hive-mcp tool by TOOL-NAME with PARAMS.
+TOOL-NAME can be:
+- \"tool_command\" format (e.g., \"preset_status\") - splits into tool + command
+- \"tool\" format (e.g., \"preset\") - expects PARAMS to contain :command
+PARAMS is a plist of parameters, or nil.
+Returns parsed inner JSON as elisp plist, or nil on failure.
+Unwraps the MCP tool response wrapper (:type \"text\" :text \"...\")."
+  (let* ((idx (string-match "_" tool-name))
+         (tool (if idx (substring tool-name 0 idx) tool-name))
+         (command (when idx (substring tool-name (1+ idx))))
+         (merged-params (if command
+                           (append (list :command command) params)
+                         params))
+         (result (hive-mcp-api-call tool merged-params)))
+    (when result
+      (cond
+       ;; Error response from MCP tool
+       ((plist-get result :isError)
+        (list :error (or (plist-get result :text) "unknown error")))
+       ;; Normal text response - parse inner JSON from :text field
+       ((and (equal (plist-get result :type) "text")
+             (plist-get result :text))
+        (condition-case nil
+            (json-parse-string (plist-get result :text)
+                               :object-type 'plist :null-object nil)
+          (error result)))
+       ;; Already unwrapped or other format - return as-is
+       (t result)))))
 
 (provide 'hive-mcp-api)
 ;;; hive-mcp-api.el ends here
