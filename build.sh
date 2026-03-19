@@ -31,6 +31,14 @@ find "$TMPDIR" -name '*.el' | while read -r elfile; do
     continue
   fi
 
+  # Skip claude-code-ide — upstream package (BuddhiLW/claude-code-ide.el)
+  # manages its own elisp via straight.el. CLJEL compilation shadows it
+  # and introduces runtime dependency issues.
+  if [[ "$elfile" == *"claude-code-ide"* ]]; then
+    echo "  SKIP (upstream): $(basename "$elfile")"
+    continue
+  fi
+
   # Extract provide name from the file
   provide_name=$(grep -oP "^\(provide '\K[^)]+" "$elfile" | head -1)
   if [[ -z "$provide_name" ]]; then
