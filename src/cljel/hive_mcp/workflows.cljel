@@ -68,13 +68,13 @@ Each entry is TYPE -> function taking (step env) and returning env.")
   "Register workflow NAME with SPEC.
 Thread-safe: overwrites existing entry atomically."
   (puthash name spec hive-mcp-workflow-registry)
-  (hive-mcp-workflows--save)
+  (-save)
   (message "Workflow '%s' registered" name))
 
 (defn workflow-unregister [name]
   "Remove workflow NAME from registry."
   (remhash name hive-mcp-workflow-registry)
-  (hive-mcp-workflows--save))
+  (-save))
 
 (defn workflow-get [name]
   "Get workflow spec by NAME."
@@ -102,7 +102,7 @@ Runs before/after hooks around execution."
   (if-let [spec (gethash name hive-mcp-workflow-registry)]
     (do
       (run-hook-with-args 'hive-mcp-workflow-before-hook name args)
-      (let [result (hive-mcp-workflows--execute spec args)]
+      (let [result (-execute spec args)]
         (run-hook-with-args 'hive-mcp-workflow-after-hook name result)
         result))
     (error "Unknown workflow: %s" name)))
