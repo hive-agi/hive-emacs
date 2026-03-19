@@ -28,7 +28,10 @@ Features:
 (declare-function cider-interactive-eval "cider-eval")
 (declare-function cider-connect-clj "cider")
 (declare-function cider-connected-p "cider-connection")
-(declare-function cider-repl-buffers "cider-connection")
+(declare-function cider-connections "cider-connection")
+(declare-function cider-connect-cljs "cider")
+(declare-function cider-cljel-start "cider-clojure-elisp")
+(declare-function cider-cljel-mode "cider-clojure-elisp")
 
 ;; ============================================================================
 ;; Customization Group
@@ -100,6 +103,23 @@ Smaller values = more responsive, larger values = less CPU overhead."
   :type 'number
   :group 'hive-mcp-cider)
 
+(defcustom hive-mcp-cider-cljs-repl-type "shadow"
+  "ClojureScript REPL type for cider-connect-cljs."
+  :type '(choice (const "shadow") (const "figwheel") (const "browser"))
+  :group 'hive-mcp-cider)
+
+(defcustom hive-mcp-cider-shadow-build ":app"
+  "Default shadow-cljs build ID."
+  :type 'string
+  :group 'hive-mcp-cider)
+
+(defcustom hive-mcp-cider-cljel-project-dir "~/PP/clojure-elisp"
+  "Project directory for ClojureElisp nREPL sessions.
+Should point to the clojure-elisp project root with deps.edn
+containing the compiler and nREPL middleware."
+  :type 'directory
+  :group 'hive-mcp-cider)
+
 ;; ============================================================================
 ;; Internal State
 ;; ============================================================================
@@ -169,21 +189,42 @@ Sessions will use ports starting from this value."
 ;; Session Management
 ;; ============================================================================
 
-(defn spawn-session [name &optional project-dir agent-id]
+(defn- -session-nrepl-command [repl-type port dir]
+  "Build the nREPL start command for REPL-TYPE on PORT in DIR.
+Returns a list of (program . args) for start-process.
+REPL-TYPE is one of 'clj, 'cljs, or 'cljel."
+  (let [port-str (number-to-string port)]
+    (pcase repl-type
+      ('cljs
+       (list "npx" "shadow-cljs" "watch" hive-mcp-cider-shadow-build))
+      ('cljel
+       (list "clojure" "-M:dev" "-m" "nrepl.cmdline"
+             "--port" port-str
+             "--middleware" "[cider.nrepl/cider-middleware,clojure-elisp.nrepl/wrap-cljel]"))
+      (_  ;; default: clj
+       (list "clojure" "-M:nrepl"
+             "-p" port-str)))))
+
+(defn spawn-session [name &optional repl-type port project-dir agent-id]
   "Spawn a new named CIDER session.
 NAME is the session identifier (e.g., \"agent-1\", \"task-render\").
+REPL-TYPE is one of 'clj (default), 'cljs, or 'cljel.
+PORT is the nREPL port (default: auto-assign from session range).
 PROJECT-DIR is the directory to start nREPL in (default: current project).
 AGENT-ID optionally links this session to a swarm agent."
   (interactive "sSession name: ")
   (when (gethash name hive-mcp-cider--sessions)
     (error "Session '%s' already exists" name))
-  (let* [port (-find-available-port)
-         dir (or project-dir (-project-dir))
+  (let* [rtype (or repl-type 'clj)
+         the-port (or port (-find-available-port))
+         dir (or project-dir
+                 (if (eq rtype 'cljel)
+                     (expand-file-name hive-mcp-cider-cljel-project-dir)
+                   (-project-dir)))
          default-directory dir
          buf-name (format "*nREPL-%s*" name)
-         process (start-process (format "nrepl-%s" name) buf-name
-                                 "clojure" "-M:nrepl"
-                                 "-p" (number-to-string port))
+         cmd (-session-nrepl-command rtype the-port dir)
+         process (apply #'start-process (format "nrepl-%s" name) buf-name cmd)
          ;; Create timer and store reference for cleanup
          timer (run-with-timer 2 1
                                 (lambda ()
@@ -194,17 +235,38 @@ AGENT-ID optionally links this session to a swarm agent."
                                               name (error-message-string err))))))]
     ;; Register session with timer reference
     (puthash name
-             (list :port port
+             (list :port the-port
                    :process process
                    :buffer buf-name
                    :agent-id agent-id
                    :project-dir dir
+                   :repl-type rtype
                    :status 'starting
                    :cider-buffer nil
                    :timer timer)
              hive-mcp-cider--sessions)
-    (message "hive-mcp-cider: Spawning session '%s' on port %d..." name port)
-    (list :name name :port port :status "starting")))
+    (message "hive-mcp-cider: Spawning %s session '%s' on port %d..."
+             (symbol-name rtype) name the-port)
+    (list :name name :port the-port :repl-type (symbol-name rtype) :status "starting")))
+
+(defn connect-session [name host port &optional agent-id]
+  "Connect to an existing nREPL server as a named session.
+NAME is the session identifier.
+HOST is the nREPL host (default \"localhost\").
+PORT is the nREPL port number.
+AGENT-ID optionally links this session to a swarm agent."
+  (interactive "sSession name: \nsHost (localhost): \nnPort: ")
+  (when (gethash name hive-mcp-cider--sessions)
+    (error "Session '%s' already exists" name))
+  (let* [host (or host "localhost")
+         conn (cider-connect-clj (list :host host :port port))
+         cider-buf (buffer-name conn)]
+    (puthash name (list :port port :process nil :buffer nil
+                        :agent-id agent-id :project-dir nil
+                        :status 'connected :cider-buffer cider-buf :timer nil)
+             hive-mcp-cider--sessions)
+    (message "hive-mcp-cider: Session '%s' connected to %s:%d" name host port)
+    (list :name name :port port :status "connected")))
 
 (defn- -cancel-session-timer [name]
   "Cancel the auto-connect timer for session NAME."
@@ -215,22 +277,46 @@ AGENT-ID optionally links this session to a swarm agent."
     ;; Clear timer from session
     (puthash name (plist-put session :timer nil) hive-mcp-cider--sessions)))
 
+(defn- -connect-by-repl-type [repl-type port]
+  "Connect CIDER to nREPL on PORT using the appropriate method for REPL-TYPE.
+Returns the connection buffer."
+  (pcase repl-type
+    ('cljs
+     (cider-connect-cljs (list :host "localhost"
+                               :port port
+                               :cljs-repl-type hive-mcp-cider-cljs-repl-type)))
+    ('cljel
+     (let [conn (cider-connect-clj (list :host "localhost" :port port))]
+       ;; Send cljel-start after connection stabilizes
+       (run-at-time 1.0 nil
+                    (lambda ()
+                      (when (and (buffer-live-p conn)
+                                 (fboundp 'cider-cljel-start))
+                        (with-current-buffer conn
+                          (cider-cljel-start)))))
+       conn))
+    (_  ;; default: clj
+     (cider-connect-clj (list :host "localhost" :port port)))))
+
 (defn- -try-connect-session [name]
-  "Try to connect CIDER to session NAME."
+  "Try to connect CIDER to session NAME.
+Dispatches connection method based on session :repl-type."
   (let* [session (gethash name hive-mcp-cider--sessions)
          port (plist-get session :port)
-         status (plist-get session :status)]
+         status (plist-get session :status)
+         repl-type (or (plist-get session :repl-type) 'clj)]
     (when (and session (eq status 'starting))
       (if (-port-open-p port)
           (condition-case err
-              (let [conn (cider-connect-clj (list :host "localhost" :port port))]
+              (let [conn (-connect-by-repl-type repl-type port)]
                 ;; Cancel timer - connection succeeded
                 (-cancel-session-timer name)
                 (puthash name
                          (plist-put (plist-put session :status 'connected)
                                     :cider-buffer (buffer-name conn))
                          hive-mcp-cider--sessions)
-                (message "hive-mcp-cider: Session '%s' connected on port %d" name port))
+                (message "hive-mcp-cider: Session '%s' (%s) connected on port %d"
+                         name (symbol-name repl-type) port))
             (error
              ;; Cancel timer - connection failed permanently
              (-cancel-session-timer name)
@@ -254,9 +340,11 @@ Returns a vector (for JSON array encoding) of session plists."
   (interactive)
   (let [sessions '()]
     (maphash (lambda (name props)
-               (let [status (plist-get props :status)]
+               (let [status (plist-get props :status)
+                     rtype (plist-get props :repl-type)]
                  (push (list :name name
                              :port (plist-get props :port)
+                             :repl-type (if (symbolp rtype) (symbol-name rtype) (or rtype "clj"))
                              :status (if (symbolp status) (symbol-name status) status)
                              :agent-id (plist-get props :agent-id)
                              :cider-buffer (plist-get props :cider-buffer))
@@ -292,8 +380,9 @@ Returns a vector (for JSON array encoding) of session plists."
       (remhash name hive-mcp-cider--sessions)
       (message "hive-mcp-cider: Session '%s' killed" name))))
 
-(defn eval-in-session [name code]
+(defn eval-in-session [name code &optional timeout]
   "Evaluate CODE in the CIDER session NAME.
+Optional TIMEOUT in seconds (default: `hive-mcp-cider-eval-timeout').
 Uses async evaluation with heartbeat polling."
   (let* [session (gethash name hive-mcp-cider--sessions)
          cider-buf (plist-get session :cider-buffer)]
@@ -303,7 +392,7 @@ Uses async evaluation with heartbeat polling."
       (error "Session '%s' not connected (status: %s)"
              name (plist-get session :status)))
     (with-current-buffer cider-buf
-      (-eval-with-heartbeat code))))
+      (-eval-with-heartbeat code timeout))))
 
 (defn kill-all-sessions []
   "Kill all CIDER sessions."
@@ -624,6 +713,10 @@ Use this when nREPL is started externally."
     ("n" "Start nREPL (async)" hive-mcp-cider-start-nrepl)
     ("N" "Stop nREPL" hive-mcp-cider-stop-nrepl)
     ("c" "Auto-connect" hive-mcp-cider-auto-connect)]
+   ["Spawn"
+    ("sc" "Spawn CLJ"  (lambda () (interactive) (hive-mcp-cider-spawn-session (read-string "Name: ") 'clj)))
+    ("ss" "Spawn CLJS" (lambda () (interactive) (hive-mcp-cider-spawn-session (read-string "Name: ") 'cljs)))
+    ("sl" "Spawn CLJEL" (lambda () (interactive) (hive-mcp-cider-spawn-session (read-string "Name: ") 'cljel)))]
    ["Evaluate"
     ("e" "Eval with context" hive-mcp-cider-eval-with-context)]
    ["Memory"
@@ -643,16 +736,18 @@ Use this when nREPL is started externally."
 ;; MCP Tool API Functions
 ;; ============================================================================
 
-(defn eval-silent [code]
+(defn eval-silent [code &optional timeout]
   "Evaluate CODE via CIDER silently, return result.
+Optional TIMEOUT in seconds (default: `hive-mcp-cider-eval-timeout').
 Auto-connects if not connected, reusing existing session if available.
 Uses async evaluation with heartbeat polling."
   (unless (-ensure-connected)
     (error "CIDER could not connect - no nREPL available"))
-  (-eval-with-heartbeat code))
+  (-eval-with-heartbeat code timeout))
 
-(defn- -eval-with-heartbeat [code]
+(defn- -eval-with-heartbeat [code &optional timeout-override]
   "Evaluate CODE asynchronously with heartbeat polling.
+Optional TIMEOUT-OVERRIDE in seconds (default: `hive-mcp-cider-eval-timeout').
 Returns result when ready or signals error on timeout."
   ;; Reset state
   (setq hive-mcp-cider--async-result nil
@@ -678,7 +773,7 @@ Returns result when ready or signals error on timeout."
          (setq hive-mcp-cider--async-done t)))))
   ;; Poll with heartbeat until done or timeout
   (let [start-time (float-time)
-        timeout hive-mcp-cider-eval-timeout
+        timeout (or timeout-override hive-mcp-cider-eval-timeout)
         interval hive-mcp-cider-poll-interval]
     (while (and (not hive-mcp-cider--async-done)
                 (< (- (float-time) start-time) timeout))
@@ -705,7 +800,7 @@ Shows output in REPL buffer for collaborative debugging."
   "Return CIDER connection status as JSON-compatible plist."
   (list :connected (and (featurep 'cider) (cider-connected-p))
         :repl-buffer (when (and (featurep 'cider) (cider-connected-p))
-                       (buffer-name (car (cider-repl-buffers))))
+                       (buffer-name (car (cider-connections))))
         :namespace (when (and (featurep 'cider) (cider-connected-p))
                      (cider-current-ns))
         :repl-type (when (and (featurep 'cider) (boundp 'cider-repl-type))
@@ -861,8 +956,8 @@ Set `hive-mcp-cider-auto-start-nrepl' to t and load the addon."
 (with-eval-after-load 'hive-mcp-addons
   (hive-mcp-addon-register
    'cider
-   :version "0.2.0"
-   :description "Integration with CIDER (Clojure IDE) - async nREPL startup"
+   :version "0.3.0"
+   :description "Integration with CIDER (Clojure IDE) - multi-REPL (CLJ/CLJS/CLJEL)"
    :requires '(cider hive-mcp-api)
    :provides '(hive-mcp-cider-mode hive-mcp-cider-transient)
    :init #'-addon-init

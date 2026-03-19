@@ -1,0 +1,244 @@
+(ns hive-mcp-cljel
+  "Seamless ClojureElisp jack-in for CIDER.
+
+OPTIONAL DEPENDENCIES:
+- cider (https://github.com/clojure-emacs/cider)
+- cider-clojure-elisp (from clojure-elisp project)
+
+Provides `cider-jack-in-cljel' — one command to:
+1. Start nREPL with wrap-cljel middleware + clojure-elisp deps
+2. Connect CIDER
+3. Auto-send cljel-start
+4. Enable cider-cljel-mode for .cljel buffers
+
+Usage: M-x cider-jack-in-cljel → done."
+  (:require [hive-mcp-api :as api]))
+
+;; ============================================================================
+;; Soft Dependencies
+;; ============================================================================
+
+(declare-function cider-jack-in-clj "cider")
+(declare-function cider-connected-p "cider-connection")
+(declare-function cider-cljel-start "cider-clojure-elisp")
+(declare-function cider-cljel-mode "cider-clojure-elisp")
+
+;; ============================================================================
+;; Customization
+;; ============================================================================
+
+(defgroup hive-mcp-cljel nil
+  "Seamless ClojureElisp jack-in."
+  :group 'hive-mcp
+  :group 'cider
+  :prefix "hive-mcp-cljel-")
+
+(defcustom hive-mcp-cljel-project-dir "~/PP/clojure-elisp"
+  "Default project directory for ClojureElisp nREPL.
+This should point to the clojure-elisp project root
+which has the deps.edn with the compiler + nREPL middleware."
+  :type 'directory
+  :group 'hive-mcp-cljel)
+
+(defcustom hive-mcp-cljel-inject-deps nil
+  "Extra dependencies to inject for ClojureElisp nREPL.
+Default is nil because jack-in runs from the clojure-elisp project
+which already has the compiler and middleware on its classpath.
+Only set this if jacking in from a different project."
+  :type '(repeat (list string string))
+  :group 'hive-mcp-cljel)
+
+(defcustom hive-mcp-cljel-middleware
+  "clojure-elisp.nrepl/wrap-cljel"
+  "The nREPL middleware var for ClojureElisp compilation."
+  :type 'string
+  :group 'hive-mcp-cljel)
+
+(defcustom hive-mcp-cljel-auto-mode t
+  "When non-nil, auto-enable cider-cljel-mode in .cljel buffers after jack-in."
+  :type 'boolean
+  :group 'hive-mcp-cljel)
+
+(defcustom hive-mcp-cljel-port nil
+  "Port for ClojureElisp nREPL. Nil = auto-assign from CIDER session range."
+  :type '(choice (const nil) integer)
+  :group 'hive-mcp-cljel)
+
+;; ============================================================================
+;; Internal State
+;; ============================================================================
+
+(defvar hive-mcp-cljel--pending-activation nil
+  "Non-nil when we're waiting for CIDER to connect to send cljel-start.")
+
+(defvar hive-mcp-cljel--repl-buffer nil
+  "The CIDER REPL buffer with cljel-start active.
+Used to route evals to the correct connection when multiple exist.")
+
+;; ============================================================================
+;; Jack-in Command
+;; ============================================================================
+
+(defn jack-in [&optional project-dir]
+  "Jack in to an nREPL with ClojureElisp support.
+
+When the CIDER addon (hive-mcp-cider) is loaded, delegates to its
+`spawn-session' with 'cljel repl-type for unified session management.
+Otherwise falls back to direct CIDER jack-in.
+
+Starts nREPL with the wrap-cljel middleware, connects CIDER,
+auto-sends cljel-start, and enables cider-cljel-mode for .cljel buffers.
+
+PROJECT-DIR defaults to `hive-mcp-cljel-project-dir'.
+With prefix arg, prompt for project directory."
+  (interactive
+   (list (when current-prefix-arg
+           (read-directory-name "ClojureElisp project: "
+                                hive-mcp-cljel-project-dir))))
+  (require 'cider nil t)
+  (require 'cider-clojure-elisp nil t)
+  (unless (featurep 'cider)
+    (error "CIDER is required for cider-jack-in-cljel"))
+  (let [dir (expand-file-name (or project-dir hive-mcp-cljel-project-dir))]
+    (if (and (fboundp 'hive-mcp-cider-spawn-session)
+             (boundp 'hive-mcp-cider--sessions))
+        ;; Delegate to CIDER addon for unified session management
+        (progn
+          (setq hive-mcp-cljel--pending-activation t)
+          (hive-mcp-cider-spawn-session
+           (format "cljel-%d" (random 9999))
+           'cljel
+           hive-mcp-cljel-port
+           dir))
+      ;; Fallback: direct jack-in when CIDER addon not loaded
+      (let* [cider-jack-in-nrepl-middlewares
+             (append cider-jack-in-nrepl-middlewares
+                     (list hive-mcp-cljel-middleware))
+             cider-jack-in-dependencies
+             (append cider-jack-in-dependencies
+                     hive-mcp-cljel-inject-deps)]
+        (setq hive-mcp-cljel--pending-activation t)
+        (cider-jack-in-clj (list :project-dir dir))))))
+
+;; Alias for discoverability: M-x cider-jack-in-cljel
+(defalias 'cider-jack-in-cljel #'hive-mcp-cljel-jack-in
+  "Jack in to nREPL with ClojureElisp support.")
+
+;; ============================================================================
+;; Auto-activation on Connect
+;; ============================================================================
+
+;; NOTE: Private fns use defn- which compiles to ns--name (double dash).
+;; We use 'symbol literals for hook refs because #'ns/name compiles to
+;; ns-name (single dash) — a known compiler limitation with private fns.
+
+(defn- on-connected []
+  "Hook run when CIDER connects. Activates cljel session if pending."
+  (when hive-mcp-cljel--pending-activation
+    (setq hive-mcp-cljel--pending-activation nil)
+    ;; Capture the REPL buffer (we're called from it during connection)
+    (let [repl-buf (current-buffer)]
+      (setq hive-mcp-cljel--repl-buffer repl-buf)
+      ;; Send cljel-start from the REPL buffer so cider-ensure-connected works
+      (when (fboundp 'cider-cljel-start)
+        (run-at-time 1.0 nil
+                     (lambda ()
+                       (with-current-buffer repl-buf
+                         (cider-cljel-start)))))
+      ;; Advise cider-cljel-eval to route through our REPL buffer
+      (advice-add 'cider-cljel-eval :around 'hive-mcp-cljel--route-eval)
+      ;; Enable cider-cljel-mode in all .cljel buffers
+      (when hive-mcp-cljel-auto-mode
+        (run-at-time 2.0 nil 'hive-mcp-cljel--enable-cljel-buffers)))
+    (message "ClojureElisp: session ready")))
+
+(defn- enable-cljel-buffers []
+  "Enable cider-cljel-mode in all open .cljel buffers."
+  (when (fboundp 'cider-cljel-mode)
+    (dolist (buf (buffer-list))
+      (with-current-buffer buf
+        (when (and buffer-file-name
+                   (string-suffix-p ".cljel" buffer-file-name))
+          (unless cider-cljel-mode
+            (cider-cljel-mode 1)))))))
+
+;; ============================================================================
+;; Auto-mode for .cljel Files
+;; ============================================================================
+
+(defn- cljel-file-hook []
+  "Hook for clojure-mode to auto-enable cider-cljel-mode in .cljel files."
+  (when (and buffer-file-name
+             (string-suffix-p ".cljel" buffer-file-name)
+             (featurep 'cider-clojure-elisp)
+             (cider-connected-p)
+             (fboundp 'cider-cljel-mode))
+    (cider-cljel-mode 1)))
+
+;; ============================================================================
+;; Connection Routing
+;; ============================================================================
+
+(defn- route-eval [orig-fn code]
+  "Advice to route cider-cljel-eval through the cljel REPL buffer.
+Ensures eval goes to the clojure-elisp connection, not the default one."
+  (if (and hive-mcp-cljel--repl-buffer
+           (buffer-live-p hive-mcp-cljel--repl-buffer))
+      (with-current-buffer hive-mcp-cljel--repl-buffer
+        (funcall orig-fn code))
+    (funcall orig-fn code)))
+
+;; ============================================================================
+;; Transient Menu
+;; ============================================================================
+
+(transient-define-prefix hive-mcp-cljel-transient ()
+  "ClojureElisp menu."
+  ["ClojureElisp"
+   ["Jack-in"
+    ("j" "Jack in (cljel)" cider-jack-in-cljel)]
+   ["Session"
+    ("a" "Activate cljel-start" cider-cljel-start)
+    ("d" "Deactivate cljel-stop" cider-cljel-stop)]
+   ["Eval (requires cider-cljel-mode)"
+    ("e" "Eval last sexp" cider-cljel-eval-last-sexp)
+    ("c" "Eval defun" cider-cljel-eval-defun-at-point)
+    ("k" "Load buffer" cider-cljel-load-buffer)]])
+
+;; ============================================================================
+;; Addon Lifecycle
+;; ============================================================================
+
+(defn- addon-init []
+  "Initialize ClojureElisp jack-in addon."
+  ;; Load the CIDER extension from clojure-elisp
+  (require 'cider-clojure-elisp nil t)
+  ;; Hook into CIDER connection (use quoted symbol for private fn)
+  (add-hook 'cider-connected-hook 'hive-mcp-cljel--on-connected)
+  ;; Auto-enable cider-cljel-mode when opening .cljel files
+  (add-hook 'clojure-mode-hook 'hive-mcp-cljel--cljel-file-hook)
+  ;; Ensure .cljel files open in clojure-mode
+  (add-to-list 'auto-mode-alist '("\\.cljel\\'" . clojure-mode))
+  (message "hive-mcp-cljel: ready — use M-x cider-jack-in-cljel"))
+
+(defn- addon-shutdown []
+  "Shutdown ClojureElisp addon."
+  (remove-hook 'cider-connected-hook 'hive-mcp-cljel--on-connected)
+  (remove-hook 'clojure-mode-hook 'hive-mcp-cljel--cljel-file-hook)
+  (advice-remove 'cider-cljel-eval 'hive-mcp-cljel--route-eval)
+  (setq hive-mcp-cljel--repl-buffer nil)
+  (message "hive-mcp-cljel: shutdown"))
+
+;; ============================================================================
+;; Registration
+;; ============================================================================
+
+(with-eval-after-load 'hive-mcp-addons
+  (hive-mcp-addon-register
+   'cljel
+   :version "0.2.0"
+   :description "Seamless ClojureElisp jack-in — M-x cider-jack-in-cljel (CIDER session integration)"
+   :requires '(cider cider-clojure-elisp)
+   :provides '(cider-jack-in-cljel hive-mcp-cljel-transient)
+   :init 'hive-mcp-cljel--addon-init
+   :shutdown 'hive-mcp-cljel--addon-shutdown))
