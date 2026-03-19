@@ -31,7 +31,9 @@ these packages during testing."
 (defun claude-code-ide--get-session-context ()
   "Mock session context function."
   "")
-(provide 'claude-code-ide-debug)
+;; Mock: provide debug shims so tests don't need the real module loaded first
+;; NOTE: do NOT use (provide 'claude-code-ide-debug) here — it causes
+;; build.sh to mis-identify this file as the debug module.
 
 ;; === Mock websocket module ===
 (condition-case nil
