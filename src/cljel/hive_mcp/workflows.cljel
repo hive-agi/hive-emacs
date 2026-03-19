@@ -756,8 +756,8 @@ Idempotent: only registers if not already present."
 ;; ============================================================================
 ;; Compatibility aliases (hive-mcp.el uses hive-mcp-workflow- prefix)
 ;; ============================================================================
-(defalias 'hive-mcp-workflow--load #'hive-mcp-workflows---load)
-(defalias 'hive-mcp-workflow--register-builtins #'hive-mcp-workflows---register-builtins)
+(defalias 'hive-mcp-workflow--load #'hive-mcp-workflows--load)
+(defalias 'hive-mcp-workflow--register-builtins #'hive-mcp-workflows--register-builtins)
 (defalias 'hive-mcp-workflow-run-interactive #'hive-mcp-workflows-workflow-run-interactive)
 
 (provide 'hive-mcp-workflows)
