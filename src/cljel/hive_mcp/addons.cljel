@@ -130,7 +130,7 @@ Keys are addon symbols, values are lists of timer objects.")
 
 (defn addon-available-p [addon]
   "Return non-nil if ADDON is available (file exists)."
-  (hive-mcp-addons--find-file addon))
+  (-find-file addon))
 
 (defn addon-loaded-p [addon]
   "Return non-nil if ADDON is already loaded."
@@ -230,15 +230,15 @@ Returns t if loaded successfully, nil otherwise."
    ((hive-mcp-addons-addon-loaded-p addon)
     (message "Addon %s already loaded" addon)
     t)
-   ((hive-mcp-addons--find-file addon)
-    (let [file (hive-mcp-addons--find-file addon)]
+   ((-find-file addon)
+    (let [file (-find-file addon)]
       (load file nil t)
       (puthash addon (plist-put (gethash addon hive-mcp-addon--registry)
                                 :loaded t)
                hive-mcp-addon--registry)
        ;; Run lifecycle hooks
-      (hive-mcp-addons--run-init addon)
-      (hive-mcp-addons--run-async-init addon)
+      (-run-init addon)
+      (-run-async-init addon)
       (message "Loaded hive-mcp addon: %s" addon)
       t))
    (t
@@ -253,9 +253,9 @@ Returns t if loaded successfully, nil otherwise."
                                   nil t))))
   (when (hive-mcp-addons-addon-loaded-p addon)
     ;; Run shutdown hook
-    (hive-mcp-addons--run-shutdown addon)
+    (-run-shutdown addon)
     ;; Clean up processes and timers
-    (hive-mcp-addons--cleanup addon)
+    (-cleanup addon)
     ;; Mark as unloaded
     (puthash addon (plist-put (gethash addon hive-mcp-addon--registry)
                               :loaded nil)
@@ -417,11 +417,6 @@ Example:
 (defalias 'hive-mcp-addons-setup #'hive-mcp-addons-addons-setup)
 ;; config.el calls hive-mcp-addons-auto-load (single prefix)
 (defalias 'hive-mcp-addons-auto-load #'hive-mcp-addons-addons-auto-load)
-;; Internal private fns compiled as ---foo (triple-hyphen) but called as --foo (double)
-(defalias 'hive-mcp-addons--find-file #'hive-mcp-addons---find-file)
-(defalias 'hive-mcp-addons--run-init #'hive-mcp-addons---run-init)
-(defalias 'hive-mcp-addons--run-async-init #'hive-mcp-addons---run-async-init)
-(defalias 'hive-mcp-addons--run-shutdown #'hive-mcp-addons---run-shutdown)
-(defalias 'hive-mcp-addons--cleanup #'hive-mcp-addons---cleanup)
+;; Triple-dash workarounds removed — emitter now correctly produces --foo for (defn- -foo)
 
 (provide 'hive-mcp-addons)
