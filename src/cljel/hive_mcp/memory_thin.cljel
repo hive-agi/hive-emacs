@@ -123,7 +123,7 @@ KEY should be a keyword symbol like :project-id."
   "Read and parse .hive-project.edn from PROJECT-ROOT.
 Returns alist of config values, or nil if file doesn't exist.
 Caches result per project root."
-  (let* [root (or project-root (hive-mcp-memory---get-project-root))
+  (let* [root (or project-root (-get-project-root))
          cached (gethash root hive-mcp-memory--project-config-cache 'not-found)]
     (if (not (eq cached 'not-found))
         cached
@@ -131,7 +131,7 @@ Caches result per project root."
                            (expand-file-name hive-mcp-project-config-file root))
              config (when (and config-path (file-exists-p config-path))
                       (condition-case nil
-                          (hive-mcp-memory---parse-edn-string
+                          (-parse-edn-string
                            (with-temp-buffer
                              (insert-file-contents config-path)
                              (buffer-string)))
@@ -142,8 +142,8 @@ Caches result per project root."
 (defn- -get-stable-project-id [&optional project-root]
   "Get stable project ID from config file at PROJECT-ROOT.
 Returns the :project-id value from .hive-project.edn, or nil if not found."
-  (when-let* [config (hive-mcp-memory---read-project-config project-root)
-              project-id (hive-mcp-memory---edn-get config :project-id)]
+  (when-let* [config (-read-project-config project-root)
+              project-id (-edn-get config :project-id)]
     (if (stringp project-id)
         project-id
       (symbol-name project-id))))
@@ -165,7 +165,7 @@ Returns the :project-id value from .hive-project.edn, or nil if not found."
 
 (defn- -get-project-name []
   "Get current project name (directory basename), or nil if not in a project."
-  (when-let* [root (hive-mcp-memory---get-project-root)]
+  (when-let* [root (-get-project-root)]
     (file-name-nondirectory (directory-file-name root))))
 
 (defn- -project-id [&optional project-root]
@@ -178,12 +178,12 @@ PROJECT-ROOT must be a string path or nil."
   ;; CLARITY-I: Validate input type (fix for stringp bug from MCP)
   (let [root (elisp-cond
                ((stringp project-root) project-root)
-               ((null project-root) (hive-mcp-memory---get-project-root))
+               ((null project-root) (-get-project-root))
                (t (progn
                     (message "[hive-mcp] Warning: project-root not a string: %S" project-root)
-                    (hive-mcp-memory---get-project-root))))]
+                    (-get-project-root))))]
     (if root
-        (or (hive-mcp-memory---get-stable-project-id root)
+        (or (-get-stable-project-id root)
             (substring (sha1 (expand-file-name root)) 0 16))
       "global")))
 
@@ -194,10 +194,10 @@ PROJECT-ROOT must be a string path or nil."
   ;; CLARITY-I: Validate input type (fix for stringp bug from MCP)
   (let [root (elisp-cond
                ((stringp project-root) project-root)
-               ((null project-root) (hive-mcp-memory---get-project-root))
+               ((null project-root) (-get-project-root))
                (t (progn
                     (message "[hive-mcp] Warning: project-root not a string: %S" project-root)
-                    (hive-mcp-memory---get-project-root))))]
+                    (-get-project-root))))]
     (if root
         (substring (sha1 (expand-file-name root)) 0 16)
       "global")))
@@ -241,10 +241,10 @@ Returns nil if TAG is not a scope tag."
 (defn- -inject-project-scope [tags]
   "Inject current project scope into TAGS if no scope present.
 Returns modified tags list."
-  (if (hive-mcp-memory---has-scope-tag-p tags)
+  (if (-has-scope-tag-p tags)
       tags  ; Already has scope
-    (if-let* [project-name (hive-mcp-memory---get-project-name)]
-        (cons (hive-mcp-memory---make-scope-tag 'project project-name) tags)
+    (if-let* [project-name (-get-project-name)]
+        (cons (-make-scope-tag 'project project-name) tags)
       tags)))  ; Not in project, leave as-is (global)
 
 (defn- -applicable-scope-tags [&optional project-name domain-name]
@@ -254,9 +254,9 @@ DOMAIN-NAME is optional domain filter.
 Always includes scope:global."
   (let [tags (list "scope:global")]
     (when domain-name
-      (push (hive-mcp-memory---make-scope-tag 'domain domain-name) tags))
-    (when-let* [proj (or project-name (hive-mcp-memory---get-project-name))]
-      (push (hive-mcp-memory---make-scope-tag 'project proj) tags))
+      (push (-make-scope-tag 'domain domain-name) tags))
+    (when-let* [proj (or project-name (-get-project-name))]
+      (push (-make-scope-tag 'project proj) tags))
     tags))
 
 ;;; ============================================================
@@ -318,7 +318,7 @@ Trims whitespace, collapses multiple spaces/newlines."
 (defn content-hash [content]
   "Compute SHA-256 hash of normalized CONTENT.
 Returns a 64-character hex string."
-  (secure-hash 'sha256 (hive-mcp-memory---normalize-content content)))
+  (secure-hash 'sha256 (-normalize-content content)))
 
 ;;; ============================================================
 ;;; Backward-Compat Aliases (private --- to external --)
@@ -328,28 +328,9 @@ Returns a 64-character hex string."
 ;; consumers (kanban.cljel, etc.) reference hive-mcp-memory--name
 ;; (double dash) from the original elisp. These aliases bridge that gap.
 
-(defalias 'hive-mcp-memory--project-id 'hive-mcp-memory---project-id)
-(defalias 'hive-mcp-memory--project-id-hash 'hive-mcp-memory---project-id-hash)
-(defalias 'hive-mcp-memory--get-project-root 'hive-mcp-memory---get-project-root)
-(defalias 'hive-mcp-memory--get-project-name 'hive-mcp-memory---get-project-name)
-(defalias 'hive-mcp-memory--make-scope-tag 'hive-mcp-memory---make-scope-tag)
-(defalias 'hive-mcp-memory--parse-scope-tag 'hive-mcp-memory---parse-scope-tag)
-(defalias 'hive-mcp-memory--has-scope-tag-p 'hive-mcp-memory---has-scope-tag-p)
-(defalias 'hive-mcp-memory--inject-project-scope 'hive-mcp-memory---inject-project-scope)
-(defalias 'hive-mcp-memory--applicable-scope-tags 'hive-mcp-memory---applicable-scope-tags)
-(defalias 'hive-mcp-memory--calculate-expires 'hive-mcp-memory---calculate-expires)
-(defalias 'hive-mcp-memory--duration-next 'hive-mcp-memory---duration-next)
-(defalias 'hive-mcp-memory--duration-prev 'hive-mcp-memory---duration-prev)
-(defalias 'hive-mcp-memory--generate-id 'hive-mcp-memory---generate-id)
-(defalias 'hive-mcp-memory--timestamp 'hive-mcp-memory---timestamp)
-(defalias 'hive-mcp-memory--normalize-content 'hive-mcp-memory---normalize-content)
-(defalias 'hive-mcp-memory--parse-edn-string 'hive-mcp-memory---parse-edn-string)
-(defalias 'hive-mcp-memory--edn-get 'hive-mcp-memory---edn-get)
-(defalias 'hive-mcp-memory--read-project-config 'hive-mcp-memory---read-project-config)
-(defalias 'hive-mcp-memory--get-stable-project-id 'hive-mcp-memory---get-stable-project-id)
-(defalias 'hive-mcp-memory--cider-delegate 'hive-mcp-memory---cider-delegate)
-(defalias 'hive-mcp-memory--build-clj-call 'hive-mcp-memory---build-clj-call)
-(defalias 'hive-mcp-memory--delegate 'hive-mcp-memory---delegate)
+;; NOTE: stale defalias blocks removed — the compiler generates correct
+;; double-dash defuns from defn- already. The old blocks pointed
+;; double-dash → triple-dash (nonexistent), causing void-function errors.
 
 ;;; ============================================================
 ;;; Public Aliases (used by API layer and workflows)
@@ -358,10 +339,10 @@ Returns a 64-character hex string."
 ;; The internal `--` prefixed functions are the implementations.
 ;; These public names are what hive-mcp-api.el and hive-mcp-workflows.el call.
 
-(defalias 'hive-mcp-memory-project-id 'hive-mcp-memory---project-id)
-(defalias 'hive-mcp-memory-project-id-hash 'hive-mcp-memory---project-id-hash)
-(defalias 'hive-mcp-memory-project-get-root 'hive-mcp-memory---get-project-root)
-(defalias 'hive-mcp-memory-project-get-name 'hive-mcp-memory---get-project-name)
+(defalias 'hive-mcp-memory-project-id 'hive-mcp-memory--project-id)
+(defalias 'hive-mcp-memory-project-id-hash 'hive-mcp-memory--project-id-hash)
+(defalias 'hive-mcp-memory-project-get-root 'hive-mcp-memory--get-project-root)
+(defalias 'hive-mcp-memory-project-get-name 'hive-mcp-memory--get-project-name)
 
 ;;; ============================================================
 ;;; MCP Tool Delegation Stubs
@@ -396,7 +377,7 @@ Returns the result from Clojure or nil on failure."
   (unless (and (featurep 'cider) (cider-connected-p))
     (error "CIDER not connected. Memory operations require nREPL connection"))
   (condition-case err
-      (let* [clj-code (hive-mcp-memory---build-clj-call op args)
+      (let* [clj-code (-build-clj-call op args)
              response (cider-nrepl-send-sync-request
                        (list "op" "eval"
                              "code" clj-code
@@ -524,7 +505,7 @@ Maps elisp operations to the Clojure consolidated memory tool commands."
   "Initialize the CIDER-based storage delegate.
 Call this after CIDER connects to enable memory operations."
   (interactive)
-  (setq hive-mcp-memory--storage-delegate #'hive-mcp-memory---cider-delegate)
+  (setq hive-mcp-memory--storage-delegate #'-cider-delegate)
   (message "hive-mcp-memory: CIDER delegate initialized"))
 
 (defn- -delegate [operation & args]
@@ -547,15 +528,15 @@ PROJECT-ID defaults to current project or global.
 DURATION is optional lifespan symbol.
 
 STORAGE: Delegated to MCP server -> Chroma."
-  (let [tags-with-scope (hive-mcp-memory---inject-project-scope (or tags '()))
-        pid (or project-id (hive-mcp-memory---project-id))
+  (let [tags-with-scope (-inject-project-scope (or tags '()))
+        pid (or project-id (-project-id))
         dur (or duration hive-mcp-memory-default-duration)]
-    (hive-mcp-memory---delegate 'add type content tags-with-scope pid dur)))
+    (-delegate 'add type content tags-with-scope pid dur)))
 
 (defn get [id &optional project-id]
   "Retrieve memory entry by ID from PROJECT-ID.
 STORAGE: Delegated to MCP server -> Chroma."
-  (hive-mcp-memory---delegate 'get id project-id))
+  (-delegate 'get id project-id))
 
 (defn query [type &optional tags project-id limit duration scope-filter]
   "Query memories by TYPE and optional TAGS.
@@ -565,17 +546,17 @@ DURATION filters by lifespan category.
 SCOPE-FILTER controls scope filtering.
 
 STORAGE: Delegated to MCP server -> Chroma."
-  (hive-mcp-memory---delegate 'query type tags project-id limit duration scope-filter))
+  (-delegate 'query type tags project-id limit duration scope-filter))
 
 (defn update [id updates &optional project-id]
   "Update memory entry ID with UPDATES plist.
 STORAGE: Delegated to MCP server -> Chroma."
-  (hive-mcp-memory---delegate 'update id updates project-id))
+  (-delegate 'update id updates project-id))
 
 (defn delete [id &optional project-id]
   "Delete memory entry by ID.
 STORAGE: Delegated to MCP server -> Chroma."
-  (hive-mcp-memory---delegate 'delete id project-id))
+  (-delegate 'delete id project-id))
 
 ;;; ============================================================
 ;;; Deduplication
@@ -590,7 +571,7 @@ Returns the existing entry if found, nil otherwise.
 
 STORAGE: Delegated to MCP server -> Chroma.
 Client-side hash comparison; queries server for entries of TYPE."
-  (let* [pid (or project-id (hive-mcp-memory---project-id))
+  (let* [pid (or project-id (-project-id))
          content-hash (hive-mcp-memory-content-hash content)
          entries (hive-mcp-memory-query type nil pid 100)]
     (seq-find (lambda (entry)
@@ -610,7 +591,7 @@ DURATION must be one of the valid duration symbols.
 PROJECT-ID is unused in delegate mode (server resolves from ID).
 STORAGE: Delegated to MCP server."
   (ignore project-id)
-  (hive-mcp-memory---delegate 'duration id duration))
+  (-delegate 'duration id duration))
 
 (defn promote [id &optional project-id]
   "Promote entry ID to next longer duration in the hierarchy.
@@ -618,7 +599,7 @@ Returns the server response (updated entry or new duration).
 PROJECT-ID is unused in delegate mode.
 STORAGE: Delegated to MCP server."
   (ignore project-id)
-  (hive-mcp-memory---delegate 'promote id))
+  (-delegate 'promote id))
 
 (defn demote [id &optional project-id]
   "Demote entry ID to next shorter duration in the hierarchy.
@@ -626,7 +607,7 @@ Returns the server response (updated entry or new duration).
 PROJECT-ID is unused in delegate mode.
 STORAGE: Delegated to MCP server."
   (ignore project-id)
-  (hive-mcp-memory---delegate 'demote id))
+  (-delegate 'demote id))
 
 ;;; ============================================================
 ;;; Query Operations (expiring, cleanup)
@@ -635,13 +616,13 @@ STORAGE: Delegated to MCP server."
 (defn query-expiring [days &optional project-id]
   "Return entries expiring within DAYS from PROJECT-ID.
 STORAGE: Delegated to MCP server -> Chroma."
-  (hive-mcp-memory---delegate 'expiring days project-id))
+  (-delegate 'expiring days project-id))
 
 (defn cleanup-expired [&optional project-id]
   "Remove expired entries from PROJECT-ID.
 Returns count of deleted entries.
 STORAGE: Delegated to MCP server -> Chroma."
-  (hive-mcp-memory---delegate 'cleanup project-id))
+  (-delegate 'cleanup project-id))
 
 ;;; ============================================================
 ;;; Semantic Search (via delegate)
@@ -652,7 +633,7 @@ STORAGE: Delegated to MCP server -> Chroma."
 PROJECT-ID defaults to current project.
 LIMIT caps the number of results (default 10).
 STORAGE: Delegated to MCP server -> Chroma."
-  (hive-mcp-memory---delegate 'search query project-id limit))
+  (-delegate 'search query project-id limit))
 
 ;;; ============================================================
 ;;; Audit Logging / Helpfulness (via delegate)
@@ -664,21 +645,21 @@ Increments access-count and updates last-accessed timestamp.
 PROJECT-ID is unused in delegate mode.
 STORAGE: Delegated to MCP server."
   (ignore project-id)
-  (hive-mcp-memory---delegate 'log-access id))
+  (-delegate 'log-access id))
 
 (defn mark-helpful [id &optional project-id]
   "Mark memory entry ID as helpful.
 PROJECT-ID is unused in delegate mode.
 STORAGE: Delegated to MCP server."
   (ignore project-id)
-  (hive-mcp-memory---delegate 'feedback id "helpful"))
+  (-delegate 'feedback id "helpful"))
 
 (defn mark-unhelpful [id &optional project-id]
   "Mark memory entry ID as unhelpful.
 PROJECT-ID is unused in delegate mode.
 STORAGE: Delegated to MCP server."
   (ignore project-id)
-  (hive-mcp-memory---delegate 'feedback id "unhelpful"))
+  (-delegate 'feedback id "unhelpful"))
 
 (defn helpfulness-ratio [id &optional project-id]
   "Calculate helpfulness ratio for memory entry ID.
@@ -686,7 +667,7 @@ Returns helpful-count / (helpful + unhelpful), or nil if no feedback.
 PROJECT-ID is unused in delegate mode.
 STORAGE: Delegated to MCP server."
   (ignore project-id)
-  (hive-mcp-memory---delegate 'helpfulness id))
+  (-delegate 'helpfulness id))
 
 ;;; ============================================================
 ;;; Migration (via delegate)
@@ -696,7 +677,7 @@ STORAGE: Delegated to MCP server."
   "Migrate memory from OLD-PROJECT-ID to NEW-PROJECT-ID.
 In Chroma-delegate mode, this is handled server-side.
 STORAGE: Delegated to MCP server."
-  (hive-mcp-memory---delegate 'migrate old-project-id new-project-id))
+  (-delegate 'migrate old-project-id new-project-id))
 
 ;;; ============================================================
 ;;; Save / Persistence (no-ops in thin mode)
@@ -760,10 +741,10 @@ ROLE should be `user' or `assistant'."
 (defn get-project-context []
   "Return full project context as plist for Claude.
 Includes notes, conventions, recent decisions, relevant snippets."
-  (let [pid (hive-mcp-memory---project-id)]
+  (let [pid (-project-id)]
     (list
      :project-id pid
-     :project-root (hive-mcp-memory---get-project-root)
+     :project-root (-get-project-root)
      :notes (hive-mcp-memory-query 'note nil pid 10)
      :conventions (hive-mcp-memory-query 'convention nil pid)
      :recent-decisions (hive-mcp-memory-query 'decision nil pid 5)
