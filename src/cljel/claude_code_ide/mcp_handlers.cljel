@@ -703,7 +703,7 @@ ARGUMENTS should contain `filePath`."
               ("closeAllDiffTabs" . claude-code-ide-mcp-handlers-handle-close-all-diff-tabs)))
           (list '("checkDocumentDirty" . claude-code-ide-mcp-handlers-handle-check-document-dirty))))
 
-(setq claude-code-ide-mcp-tools (claude-code-ide-mcp-handlers--build-tool-list))
+(setq claude-code-ide-mcp-tools (-build-tool-list))
 
 (defn- -build-tool-schemas []
   "Build the tool schemas, conditionally including ediff tools."

@@ -29,9 +29,9 @@
 
 ;; External declarations
 (defvar claude-code-ide--session-ids)
-(declare-function claude-code-ide-mcp-handlers--build-tool-list "claude-code-ide-mcp-handlers" ())
-(declare-function claude-code-ide-mcp-handlers--build-tool-schemas "claude-code-ide-mcp-handlers" ())
-(declare-function claude-code-ide-mcp-handlers--build-tool-descriptions "claude-code-ide-mcp-handlers" ())
+(declare-function claude-code-ide-mcp-handlers---build-tool-list "claude-code-ide-mcp-handlers" ())
+(declare-function claude-code-ide-mcp-handlers---build-tool-schemas "claude-code-ide-mcp-handlers" ())
+(declare-function claude-code-ide-mcp-handlers---build-tool-descriptions "claude-code-ide-mcp-handlers" ())
 
 ;;; Constants
 
@@ -236,9 +236,9 @@ Converts :json-empty to empty hash tables."
   "Handle the tools/list request with ID."
   (claude-code-ide-debug "Handling tools/list request with id: %s" id)
   ;; Rebuild tool lists to respect current settings
-  (setq claude-code-ide-mcp-tools (claude-code-ide-mcp-handlers--build-tool-list))
-  (setq claude-code-ide-mcp-tool-schemas (claude-code-ide-mcp-handlers--build-tool-schemas))
-  (setq claude-code-ide-mcp-tool-descriptions (claude-code-ide-mcp-handlers--build-tool-descriptions))
+  (setq claude-code-ide-mcp-tools (claude-code-ide-mcp-handlers---build-tool-list))
+  (setq claude-code-ide-mcp-tool-schemas (claude-code-ide-mcp-handlers---build-tool-schemas))
+  (setq claude-code-ide-mcp-tool-descriptions (claude-code-ide-mcp-handlers---build-tool-descriptions))
 
   (claude-code-ide-debug "Building tools list from %d registered tools"
                          (length claude-code-ide-mcp-tools))
