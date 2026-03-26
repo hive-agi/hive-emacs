@@ -18,3 +18,18 @@ and provides the M-x hive-olympus command.")
     "Open the Olympus dashboard."
     (interactive)
     (olympus-ui-show)))
+
+;; Global minor mode for keybindings and notifications
+;; Use setq (not defvar) so reloads pick up new bindings
+(defvar hive-mcp-olympus-mode-map (make-sparse-keymap)
+  "Keymap for `hive-mcp-olympus-mode'.")
+(define-key hive-mcp-olympus-mode-map (kbd "C-c h o") #'hive-olympus)
+(define-key hive-mcp-olympus-mode-map (kbd "C-c h n") #'hive-olympus)
+(define-key hive-mcp-olympus-mode-map (kbd "C-c h A") #'olympus-ui-arrange-windows)
+
+(define-minor-mode hive-mcp-olympus-mode
+  "Global minor mode for Olympus grid keybindings and notifications.
+When enabled, provides C-c h o to open the Olympus grid."
+  :global t
+  :lighter " Olympus"
+  :keymap hive-mcp-olympus-mode-map)
