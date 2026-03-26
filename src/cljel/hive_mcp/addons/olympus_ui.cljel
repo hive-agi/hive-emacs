@@ -53,7 +53,7 @@ sorted by slave-id for stable ordering."
                          :name (or (plist-get slave :name) slave-id))
                    result))))
        hive-mcp-swarm--slaves))
-    (sort result (lambda (a b) (string< (plist-get a :id) (plist-get b :id))))))
+    (sort (lambda (a b) (string< (plist-get a :id) (plist-get b :id))) result)))
 
 (defn -calculate-grid [n]
   "Calculate rows and cols for N buffers.
@@ -84,7 +84,7 @@ BUFFERS is a list of buffer objects to tile."
            row-windows (list root-window)]
       ;; Create row splits
       (dotimes (_ (1- rows))
-        (let [last-win (car (last row-windows))
+        (let [last-win (last row-windows)
               new-win (split-window last-win nil 'below)]
           (setq row-windows (append row-windows (list new-win)))))
       ;; Balance row heights
@@ -95,7 +95,7 @@ BUFFERS is a list of buffer objects to tile."
           (let [col-windows (list row-win)]
             ;; Split this row into columns
             (dotimes (_ (1- cols))
-              (let [last-win (car (last col-windows))
+              (let [last-win (last col-windows)
                     new-win (split-window last-win nil 'right)]
                 (setq col-windows (append col-windows (list new-win)))))
             ;; Assign buffers to windows in this row
@@ -285,37 +285,70 @@ E.g. (:foo 1 :bar 2) -> {foo: 1, bar: 2}."
       (setq plist (cddr plist)))
     ht))
 
+(defn -build-local-state []
+  "Build olympus state directly from local hive-mcp-swarm--slaves.
+No CIDER connection required — reads Elisp state directly."
+  (when (and (boundp 'hive-mcp-swarm--slaves)
+             (hash-table-p hive-mcp-swarm--slaves))
+    (let [n (hash-table-count hive-mcp-swarm--slaves)
+          grid (olympus-ui/-calculate-grid n)
+          rows (car grid)
+          cols (cdr grid)
+          positions (make-hash-table :test 'equal)
+          lings (make-hash-table :test 'equal)
+          idx 0
+          sorted-slaves '()]
+      ;; Collect and sort slaves for stable ordering
+      (maphash (lambda (id slave)
+                 (push (cons id slave) sorted-slaves))
+               hive-mcp-swarm--slaves)
+      (setq sorted-slaves (sort (lambda (a b) (string< (car a) (car b)))
+                                sorted-slaves))
+      ;; Assign grid positions
+      (dolist (entry sorted-slaves)
+        (let [id (car entry)
+              slave (cdr entry)
+              row (/ idx (max cols 1))
+              col (mod idx (max cols 1))]
+          (puthash id (list :row row :col col :tab nil) positions)
+          (puthash id slave lings)
+          (setq idx (1+ idx))))
+      (list :ling-count n
+            :layout (list :rows rows :cols cols)
+            :positions positions
+            :active-tab 0
+            :layout-mode :auto
+            :lings lings))))
+
 (defn -fetch-status []
-  "Fetch current Olympus status from MCP.
-Returns map with :lings, :layout, :positions, :active-tab, :layout-mode.
-The :lings and :positions are hash-tables keyed by ling-id."
-  (when (olympus-ui/-ensure-api)
-    (condition-case err
-        (let [response (hive-mcp-api-call "olympus" (list :command "status"))]
-          (when (and response (plist-get response :success))
-            ;; Also fetch hivemind status to get ling metadata
-            ;; hivemind may return JSON-wrapped {:type "text" :text "{...}"} — unwrap if needed
-            (let [hm-raw (hive-mcp-api-call "hivemind" (list :command "status"))
-                  hm-status (if (plist-get hm-raw :text)
-                                (json-parse-string (plist-get hm-raw :text)
-                                                   :object-type 'plist :null-object nil)
-                              hm-raw)
-                  agents-plist (plist-get hm-status :agents)
-                  positions-plist (plist-get response :positions)]
-              ;; Convert plists to hash-tables for rendering code
-              (list :ling-count (plist-get response :ling-count)
-                    :layout (plist-get response :layout)
-                    :positions (if (hash-table-p positions-plist)
-                                 positions-plist
-                                 (olympus-ui--coerce-to-hash (or positions-plist '())))
-                    :active-tab (plist-get response :active-tab)
-                    :layout-mode (plist-get response :layout-mode)
-                    :lings (if (hash-table-p agents-plist)
-                              agents-plist
-                              (olympus-ui--coerce-to-hash (or agents-plist '())))))))
-      (error
-       (message "[olympus] Failed to fetch status: %s" err)
-       nil))))
+  "Fetch current Olympus status.
+Reads directly from local swarm state (fast, no CIDER needed).
+Falls back to MCP via CIDER if local state unavailable."
+  (or (olympus-ui/-build-local-state)
+      (when (olympus-ui/-ensure-api)
+        (condition-case err
+            (let [response (hive-mcp-api-call "olympus" (list :command "status"))]
+              (when (and response (plist-get response :success))
+                (let [hm-raw (hive-mcp-api-call "hivemind" (list :command "status"))
+                      hm-status (if (plist-get hm-raw :text)
+                                    (json-parse-string (plist-get hm-raw :text)
+                                                       :object-type 'plist :null-object nil)
+                                  hm-raw)
+                      agents-plist (plist-get hm-status :agents)
+                      positions-plist (plist-get response :positions)]
+                  (list :ling-count (plist-get response :ling-count)
+                        :layout (plist-get response :layout)
+                        :positions (if (hash-table-p positions-plist)
+                                     positions-plist
+                                     (olympus-ui--coerce-to-hash (or positions-plist '())))
+                        :active-tab (plist-get response :active-tab)
+                        :layout-mode (plist-get response :layout-mode)
+                        :lings (if (hash-table-p agents-plist)
+                                  agents-plist
+                                  (olympus-ui--coerce-to-hash (or agents-plist '())))))))
+          (error
+           (message "[olympus] Failed to fetch status: %s" err)
+           nil)))))
 
 (defn -fetch-lings-with-status []
   "Fetch ling list with their current status.
@@ -395,7 +428,7 @@ FOCUSED-P indicates if this cell should be highlighted."
      (olympus-ui/-render-cell-line id-line width 'default) "\n"
      (if task-line
        (elisp-concat (olympus-ui/-render-cell-line task-line width 'font-lock-comment-face) "\n")
-       (olympus-ui/-render-cell-line "" width 'default) "\n")
+       (elisp-concat (olympus-ui/-render-cell-line "" width 'default) "\n"))
      ;; Fill remaining height
      (apply 'concat
             (mapcar (lambda (_) (elisp-concat (olympus-ui/-render-cell-line "" width 'default) "\n"))
@@ -555,13 +588,15 @@ STATE contains :layout, :positions, :lings."
               (insert (olympus-ui/-render-header state))
               (insert (olympus-ui/-render-grid state))
               (insert (olympus-ui/-render-keybindings)))
-          ;; Degraded mode: no CIDER connection
-          (insert (propertize "  OLYMPUS" 'face '(:height 1.3 :weight bold)))
-          (insert "\n\n")
-          (insert (propertize "  CIDER not connected" 'face 'font-lock-comment-face))
-          (insert "\n\n")
-          (insert (propertize "  Connect CIDER to enable live grid view.\n" 'face 'font-lock-doc-face))
-          (insert (propertize "  M-x cider-connect-clj  or  M-x cider-jack-in-clj" 'face 'font-lock-keyword-face)))
+          ;; Degraded mode: no swarm state and no CIDER
+          (insert
+           (elisp-concat
+            (propertize "  OLYMPUS" 'face '(:height 1.3 :weight bold))
+            "\n\n"
+            (propertize "  No active swarm" 'face 'font-lock-comment-face)
+            "\n\n"
+            (propertize "  Spawn lings to see them here, or connect CIDER for MCP status.\n" 'face 'font-lock-doc-face)
+            (propertize "  C-c h o  Refresh  |  A  Tile windows  |  q  Quit\n" 'face 'font-lock-keyword-face))))
         (goto-char (min pos (point-max)))))))
 
 (defn show []
@@ -600,18 +635,20 @@ STATE contains :layout, :positions, :lings."
             "Focus ling: "
             (when (hash-table-p lings)
               (hash-table-keys lings))))))
+  ;; Update backend state if CIDER connected
   (when (olympus-ui/-ensure-api)
-    (hive-mcp-api-call "olympus" (list :command "focus" :ling-id ling-id))
-    (setq olympus-ui--focused-ling ling-id)
-    (olympus-ui/refresh)))
+    (hive-mcp-api-call "olympus" (list :command "focus" :ling-id ling-id)))
+  ;; Always update local state and refresh
+  (setq olympus-ui--focused-ling ling-id)
+  (olympus-ui/refresh))
 
 (defn unfocus ()
   "Restore grid view (unfocus)."
   (interactive)
   (when (olympus-ui/-ensure-api)
-    (hive-mcp-api-call "olympus" (list :command "focus" :restore t))
-    (setq olympus-ui--focused-ling nil)
-    (olympus-ui/refresh)))
+    (hive-mcp-api-call "olympus" (list :command "focus" :restore t)))
+  (setq olympus-ui--focused-ling nil)
+  (olympus-ui/refresh))
 
 (defn arrange [mode]
   "Arrange grid with MODE (:auto, :manual, :stacked).
