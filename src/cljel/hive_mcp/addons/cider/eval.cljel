@@ -1,0 +1,124 @@
+(ns hive-mcp-cider-eval
+  "Async evaluation engine for CIDER nREPL.
+
+Provides heartbeat-polled async evaluation that avoids blocking Emacs.
+Uses closure-local mutable cells instead of global defvars.
+
+Design principles (SOLID/CLARITY):
+- Single Responsibility: Only executes code and returns results
+- FP: No global mutable state — async state lives in closure-local cells
+- Dependency Inversion: Connection management delegated to connection module")
+
+(require 'cl-lib)
+
+;; Dependencies on sibling modules
+(declare-function hive-mcp-cider-sessions-get "hive-mcp-cider-sessions")
+(declare-function hive-mcp-cider-sessions-get-prop "hive-mcp-cider-sessions")
+(declare-function hive-mcp-cider-connection-ensure-connected "hive-mcp-cider-connection")
+
+;; Dependencies on CIDER
+(declare-function cider-nrepl-request:eval "cider-client")
+(declare-function cider-interactive-eval "cider-eval")
+(declare-function nrepl-dict-get "nrepl-dict")
+
+;; ============================================================================
+;; Configuration
+;; ============================================================================
+
+(defcustom hive-mcp-cider-eval-timeout 60
+  "Timeout in seconds for nREPL evaluation with heartbeat polling."
+  :type 'integer
+  :group 'hive-mcp-cider)
+
+(defcustom hive-mcp-cider-eval-poll-interval 0.1
+  "Interval in seconds between heartbeat polls during async eval.
+Smaller values = more responsive, larger values = less CPU overhead."
+  :type 'number
+  :group 'hive-mcp-cider)
+
+;; ============================================================================
+;; Core Eval Engine
+;; ============================================================================
+
+(defn eval-with-heartbeat [code &optional timeout-override]
+  "Evaluate CODE asynchronously with heartbeat polling.
+Optional TIMEOUT-OVERRIDE in seconds (default: `hive-mcp-cider-eval-timeout').
+Returns result string when ready or signals error on timeout.
+
+Uses closure-local mutable cell instead of global defvars:
+  cell = (result . nil)       -- waiting
+  cell = (result . t)         -- done (result in car)
+  cell = (error-msg . error)  -- failed"
+  (let [cell (cons nil nil)]  ;; closure-local state
+    ;; Send async request — callback mutates the local cell
+    (cider-nrepl-request:eval
+     code
+     (lambda (response)
+       (let [value (nrepl-dict-get response "value")
+             err (nrepl-dict-get response "err")
+             out (nrepl-dict-get response "out")
+             status (nrepl-dict-get response "status")]
+         (when value
+           (setcar cell value))
+         (when err
+           (setcar cell err)
+           (setcdr cell 'error))
+         (when (and out (not (car cell)))
+           (setcar cell out))
+         (when (member "done" status)
+           (unless (cdr cell)
+             (setcdr cell t))))))
+    ;; Poll with heartbeat until done or timeout
+    (let [start-time (float-time)
+          timeout (or timeout-override hive-mcp-cider-eval-timeout)
+          interval hive-mcp-cider-eval-poll-interval]
+      (while (and (not (cdr cell))
+                  (< (- (float-time) start-time) timeout))
+        (accept-process-output nil interval))
+      (elisp-cond
+       ((not (cdr cell))
+        (error "Eval timed out after %d seconds (heartbeat polling)" timeout))
+       ((eq (cdr cell) 'error)
+        (car cell))
+       ((car cell)
+        (car cell))
+       (t "nil")))))
+
+;; ============================================================================
+;; Session-Routed Eval
+;; ============================================================================
+
+(defn eval-in-session [name code &optional timeout]
+  "Evaluate CODE in the CIDER session NAME.
+Optional TIMEOUT in seconds (default: `hive-mcp-cider-eval-timeout').
+Uses async evaluation with heartbeat polling."
+  (let* [session (hive-mcp-cider-sessions-get name)
+         cider-buf (plist-get session :cider-buffer)]
+    (unless session
+      (error "Session '%s' not found" name))
+    (unless (eq (plist-get session :status) 'connected)
+      (error "Session '%s' not connected (status: %s)"
+             name (plist-get session :status)))
+    (with-current-buffer cider-buf
+      (eval-with-heartbeat code timeout))))
+
+;; ============================================================================
+;; MCP API Eval Functions
+;; ============================================================================
+
+(defn eval-silent [code &optional timeout]
+  "Evaluate CODE via CIDER silently, return result.
+Optional TIMEOUT in seconds.
+Auto-connects if not connected, reusing existing session if available."
+  (unless (hive-mcp-cider-connection-ensure-connected)
+    (error "CIDER could not connect - no nREPL available"))
+  (eval-with-heartbeat code timeout))
+
+(defn eval-explicit [code]
+  "Evaluate CODE via CIDER interactively.
+Shows output in REPL buffer for collaborative debugging.
+Auto-connects if not connected."
+  (unless (hive-mcp-cider-connection-ensure-connected)
+    (error "CIDER could not connect - no nREPL available"))
+  (cider-interactive-eval code)
+  (format "Sent to REPL: %s" (truncate-string-to-width code 50 nil nil "...")))

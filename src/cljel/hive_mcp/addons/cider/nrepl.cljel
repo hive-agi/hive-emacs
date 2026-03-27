@@ -1,0 +1,132 @@
+(ns hive-mcp-cider-nrepl
+  "nREPL process management and port utilities.
+
+Handles OS-level process spawning, command building, and network port probing.
+Independent of CIDER — only knows about nREPL as a subprocess.
+
+Design principles (SOLID/CLARITY):
+- Single Responsibility: Only manages nREPL OS processes and port detection
+- Open/Closed: New REPL types add a pcase branch, nothing else changes
+- Pure where possible: build-command is a pure function")
+
+(require 'cl-lib)
+
+;; ============================================================================
+;; Configuration
+;; ============================================================================
+
+(defcustom hive-mcp-cider-nrepl-port 7910
+  "Default port for nREPL server."
+  :type 'integer
+  :group 'hive-mcp-cider)
+
+(defcustom hive-mcp-cider-nrepl-project-dir nil
+  "Project directory for starting nREPL.
+If nil, uses the current project root or `default-directory'."
+  :type '(choice (const nil) directory)
+  :group 'hive-mcp-cider)
+
+(defcustom hive-mcp-cider-nrepl-cljel-project-dir "~/PP/clojure-elisp"
+  "Project directory for ClojureElisp nREPL sessions.
+Should point to the clojure-elisp project root with deps.edn
+containing the compiler and nREPL middleware."
+  :type 'directory
+  :group 'hive-mcp-cider)
+
+(defcustom hive-mcp-cider-nrepl-shadow-build ":app"
+  "Default shadow-cljs build ID."
+  :type 'string
+  :group 'hive-mcp-cider)
+
+;; ============================================================================
+;; Internal State
+;; ============================================================================
+
+(defvar hive-mcp-cider-nrepl--default-process nil
+  "Process object for the auto-started default nREPL server.")
+
+;; ============================================================================
+;; Pure Functions
+;; ============================================================================
+
+(defn build-command [repl-type port dir]
+  "Build the nREPL start command for REPL-TYPE on PORT in DIR.
+Returns a list of (program . args) for start-process.
+REPL-TYPE is one of 'clj, 'cljs, or 'cljel.
+This is a pure function — no side effects."
+  (let [port-str (number-to-string port)]
+    (pcase repl-type
+      ('cljs
+       (list "npx" "shadow-cljs" "watch" hive-mcp-cider-nrepl-shadow-build))
+      ('cljel
+       (list "clojure" "-M:dev" "-m" "nrepl.cmdline"
+             "--port" port-str
+             "--middleware" "[cider.nrepl/cider-middleware,clojure-elisp.nrepl/wrap-cljel]"))
+      (_
+       (list "clojure" "-M:nrepl"
+             "-p" port-str)))))
+
+(defn project-dir [repl-type]
+  "Resolve the project directory for REPL-TYPE.
+Returns absolute path string."
+  (or hive-mcp-cider-nrepl-project-dir
+      (if (eq repl-type 'cljel)
+          (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir)
+        (or (when (fboundp 'project-root)
+              (when-let* [proj (project-current)]
+                (project-root proj)))
+            default-directory))))
+
+;; ============================================================================
+;; Port Utilities
+;; ============================================================================
+
+(defn port-open-p [port]
+  "Check if PORT is accepting connections on localhost.
+Returns t if port is open, nil otherwise."
+  (condition-case nil
+      (let [proc (make-network-process
+                   :name "nrepl-check"
+                   :host "localhost"
+                   :service port
+                   :nowait nil)]
+        (delete-process proc)
+        t)
+    (error nil)))
+
+;; ============================================================================
+;; Process Lifecycle
+;; ============================================================================
+
+(defn start-process [name port repl-type &optional dir]
+  "Start an nREPL process named NAME on PORT for REPL-TYPE.
+Optional DIR overrides the working directory.
+Returns the process object."
+  (let* [resolved-dir (or dir (project-dir repl-type))
+         default-directory resolved-dir
+         buf-name (format "*nREPL-%s*" name)
+         cmd (build-command repl-type port resolved-dir)]
+    (apply #'start-process (format "nrepl-%s" name) buf-name cmd)))
+
+(defn stop-process [process]
+  "Kill a running nREPL process."
+  (when (and process (process-live-p process))
+    (kill-process process)))
+
+(defn start-default []
+  "Start the default nREPL server asynchronously.
+Does not block Emacs startup. Uses `hive-mcp-cider-nrepl-port'."
+  (let* [default-directory (project-dir 'clj)
+         port (number-to-string hive-mcp-cider-nrepl-port)]
+    (message "hive-mcp-cider-nrepl: Starting on port %s in %s..." port default-directory)
+    (setq hive-mcp-cider-nrepl--default-process
+          (start-process "nrepl-server" "*nREPL-server*"
+                         "clojure" "-M:dev" "-m" "nrepl.cmdline"
+                         "--port" port
+                         "--middleware" "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"))))
+
+(defn stop-default []
+  "Stop the default nREPL server."
+  (stop-process hive-mcp-cider-nrepl--default-process)
+  (setq hive-mcp-cider-nrepl--default-process nil)
+  (message "hive-mcp-cider-nrepl: Default server stopped"))
