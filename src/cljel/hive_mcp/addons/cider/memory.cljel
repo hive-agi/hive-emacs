@@ -1,0 +1,143 @@
+(ns hive-mcp-cider-memory
+  "Memory integration for CIDER — save REPL results, query solutions.
+
+Bridges CIDER evaluation results with the hive-mcp memory system.
+
+Design principles (SOLID/CLARITY):
+- Single Responsibility: Only handles memory save/query operations
+- Dependency Inversion: Uses hive-mcp-api for memory ops, not direct storage")
+
+(require 'cl-lib)
+
+;; Dependencies
+(declare-function hive-mcp-api-memory-add "hive-mcp-api")
+(declare-function hive-mcp-api-memory-query "hive-mcp-api")
+(declare-function hive-mcp-api-get-context "hive-mcp-api")
+(declare-function cider-current-ns "cider-client")
+(declare-function cider-interactive-eval "cider-eval")
+(declare-function cider-last-sexp "cider-eval")
+
+;; ============================================================================
+;; Configuration
+;; ============================================================================
+
+(defcustom hive-mcp-cider-memory-auto-log nil
+  "When non-nil, automatically log REPL results to memory."
+  :type 'boolean
+  :group 'hive-mcp-cider)
+
+(defcustom hive-mcp-cider-memory-log-threshold 100
+  "Minimum result length to auto-log (avoids logging trivial results)."
+  :type 'integer
+  :group 'hive-mcp-cider)
+
+;; ============================================================================
+;; Internal State
+;; ============================================================================
+
+(defvar hive-mcp-cider-memory--last-eval nil
+  "Last evaluated expression and result for potential saving.")
+
+;; ============================================================================
+;; Save Operations
+;; ============================================================================
+
+(defn save-last-result []
+  "Save the last REPL result to memory."
+  (interactive)
+  (if hive-mcp-cider-memory--last-eval
+      (let* [expr (plist-get hive-mcp-cider-memory--last-eval :expr)
+             result (plist-get hive-mcp-cider-memory--last-eval :result)
+             ns (plist-get hive-mcp-cider-memory--last-eval :ns)
+             tags (split-string
+                    (read-string "Tags (comma-separated): " "clojure,repl")
+                    "," t " ")
+             content (format "Namespace: %s\nExpression: %s\nResult: %s"
+                              ns expr result)]
+        (hive-mcp-api-memory-add "snippet" content tags)
+        (message "Saved REPL result to memory"))
+    (message "No recent REPL result to save")))
+
+(defn save-defun []
+  "Save the current function definition to memory."
+  (interactive)
+  (let* [bounds (bounds-of-thing-at-point 'defun)
+         defun-text (when bounds
+                       (buffer-substring-no-properties (car bounds) (cdr bounds)))
+         ns (when (fboundp 'cider-current-ns) (cider-current-ns))
+         tags (split-string
+                (read-string "Tags (comma-separated): " "clojure,function")
+                "," t " ")]
+    (if defun-text
+        (let [content (format "Namespace: %s\n\n%s" ns defun-text)]
+          (hive-mcp-api-memory-add "snippet" content tags)
+          (message "Saved function to memory"))
+      (message "No function at point"))))
+
+;; ============================================================================
+;; Query Operations
+;; ============================================================================
+
+(defn query-solutions [query]
+  "Query memory for Clojure solutions matching QUERY."
+  (interactive "sSearch for: ")
+  (let* [results (hive-mcp-api-memory-query "snippet" '("clojure") 20)
+         buf (get-buffer-create "*MCP Clojure Solutions*")]
+    (with-current-buffer buf
+      (erase-buffer)
+      (clojure-mode)
+      (insert ";; === Clojure Solutions from Memory ===\n\n")
+      (if (= (length results) 0)
+          (insert ";; No solutions found\n")
+        (dotimes (i (length results))
+          (let* [entry (aref results i)
+                 content (alist-get 'content entry)
+                 tags (alist-get 'tags entry)]
+            (insert (format ";; --- Entry %d [%s] ---\n"
+                            (1+ i)
+                            (mapconcat #'identity tags ", ")))
+            (insert content)
+            (insert "\n\n"))))
+      (goto-char (point-min)))
+    (display-buffer buf)))
+
+;; ============================================================================
+;; Eval with Context
+;; ============================================================================
+
+(defn eval-with-context []
+  "Evaluate expression with MCP context injected as comment."
+  (interactive)
+  (when (fboundp 'cider-interactive-eval)
+    (let* [ctx (hive-mcp-api-get-context)
+           ctx-comment (format ";; Context: %s @ %s\n"
+                                (plist-get (plist-get ctx :buffer) :name)
+                                (plist-get (plist-get ctx :project) :name))
+           expr (when (fboundp 'cider-last-sexp) (cider-last-sexp))]
+      (setq hive-mcp-cider-memory--last-eval
+            (list :expr expr
+                  :ns (when (fboundp 'cider-current-ns) (cider-current-ns))
+                  :context ctx))
+      (cider-interactive-eval expr))))
+
+;; ============================================================================
+;; Auto-Log Advice
+;; ============================================================================
+
+(defn after-eval-advice [orig-fun &rest args]
+  "Advice around ORIG-FUN with ARGS to capture eval results for saving."
+  (let [result (apply orig-fun args)]
+    (when (and hive-mcp-cider-memory-auto-log
+               result
+               (> (length (format "%s" result)) hive-mcp-cider-memory-log-threshold))
+      (setq hive-mcp-cider-memory--last-eval
+            (list :expr (car args)
+                  :result result
+                  :ns (when (fboundp 'cider-current-ns) (cider-current-ns)))))
+    result))
+
+(defn toggle-auto-log []
+  "Toggle automatic logging of REPL results."
+  (interactive)
+  (setq hive-mcp-cider-memory-auto-log (not hive-mcp-cider-memory-auto-log))
+  (message "Auto-log %s" (if hive-mcp-cider-memory-auto-log "enabled" "disabled")))

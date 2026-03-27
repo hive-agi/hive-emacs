@@ -1,0 +1,69 @@
+(ns hive-mcp-cider-ui
+  "Interactive UI for hive-mcp CIDER integration.
+
+Provides transient menu and minor mode for Emacs-side interaction.
+
+Design principles (SOLID/CLARITY):
+- Single Responsibility: Only defines UI elements
+- References public functions from other modules via declare-function")
+
+(require 'cl-lib)
+
+;; References to public API in other modules
+(declare-function hive-mcp-cider-nrepl-start-default "hive-mcp-cider-nrepl")
+(declare-function hive-mcp-cider-nrepl-stop-default "hive-mcp-cider-nrepl")
+(declare-function hive-mcp-cider-connection-start-auto-connect "hive-mcp-cider-connection")
+(declare-function hive-mcp-cider-memory-eval-with-context "hive-mcp-cider-memory")
+(declare-function hive-mcp-cider-memory-save-last-result "hive-mcp-cider-memory")
+(declare-function hive-mcp-cider-memory-save-defun "hive-mcp-cider-memory")
+(declare-function hive-mcp-cider-memory-query-solutions "hive-mcp-cider-memory")
+(declare-function hive-mcp-cider-memory-toggle-auto-log "hive-mcp-cider-memory")
+
+;; Facade functions referenced for spawn
+(declare-function hive-mcp-cider-spawn-session "hive-mcp-cider")
+
+;; ============================================================================
+;; Transient Menu
+;; ============================================================================
+
+(transient-define-prefix hive-mcp-cider-ui-transient ()
+  "MCP integration menu for CIDER."
+  ["hive-mcp + CIDER"
+   ["nREPL Server"
+    ("n" "Start nREPL (async)" hive-mcp-cider-nrepl-start-default)
+    ("N" "Stop nREPL" hive-mcp-cider-nrepl-stop-default)
+    ("c" "Auto-connect" hive-mcp-cider-connection-start-auto-connect)]
+   ["Spawn"
+    ("sc" "Spawn CLJ"  (lambda () (interactive) (hive-mcp-cider-spawn-session (read-string "Name: ") 'clj)))
+    ("ss" "Spawn CLJS" (lambda () (interactive) (hive-mcp-cider-spawn-session (read-string "Name: ") 'cljs)))
+    ("sl" "Spawn CLJEL" (lambda () (interactive) (hive-mcp-cider-spawn-session (read-string "Name: ") 'cljel)))]
+   ["Evaluate"
+    ("e" "Eval with context" hive-mcp-cider-memory-eval-with-context)]
+   ["Memory"
+    ("s" "Save last result" hive-mcp-cider-memory-save-last-result)
+    ("d" "Save defun" hive-mcp-cider-memory-save-defun)
+    ("q" "Query solutions" hive-mcp-cider-memory-query-solutions)]
+   ["Settings"
+    ("L" "Toggle auto-log" hive-mcp-cider-memory-toggle-auto-log)]])
+
+;; ============================================================================
+;; Minor Mode
+;; ============================================================================
+
+(define-minor-mode hive-mcp-cider-mode
+  "Minor mode for hive-mcp integration with CIDER.
+
+Provides:
+- Save REPL results to memory
+- Query past solutions
+- Clojure-aware context
+
+Note: nREPL auto-start is handled by addon lifecycle hooks.
+Set `hive-mcp-cider-auto-start-nrepl' to t and load the addon."
+  :init-value nil
+  :lighter " MCP-Clj"
+  :global t
+  :group 'hive-mcp-cider
+  (if hive-mcp-cider-mode
+      (message "hive-mcp-cider mode enabled")
+    (message "hive-mcp-cider mode disabled")))
