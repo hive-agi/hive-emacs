@@ -149,7 +149,7 @@
   ((quote spawning) 'olympus-ui-status-spawning)
   ((quote starting) 'olympus-ui-status-spawning)
   ((quote initializing) 'olympus-ui-status-spawning)
-  ('_ 'olympus-ui-status-idle))))
+  (_ 'olympus-ui-status-idle))))
 
 (defun olympus-ui--status--gticon (status)
   "Return a status icon character for STATUS."
@@ -162,7 +162,7 @@
   ((quote spawning) "◌")
   ((quote starting) "◌")
   ((quote initializing) "◌")
-  ('_ "?"))))
+  (_ "?"))))
 
 (defun olympus-ui--ensure-api ()
   "Ensure hive-mcp-api is available, hive-mcp-api-call is bound, and CIDER is connected."

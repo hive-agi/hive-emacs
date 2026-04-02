@@ -74,7 +74,7 @@ Called with single argument: the context plist being built.")
    (condition-case nil
                    (when (beginning-of-defun)
                      (let [start (point)
-                           name (hive-mcp-context---defun-name)]
+                           name (-defun-name)]
                        (end-of-defun)
                        (list
                         :name name
@@ -125,7 +125,7 @@ Called with single argument: the context plist being built.")
              (list
               :root root
               :name (file-name-nondirectory (directory-file-name root))
-              :type (hive-mcp-context---detect-project-type root))))
+              :type (-detect-project-type root))))
 
 (defn- -detect-project-type [root]
   "Detect project type based on marker files in ROOT."
@@ -151,11 +151,11 @@ Called with single argument: the context plist being built.")
              (let [default-directory root]
                (when (file-directory-p (expand-file-name ".git" root))
                  (list
-                  :branch (hive-mcp-context---git-current-branch)
-                  :dirty (if (hive-mcp-context---git-dirty-p) t :false)
-                  :staged (hive-mcp-context---git-staged-files)
-                  :modified (hive-mcp-context---git-modified-files)
-                  :recent-commits (hive-mcp-context---git-recent-commits 5))))))
+                  :branch (-git-current-branch)
+                  :dirty (if (-git-dirty-p) t :false)
+                  :staged (-git-staged-files)
+                  :modified (-git-modified-files)
+                  :recent-commits (-git-recent-commits 5))))))
 
 (defn- -git-current-branch []
   "Return current git branch name."

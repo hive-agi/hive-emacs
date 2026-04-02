@@ -38,7 +38,7 @@
     (pcase repl-type
   ((quote cljs) (list "npx" "shadow-cljs" "watch" hive-mcp-cider-nrepl-shadow-build))
   ((quote cljel) (list "clojure" "-M:dev" "-m" "nrepl.cmdline" "--port" port-str "--middleware" "[cider.nrepl/cider-middleware,clojure-elisp.nrepl/wrap-cljel]"))
-  ('_ (list "clojure" "-M:nrepl" "-p" port-str)))))
+  (_ (list "clojure" "-M:nrepl" "-p" port-str)))))
 
 (defun hive-mcp-cider-nrepl-project-dir (repl-type)
   "Resolve the project directory for REPL-TYPE.\nReturns absolute path string."

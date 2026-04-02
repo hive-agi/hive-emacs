@@ -241,7 +241,7 @@ Returns the slave-id IMMEDIATELY.  The actual spawn happens async."
        0 nil
        (lambda ()
          (condition-case err
-             (hive-mcp-swarm-slaves---do-spawn-async slave-id ling-name presets work-dir term-backend ctx)
+             (-do-spawn-async slave-id ling-name presets work-dir term-backend ctx)
            (error
             ;; Mark slave as errored
             (when-let* [slave (gethash slave-id hive-mcp-swarm--slaves)]

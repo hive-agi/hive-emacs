@@ -44,7 +44,7 @@
   "Build tags list from STATUS, PRIORITY, and PROJECT-ID.
 Includes scope tag for project isolation.
 If PROJECT-ID is nil, falls back to current project."
-  (let* [base-tags (hive-mcp-kanban---build-tags status priority)
+  (let* [base-tags (-build-tags status priority)
          effective-project (or project-id (hive-mcp-memory--project-id))
          scope-tag (hive-mcp-memory--make-scope-tag 'project effective-project)]
     (append base-tags (list scope-tag))))
@@ -74,11 +74,11 @@ Returns the created entry with scope tag for project isolation."
                        :title title
                        :status status
                        :priority prio
-                       :created (hive-mcp-kanban---timestamp)
+                       :created (-timestamp)
                        :started nil
                        :context context)
          ;; Use scoped tags for project isolation
-         tags (hive-mcp-kanban---build-tags-with-scope status prio project-id)]
+         tags (-build-tags-with-scope status prio project-id)]
     ;; Validate priority
     (unless (member prio hive-mcp-kanban-priorities)
       (error "Invalid priority: %s. Must be one of %s"
@@ -99,7 +99,7 @@ Returns the updated entry, or t if deleted (done)."
   (let [entry (hive-mcp-memory-get task-id project-id)]
     (unless entry
       (error "Task not found: %s" task-id))
-    (unless (hive-mcp-kanban---is-kanban-entry-p entry)
+    (unless (-is-kanban-entry-p entry)
       (error "Entry is not a kanban task: %s" task-id))
     ;; If done, delete the task
     (if (string= new-status "done")
@@ -111,16 +111,16 @@ Returns the updated entry, or t if deleted (done)."
              priority (plist-get content :priority)
              new-content (plist-put (copy-sequence content) :status new-status)
              ;; Preserve existing scope or use provided project-id
-             existing-scope (hive-mcp-kanban---extract-scope entry)
+             existing-scope (-extract-scope entry)
              new-tags (if existing-scope
                           ;; Preserve existing scope tag
-                          (append (hive-mcp-kanban---build-tags new-status priority)
+                          (append (-build-tags new-status priority)
                                   (list existing-scope))
                         ;; Use scoped tags with project-id
-                        (hive-mcp-kanban---build-tags-with-scope new-status priority project-id))]
+                        (-build-tags-with-scope new-status priority project-id))]
         ;; Set :started timestamp when moving to "doing"
         (when (string= new-status "doing")
-          (setq new-content (plist-put new-content :started (hive-mcp-kanban---timestamp))))
+          (setq new-content (plist-put new-content :started (-timestamp))))
         ;; Update the entry
         (hive-mcp-memory-update task-id
                                  (list :content new-content
@@ -188,7 +188,7 @@ Returns the updated entry."
   (let [entry (hive-mcp-memory-get task-id project-id)]
     (unless entry
       (error "Task not found: %s" task-id))
-    (unless (hive-mcp-kanban---is-kanban-entry-p entry)
+    (unless (-is-kanban-entry-p entry)
       (error "Entry is not a kanban task: %s" task-id))
     (let* [content (copy-sequence (plist-get entry :content))
            current-status (plist-get content :status)
@@ -205,13 +205,13 @@ Returns the updated entry."
       (when context
         (setq content (plist-put content :context context)))
       ;; Rebuild tags with potentially new priority, preserving scope
-      (let* [existing-scope (hive-mcp-kanban---extract-scope entry)
+      (let* [existing-scope (-extract-scope entry)
              new-tags (if existing-scope
                           ;; Preserve existing scope tag
-                          (append (hive-mcp-kanban---build-tags current-status new-priority)
+                          (append (-build-tags current-status new-priority)
                                   (list existing-scope))
                         ;; Use scoped tags with project-id
-                        (hive-mcp-kanban---build-tags-with-scope current-status new-priority project-id))]
+                        (-build-tags-with-scope current-status new-priority project-id))]
         (hive-mcp-memory-update task-id
                                  (list :content content
                                        :tags new-tags)

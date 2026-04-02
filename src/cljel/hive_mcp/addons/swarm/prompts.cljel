@@ -150,7 +150,7 @@ Returns plist (:text TEXT :pos POS) or nil."
         ('vterm
          (vterm-send-string "y")
          (run-at-time 0.05 nil
-                      (lambda (_unused)
+                      (lambda ()
                         (condition-case err
                             (when (buffer-live-p buffer)
                               (with-current-buffer buffer
@@ -162,7 +162,7 @@ Returns plist (:text TEXT :pos POS) or nil."
          (when (and (boundp 'eat-terminal) eat-terminal)
            (eat-term-send-string eat-terminal "y")
            (run-at-time 0.05 nil
-                        (lambda (_unused)
+                        (lambda ()
                           (condition-case err
                               (when (and (buffer-live-p buffer)
                                          (boundp 'eat-terminal)
@@ -408,7 +408,7 @@ GET-TERMINAL-FN extracts terminal type from slave plist."
   (setq hive-mcp-swarm-prompts--timer
         (run-with-timer
          1 2
-         (lambda (_unused)
+         (lambda ()
            (condition-case err
                (pcase hive-mcp-swarm-prompts-mode
                  ('bypass nil)  ; CLI handles permissions

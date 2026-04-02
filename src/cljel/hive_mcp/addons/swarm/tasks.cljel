@@ -370,7 +370,7 @@ Returns structured response plist."
    (list (completing-read "Slave: " (hash-table-keys hive-mcp-swarm--slaves))
          (read-string "Prompt: ")))
   (if (and hive-mcp-swarm-dispatch-queue-enabled
-           (not (hive-mcp-swarm-tasks---slave-ready-p slave-id)))
+           (not (-slave-ready-p slave-id)))
       ;; Queue for later - terminal not ready
       (let [entry (hive-mcp-swarm-tasks/enqueue-dispatch slave-id prompt timeout priority context)]
         (message "[swarm-tasks] Terminal not ready, queuing dispatch for %s" slave-id)
