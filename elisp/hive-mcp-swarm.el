@@ -222,9 +222,24 @@
   (let* ((agent-id (plist-get event-data :agent-id))
         (event-type (plist-get event-data :event-type))
         (slave (gethash agent-id hive-mcp-swarm--slaves)))
-    (if (not slave) (when (and agent-id (not (string-empty-p agent-id)))
-    (message "[swarm-sync] Agent '%s' not found (event: %s). Known slaves: %s" agent-id event-type (mapconcat #'identity (hash-table-keys hive-mcp-swarm--slaves) ", "))) (when (fboundp 'hive-mcp-swarm-terminal--record-shout)
-    (hive-mcp-swarm-terminal--record-shout agent-id)))))
+    (when (and (not slave) agent-id (not (string-empty-p agent-id)))
+    (let* ((new-slave (list :id agent-id :name agent-id :status 'working :depth 1 :spawn-mode "headless" :cwd nil)))
+    (puthash agent-id new-slave hive-mcp-swarm--slaves)
+    (setq slave new-slave)
+    (message "[swarm-sync] Auto-registered headless agent '%s' (event: %s)" agent-id event-type)))
+    (when slave
+    (when (fboundp 'hive-mcp-swarm-terminal--record-shout)
+    (hive-mcp-swarm-terminal--record-shout agent-id))
+    (let* ((old-status (plist-get slave :status)))
+    (pcase event-type
+  ((or "hivemind-started" ":hivemind-started") (plist-put slave :status 'working) (plist-put slave :current-task (plist-get event-data :task)))
+  ((or "hivemind-progress" ":hivemind-progress") (plist-put slave :status 'working))
+  ((or "hivemind-completed" ":hivemind-completed") (plist-put slave :status 'idle) (plist-put slave :current-task nil) (plist-put slave :tasks-completed (1+ (or (plist-get slave :tasks-completed) 0))))
+  ((or "hivemind-error" ":hivemind-error") (plist-put slave :status 'idle) (plist-put slave :current-task nil) (plist-put slave :tasks-failed (1+ (or (plist-get slave :tasks-failed) 0))))
+  ((or "hivemind-blocked" ":hivemind-blocked") (plist-put slave :status 'blocked)))
+    (let* ((new-status (plist-get slave :status)))
+    (unless (eq old-status new-status)
+    (hive-mcp-swarm--emit-state-changed agent-id old-status new-status)))))))
 
 (defun hive-mcp-swarm--get-terminal-type (slave)
   "Get terminal type for SLAVE plist."
