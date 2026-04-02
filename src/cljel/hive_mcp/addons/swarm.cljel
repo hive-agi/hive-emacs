@@ -263,13 +263,17 @@ Also records shout timestamp for Layer 2 idle detection."
   (let* [agent-id (plist-get event-data :agent-id)
          event-type (plist-get event-data :event-type)
          slave (gethash agent-id hive-mcp-swarm--slaves)]
-    (if (not slave)
-        ;; DEBUG: Log when agent-id not found in hash table
-        (when (and agent-id (not (string-empty-p agent-id)))
-          (message "[swarm-sync] Agent '%s' not found (event: %s). Known slaves: %s"
-                   agent-id event-type
-                   (mapconcat #'identity (hash-table-keys hive-mcp-swarm--slaves) ", ")))
-      ;; Agent found - proceed with sync
+    ;; Auto-register headless/external agents on first hivemind event
+    (when (and (not slave) agent-id (not (string-empty-p agent-id)))
+      (let [new-slave (list :id agent-id :name agent-id
+                            :status 'working :depth 1
+                            :spawn-mode "headless" :cwd nil)]
+        (puthash agent-id new-slave hive-mcp-swarm--slaves)
+        (setq slave new-slave)
+        (message "[swarm-sync] Auto-registered headless agent '%s' (event: %s)"
+                 agent-id event-type)))
+    (when slave
+      ;; Agent found (or just registered) - proceed with sync
       ;; Layer 2: Record shout for idle detection
       (when (fboundp 'hive-mcp-swarm-terminal--record-shout)
         (hive-mcp-swarm-terminal--record-shout agent-id))
