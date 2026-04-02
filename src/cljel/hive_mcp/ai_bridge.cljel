@@ -116,7 +116,7 @@ Returns t if the call is allowed, nil if throttled."
 (defn ai-get-conventions [& limit]
   "Get conventions from memory, formatted for AI context.
 LIMIT overrides `hive-mcp-ai-context-conventions-limit'."
-  (when (hive-mcp-ai-bridge---memory-available-p)
+  (when (hive-mcp-ai-bridge--memory-available-p)
     (let [n (or limit hive-mcp-ai-context-conventions-limit)
           entries (hive-mcp-memory-query 'convention nil nil n)]
       (when entries
@@ -129,7 +129,7 @@ LIMIT overrides `hive-mcp-ai-context-conventions-limit'."
 (defn ai-get-decisions [& limit]
   "Get recent decisions from memory, formatted for AI context.
 LIMIT overrides `hive-mcp-ai-context-decisions-limit'."
-  (when (hive-mcp-ai-bridge---memory-available-p)
+  (when (hive-mcp-ai-bridge--memory-available-p)
     (let [n (or limit hive-mcp-ai-context-decisions-limit)
           entries (hive-mcp-memory-query 'decision nil nil n)]
       (when entries
@@ -146,7 +146,7 @@ LIMIT overrides `hive-mcp-ai-context-decisions-limit'."
   "Search memory semantically for QUERY.
 LIMIT overrides `hive-mcp-ai-context-semantic-limit'.
 Returns formatted context string or nil."
-  (when (and (hive-mcp-ai-bridge---memory-available-p)
+  (when (and (hive-mcp-ai-bridge--memory-available-p)
              (fboundp 'hive-mcp-memory-search-semantic))
     (let [n (or limit hive-mcp-ai-context-semantic-limit)
           results (hive-mcp-memory-search-semantic query n)]
@@ -216,9 +216,9 @@ SOURCE is the AI package name (e.g., \"gptel\").
 TAGS is optional list of additional tags.
 Rate-limited: only stores if not throttled for SOURCE."
   (when (and hive-mcp-ai-store-notable-responses
-             (hive-mcp-ai-bridge---memory-available-p)
+             (hive-mcp-ai-bridge--memory-available-p)
              (hive-mcp-ai-bridge-ai-response-notable-p response)
-             (hive-mcp-ai-bridge---rate-limit-check (elisp-concat "store:" source)))
+             (hive-mcp-ai-bridge--rate-limit-check (elisp-concat "store:" source)))
     (let [truncated (if (> (length response) 2000)
                       (elisp-concat (substring response 0 1997) "...")
                       response)
@@ -274,22 +274,22 @@ Rate-limited per source. Returns task-id on success, nil on failure."
   (let [preset (plist-get kwargs :preset)
         slave-id (plist-get kwargs :slave-id)
         source (plist-get kwargs :source)]
-    (when (and (hive-mcp-ai-bridge---swarm-available-p)
-               (hive-mcp-ai-bridge---rate-limit-check (or source "ai-bridge")))
+    (when (and (hive-mcp-ai-bridge--swarm-available-p)
+               (hive-mcp-ai-bridge--rate-limit-check (or source "ai-bridge")))
       (hive-mcp-ai-bridge-ai-log-interaction
        (or source "ai-bridge")
        "swarm-dispatch"
        (list :task task :preset preset))
       (let [target (or slave-id
                        ;; Find or spawn appropriate slave
-                       (hive-mcp-ai-bridge---get-or-spawn-slave preset))]
+                       (hive-mcp-ai-bridge--get-or-spawn-slave preset))]
         (when target
           (hive-mcp-swarm-dispatch target task))))))
 
 (defn- -get-or-spawn-slave [preset]
   "Get an idle slave with PRESET or spawn one.
 Returns slave-id or nil."
-  (when (hive-mcp-ai-bridge---swarm-available-p)
+  (when (hive-mcp-ai-bridge--swarm-available-p)
     (let [status (hive-mcp-swarm-status)
           slaves (plist-get status :slaves-detail)
           ;; Find idle slave with matching preset
@@ -372,7 +372,7 @@ Returns possibly modified prompt."
 (defn ai-emit-event [event-type data]
   "Emit AI bridge EVENT-TYPE with DATA through channel.
 All CIDER eval calls wrapped in condition-case for safety."
-  (when (hive-mcp-ai-bridge---channel-available-p)
+  (when (hive-mcp-ai-bridge--channel-available-p)
     (condition-case err
                     (hive-mcp-channel-send
                      (append
@@ -388,9 +388,9 @@ All CIDER eval calls wrapped in condition-case for safety."
 
 (defn ai-bridge-status []
   "Get AI bridge status."
-  (list :memory-available (hive-mcp-ai-bridge---memory-available-p)
-        :swarm-available (hive-mcp-ai-bridge---swarm-available-p)
-        :channel-available (hive-mcp-ai-bridge---channel-available-p)
+  (list :memory-available (hive-mcp-ai-bridge--memory-available-p)
+        :swarm-available (hive-mcp-ai-bridge--swarm-available-p)
+        :channel-available (hive-mcp-ai-bridge--channel-available-p)
         :log-entries (length hive-mcp-ai--interaction-log)
         :settings (list :conventions-limit hive-mcp-ai-context-conventions-limit
                         :decisions-limit hive-mcp-ai-context-decisions-limit

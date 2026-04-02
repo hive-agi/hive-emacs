@@ -102,7 +102,7 @@
     (with-current-buffer conn
     (cider-cljel-start)))))
     conn))
-  ('_ (hive-mcp-cider-connection--connect-clj-no-prompt port))))
+  (_ (hive-mcp-cider-connection--connect-clj-no-prompt port))))
 
 (defun hive-mcp-cider-connection-connect-deferred (repl-type port)
   "Connect CIDER to nREPL on PORT without blocking emacsclient.\nDefers cider-connect-clj to Emacs event loop via run-at-time,\npolls with accept-process-output until connected or timeout.\nReturns the connection buffer or signals error.\n\nUses closure-local mutable cell instead of global defvars."
@@ -216,7 +216,7 @@
   "Start the auto-connect timer."
   (unless hive-mcp-cider-connection--auto-timer
     (setq hive-mcp-cider-connection--auto-attempts 0)
-    (setq hive-mcp-cider-connection--auto-timer (run-with-timer hive-mcp-cider-connection-retry-interval hive-mcp-cider-connection-retry-interval #'-auto-connect-tick))
+    (setq hive-mcp-cider-connection--auto-timer (run-with-timer hive-mcp-cider-connection-retry-interval hive-mcp-cider-connection-retry-interval #'hive-mcp-cider-connection--auto-connect-tick))
     (message "hive-mcp-cider: Auto-connect started (checking every %.1fs)" hive-mcp-cider-connection-retry-interval)))
 
 (defun hive-mcp-cider-connection-stop-auto-connect ()

@@ -459,6 +459,7 @@ Also stops Layer 2 idle detection watcher."
 
 ;; Internal function aliases for test compatibility (pre-decomposition API)
 (defalias 'hive-mcp-swarm--slave-matches-filter 'hive-mcp-swarm-tasks--slave-matches-filter)
+(defalias 'hive-mcp-swarm--slave-ready-p 'hive-mcp-swarm-tasks--slave-ready-p)
 
 ;; ============================================================================
 ;; Status and Monitoring

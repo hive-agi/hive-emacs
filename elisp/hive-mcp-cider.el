@@ -60,6 +60,10 @@
 
 (defalias 'hive-mcp-cider-transient 'hive-mcp-cider-ui-transient)
 
+(defun hive-mcp-cider-spawn-session-from-plist (params)
+  "Spawn a new CIDER session from a structured request plist.\nMCP entry point — named params prevent positional arg ordering bugs.\nPARAMS is a plist with keys :name, :repl-type, :port, :project-dir, :agent-id.\nDelegates to spawn-session after destructuring."
+  (hive-mcp-cider-spawn-session (plist-get params :name) (plist-get params :repl-type) (plist-get params :port) (plist-get params :project-dir) (plist-get params :agent-id)))
+
 (defun hive-mcp-cider-spawn-session (name &optional repl-type port project-dir agent-id)
   "Spawn a new named CIDER session with its own nREPL server.\nNAME is the session identifier (e.g., \"agent-1\", \"task-render\").\nREPL-TYPE is one of 'clj (default), 'cljs, or 'cljel.\nPORT is the nREPL port (default: auto-assign from session range).\nPROJECT-DIR is the directory to start nREPL in (default: current project).\nAGENT-ID optionally links this session to a swarm agent."
   (interactive "sSession name: ")
@@ -134,7 +138,7 @@
   (message "hive-mcp-cider: shutdown complete"))
 
 (with-eval-after-load 'hive-mcp-addons
-  (hive-mcp-addon-register 'cider :version "0.4.0" :description "Integration with CIDER (Clojure IDE) - multi-REPL (CLJ/CLJS/CLJEL)" :requires '(cider hive-mcp-api) :provides '(hive-mcp-cider-mode hive-mcp-cider-transient) :init #'-addon-init :async-init #'-addon-async-init :shutdown #'-addon-shutdown))
+  (hive-mcp-addon-register 'cider :version "0.4.0" :description "Integration with CIDER (Clojure IDE) - multi-REPL (CLJ/CLJS/CLJEL)" :requires '(cider hive-mcp-api) :provides '(hive-mcp-cider-mode hive-mcp-cider-transient) :init #'hive-mcp-cider--addon-init :async-init #'hive-mcp-cider--addon-async-init :shutdown #'hive-mcp-cider--addon-shutdown))
 
 (provide 'hive-mcp-cider)
 ;;; hive-mcp-cider.el ends here

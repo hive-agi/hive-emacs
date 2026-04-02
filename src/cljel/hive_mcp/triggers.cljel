@@ -268,8 +268,8 @@ BUFFER is the compilation buffer, STATUS is the result string."
 ;;;###autoload
 (defn setup-hooks []
   "Set up hive-mcp hooks."
-  (add-hook 'after-save-hook #'hive-mcp-triggers---after-save-handler)
-  (add-hook 'compilation-finish-functions #'hive-mcp-triggers---compilation-finish-handler))
+  (add-hook 'after-save-hook 'hive-mcp-triggers--after-save-handler)
+  (add-hook 'compilation-finish-functions 'hive-mcp-triggers--compilation-finish-handler))
 
 ;;; Workflow Stubs (to be defined in hive-mcp-workflows.el)
 

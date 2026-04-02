@@ -77,6 +77,18 @@ Architecture: Facade pattern — delegates to sub-modules:
 ;; Orchestrated Operations (cross-module coordination)
 ;; ============================================================================
 
+(defn spawn-session-from-plist [params]
+  "Spawn a new CIDER session from a structured request plist.
+MCP entry point — named params prevent positional arg ordering bugs.
+PARAMS is a plist with keys :name, :repl-type, :port, :project-dir, :agent-id.
+Delegates to spawn-session after destructuring."
+  (spawn-session
+    (plist-get params :name)
+    (plist-get params :repl-type)
+    (plist-get params :port)
+    (plist-get params :project-dir)
+    (plist-get params :agent-id)))
+
 (defn spawn-session [name &optional repl-type port project-dir agent-id]
   "Spawn a new named CIDER session with its own nREPL server.
 NAME is the session identifier (e.g., \"agent-1\", \"task-render\").
