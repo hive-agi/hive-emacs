@@ -331,7 +331,7 @@ Duplicates removed, preserving first occurrence (explicit wins)."
      :test #'string=
      :from-end t)))
 
-(defn list []
+(defn list-presets []
   "List all available presets (chroma + file-based + memory-based)."
   (interactive)
   (-ensure-loaded)
@@ -349,7 +349,7 @@ Duplicates removed, preserving first occurrence (explicit wins)."
                  (length memory-presets))
       all-names)))
 
-(defn get [name]
+(defn get-preset [name]
   "Get content of preset NAME.
 Priority: chroma -> memory-based (project-scoped) -> file-based (.md fallback)."
   (or (-get-chroma-content name)
@@ -361,7 +361,7 @@ Priority: chroma -> memory-based (project-scoped) -> file-based (.md fallback)."
 INJECTED-CONTEXT is prepended if non-nil."
   (let [contents '()]
     (dolist (preset presets)
-      (when-let* [content (hive-mcp-swarm-presets/get preset)]
+      (when-let* [content (hive-mcp-swarm-presets/get-preset preset)]
         (push content contents)))
     (when (or contents injected-context)
       (let [preset-body (when contents

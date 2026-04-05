@@ -15,7 +15,7 @@ Design principles (SOLID/CLARITY):
 (require 'cl-lib)
 
 ;; Dependencies on sibling modules
-(declare-function hive-mcp-cider-sessions-get "hive-mcp-cider-sessions")
+(declare-function hive-mcp-cider-sessions-lookup "hive-mcp-cider-sessions")
 (declare-function hive-mcp-cider-sessions-get-prop "hive-mcp-cider-sessions")
 (declare-function hive-mcp-cider-sessions-update-prop "hive-mcp-cider-sessions")
 (declare-function hive-mcp-cider-sessions-update-props "hive-mcp-cider-sessions")
@@ -177,7 +177,7 @@ CONN is the original connection buffer object."
 
 (defn- -cancel-session-timer [name]
   "Cancel the auto-connect timer for session NAME."
-  (when-let* [session (hive-mcp-cider-sessions-get name)
+  (when-let* [session (hive-mcp-cider-sessions-lookup name)
               timer (plist-get session :timer)]
     (when (timerp timer)
       (cancel-timer timer))
@@ -186,7 +186,7 @@ CONN is the original connection buffer object."
 (defn try-connect-session [name]
   "Try to connect CIDER to session NAME.
 Called by timer for spawned sessions. Dispatches based on :repl-type."
-  (let* [session (hive-mcp-cider-sessions-get name)
+  (let* [session (hive-mcp-cider-sessions-lookup name)
          port (plist-get session :port)
          status (plist-get session :status)
          repl-type (or (plist-get session :repl-type) 'clj)]

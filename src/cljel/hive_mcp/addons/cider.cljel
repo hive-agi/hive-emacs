@@ -42,7 +42,7 @@ Architecture: Facade pattern — delegates to sub-modules:
 
 ;; Session management
 (defalias 'hive-mcp-cider-list-sessions 'hive-mcp-cider-sessions-list-all)
-(defalias 'hive-mcp-cider-get-session 'hive-mcp-cider-sessions-get)
+(defalias 'hive-mcp-cider-get-session 'hive-mcp-cider-sessions-lookup)
 
 ;; nREPL process
 (defalias 'hive-mcp-cider-start-nrepl 'hive-mcp-cider-nrepl-start-default)
@@ -101,7 +101,7 @@ AGENT-ID optionally links this session to a swarm agent."
          the-port (or port (hive-mcp-cider-sessions-find-available-port
                              #'hive-mcp-cider-nrepl-port-open-p))
          dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype))
-         process (hive-mcp-cider-nrepl-start-process name the-port rtype dir)
+         process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir)
          timer (run-with-timer 2 1
                                 (lambda ()
                                   (condition-case err
@@ -163,7 +163,7 @@ Connection is deferred to Emacs event loop to avoid blocking emacsclient."
   (interactive
    (list (completing-read "Kill session: "
                           (hive-mcp-cider-sessions-names))))
-  (let [session (hive-mcp-cider-sessions-get name)]
+  (let [session (hive-mcp-cider-sessions-lookup name)]
     (when session
       ;; Cancel any timer
       (when-let* [timer (plist-get session :timer)]

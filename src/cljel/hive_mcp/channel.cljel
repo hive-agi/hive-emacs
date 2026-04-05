@@ -222,7 +222,7 @@ Returns (decoded-value . consumed-bytes)."
 ;;; Process Filter & Sentinel
 ;;; ============================================================================
 
-(defn- filter [_proc str]
+(defn- process-filter [_proc str]
   "Process filter for channel receiving STR.
 _PROC is the process (unused, required by Emacs process API)."
   (with-current-buffer (or hive-mcp-channel--buffer
@@ -317,7 +317,7 @@ _PROC is the process (unused, required by Emacs process API)."
                      :family 'local
                      :service hive-mcp-channel-socket-path
                      :coding 'binary
-                     :filter #'hive-mcp-channel--filter
+                     :filter #'hive-mcp-channel--process-filter
                      :sentinel #'hive-mcp-channel--sentinel))
                    ('tcp
                     (make-network-process
@@ -325,7 +325,7 @@ _PROC is the process (unused, required by Emacs process API)."
                      :host hive-mcp-channel-host
                      :service hive-mcp-channel-port
                      :coding 'binary
-                     :filter #'hive-mcp-channel--filter
+                     :filter #'hive-mcp-channel--process-filter
                      :sentinel #'hive-mcp-channel--sentinel)))]
         (setq hive-mcp-channel--process proc)
         (message "hive-mcp-channel: Connecting to %s..."

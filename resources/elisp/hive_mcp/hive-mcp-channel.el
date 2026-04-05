@@ -147,7 +147,7 @@
     (nreverse pairs))))
   (t (error "Invalid bencode at pos %d" pos)))))) (cons (decode-one) pos))))
 
-(defun hive-mcp-channel--filter (_proc str)
+(defun hive-mcp-channel--process-filter (_proc str)
   "Process filter for channel receiving STR.\n_PROC is the process (unused, required by Emacs process API)."
   (with-current-buffer (or hive-mcp-channel--buffer (setq hive-mcp-channel--buffer (get-buffer-create " *mcp-channel*")))
     (goto-char (point-max))
@@ -207,8 +207,8 @@
     (hive-mcp-channel-disconnect))
   (condition-case err
     (let* ((proc (pcase hive-mcp-channel-type
-  ((quote unix) (make-network-process :name "hive-mcp-channel" :family 'local :service hive-mcp-channel-socket-path :coding 'binary :filter #'hive-mcp-channel--filter :sentinel #'hive-mcp-channel--sentinel))
-  ((quote tcp) (make-network-process :name "hive-mcp-channel" :host hive-mcp-channel-host :service hive-mcp-channel-port :coding 'binary :filter #'hive-mcp-channel--filter :sentinel #'hive-mcp-channel--sentinel)))))
+  ((quote unix) (make-network-process :name "hive-mcp-channel" :family 'local :service hive-mcp-channel-socket-path :coding 'binary :filter #'hive-mcp-channel--process-filter :sentinel #'hive-mcp-channel--sentinel))
+  ((quote tcp) (make-network-process :name "hive-mcp-channel" :host hive-mcp-channel-host :service hive-mcp-channel-port :coding 'binary :filter #'hive-mcp-channel--process-filter :sentinel #'hive-mcp-channel--sentinel)))))
     (setq hive-mcp-channel--process proc)
     (message "hive-mcp-channel: Connecting to %s..." (if (eq hive-mcp-channel-type 'unix) hive-mcp-channel-socket-path (format "%s:%d" hive-mcp-channel-host hive-mcp-channel-port))))
   (file-error (message "hive-mcp-channel: Connect failed: %s" (error-message-string err))

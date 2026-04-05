@@ -300,7 +300,7 @@
 
 (defalias 'hive-mcp-swarm-deny 'hive-mcp-swarm-prompts-deny)
 
-(defalias 'hive-mcp-swarm-list-prompts 'hive-mcp-swarm-prompts-list)
+(defalias 'hive-mcp-swarm-list-prompts 'hive-mcp-swarm-prompts-show)
 
 (defalias 'hive-mcp-swarm-reload-presets 'hive-mcp-swarm-presets-reload)
 

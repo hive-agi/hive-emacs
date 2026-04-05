@@ -498,7 +498,7 @@ Returns the buffer (async startup - may not be immediately ready)."
            (eat-exec buf "swarm-shell" "/bin/bash" nil '("-l")))
          buf)))))
 
-(defn kill-buffer [buffer]
+(defn cleanup-buffer [buffer]
   "Kill terminal BUFFER without prompts.
 Handles process cleanup to prevent confirmation dialogs."
   (when (buffer-live-p buffer)

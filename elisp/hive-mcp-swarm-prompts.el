@@ -81,7 +81,7 @@
     (when (re-search-backward (regexp-opt hive-mcp-swarm-prompts-patterns) search-start t)
     (let* ((line-start (line-beginning-position))
         (line-end (line-end-position)))
-    (hive-mcp-swarm-prompts-list :text (buffer-substring-no-properties line-start line-end) :pos (match-beginning 0)))))))))
+    (list :text (buffer-substring-no-properties line-start line-end) :pos (match-beginning 0)))))))))
 
 (defun hive-mcp-swarm-prompts--slave-active-p (slave buffer)
   "Return t if SLAVE with BUFFER is ready for prompts."
@@ -150,7 +150,7 @@
 
 (defun hive-mcp-swarm-prompts--queue-prompt (slave-id prompt-text buffer)
   "Add a prompt to the pending queue and notify user.\nEmits prompt-shown event via channel for push-based updates."
-  (push (hive-mcp-swarm-prompts-list :slave-id slave-id :prompt prompt-text :buffer buffer :timestamp (current-time)) hive-mcp-swarm-prompts--pending)
+  (push (list :slave-id slave-id :prompt prompt-text :buffer buffer :timestamp (current-time)) hive-mcp-swarm-prompts--pending)
   (hive-mcp-swarm-prompts--display-prompt slave-id prompt-text)
   (when hive-mcp-swarm-prompts-notify
     (message "[swarm-prompts] Prompt from %s: %s" slave-id (truncate-string-to-width prompt-text 50)))
@@ -233,7 +233,7 @@
   (message "[swarm-prompts] Denied: %s" (plist-get prompt :slave-id)))
   (message "[swarm-prompts] No pending prompts")))
 
-(defun hive-mcp-swarm-prompts-list ()
+(defun hive-mcp-swarm-prompts-show ()
   "List all pending prompts in the prompts buffer."
   (interactive)
   (hive-mcp-swarm-prompts-update-buffer)
