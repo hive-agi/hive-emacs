@@ -98,7 +98,7 @@ Returns t if port is open, nil otherwise."
 ;; Process Lifecycle
 ;; ============================================================================
 
-(defn start-process [name port repl-type &optional dir]
+(defn launch-process [name port repl-type &optional dir]
   "Start an nREPL process named NAME on PORT for REPL-TYPE.
 Optional DIR overrides the working directory.
 Returns the process object."

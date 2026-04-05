@@ -358,7 +358,7 @@ SLAVES-HASH is hash table of slave-id -> slave plist."
         (message "[swarm-prompts] Denied: %s" (plist-get prompt :slave-id)))
     (message "[swarm-prompts] No pending prompts")))
 
-(defn list []
+(defn show []
   "List all pending prompts in the prompts buffer."
   (interactive)
   (hive-mcp-swarm-prompts/update-buffer)

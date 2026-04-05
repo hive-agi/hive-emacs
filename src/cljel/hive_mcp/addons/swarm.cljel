@@ -421,7 +421,7 @@ Also stops Layer 2 idle detection watcher."
 (defalias 'hive-mcp-swarm-respond 'hive-mcp-swarm-prompts-respond)
 (defalias 'hive-mcp-swarm-approve 'hive-mcp-swarm-prompts-approve)
 (defalias 'hive-mcp-swarm-deny 'hive-mcp-swarm-prompts-deny)
-(defalias 'hive-mcp-swarm-list-prompts 'hive-mcp-swarm-prompts-list)
+(defalias 'hive-mcp-swarm-list-prompts 'hive-mcp-swarm-prompts-show)
 
 ;; ============================================================================
 ;; Preset Management
@@ -430,7 +430,7 @@ Also stops Layer 2 idle detection watcher."
 ;; Delegated to hive-mcp-swarm-presets module.
 
 (defalias 'hive-mcp-swarm-reload-presets 'hive-mcp-swarm-presets-reload)
-(defalias 'hive-mcp-swarm-list-presets 'hive-mcp-swarm-presets-list)
+(defalias 'hive-mcp-swarm-list-presets 'hive-mcp-swarm-presets-list-presets)
 (defalias 'hive-mcp-swarm--build-system-prompt 'hive-mcp-swarm-presets-build-system-prompt)
 (defalias 'hive-mcp-swarm-add-custom-presets-dir 'hive-mcp-swarm-presets-add-custom-dir)
 (defalias 'hive-mcp-swarm--role-to-presets 'hive-mcp-swarm-presets-role-to-presets)

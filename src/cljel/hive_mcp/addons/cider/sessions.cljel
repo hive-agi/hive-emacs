@@ -54,7 +54,7 @@ Signals error if NAME already exists."
     (remhash name hive-mcp-cider-sessions--registry)
     session))
 
-(defn get [name]
+(defn lookup [name]
   "Get session plist for NAME, or nil if not found."
   (gethash name hive-mcp-cider-sessions--registry))
 

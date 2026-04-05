@@ -533,7 +533,7 @@ STORAGE: Delegated to MCP server -> Chroma."
         dur (or duration hive-mcp-memory-default-duration)]
     (-delegate 'add type content tags-with-scope pid dur)))
 
-(defn get [id &optional project-id]
+(defn lookup [id &optional project-id]
   "Retrieve memory entry by ID from PROJECT-ID.
 STORAGE: Delegated to MCP server -> Chroma."
   (-delegate 'get id project-id))
@@ -548,7 +548,7 @@ SCOPE-FILTER controls scope filtering.
 STORAGE: Delegated to MCP server -> Chroma."
   (-delegate 'query type tags project-id limit duration scope-filter))
 
-(defn update [id updates &optional project-id]
+(defn update-entry [id updates &optional project-id]
   "Update memory entry ID with UPDATES plist.
 STORAGE: Delegated to MCP server -> Chroma."
   (-delegate 'update id updates project-id))

@@ -126,7 +126,7 @@
   ((quote global) "scope:global")
   ((quote domain) (format "scope:domain:%s" name))
   ((quote project) (format "scope:project:%s" name))
-  ('_ (error "Invalid scope level: %s" level))))
+  (_ (error "Invalid scope level: %s" level))))
 
 (defun hive-mcp-memory--parse-scope-tag (tag)
   "Parse a scope TAG into (level . name) cons.\nReturns nil if TAG is not a scope tag."
@@ -289,7 +289,7 @@
   ((quote migrate) (let* ((old-project-id (nth 0 args))
         (new-project-id (nth 1 args)))
     (format "(hive-mcp.tools.memory/handle-memory {:command \"migrate\" :old-project-id %S :new-project-id %S})" old-project-id new-project-id)))
-  ('_ (error "Unknown memory operation: %s" op))))
+  (_ (error "Unknown memory operation: %s" op))))
 
 (defun hive-mcp-memory-init-cider-delegate ()
   "Initialize the CIDER-based storage delegate.\nCall this after CIDER connects to enable memory operations."
@@ -309,7 +309,7 @@
         (dur (or duration hive-mcp-memory-default-duration)))
     (hive-mcp-memory--delegate 'add type content tags-with-scope pid dur)))
 
-(defun hive-mcp-memory-get (id &optional project-id)
+(defun hive-mcp-memory-lookup (id &optional project-id)
   "Retrieve memory entry by ID from PROJECT-ID.\nSTORAGE: Delegated to MCP server -> Chroma."
   (hive-mcp-memory--delegate 'get id project-id))
 
@@ -317,7 +317,7 @@
   "Query memories by TYPE and optional TAGS.\nPROJECT-ID specifies the project.\nLIMIT caps the number of results.\nDURATION filters by lifespan category.\nSCOPE-FILTER controls scope filtering.\n\nSTORAGE: Delegated to MCP server -> Chroma."
   (hive-mcp-memory--delegate 'query type tags project-id limit duration scope-filter))
 
-(defun hive-mcp-memory-update (id updates &optional project-id)
+(defun hive-mcp-memory-update-entry (id updates &optional project-id)
   "Update memory entry ID with UPDATES plist.\nSTORAGE: Delegated to MCP server -> Chroma."
   (hive-mcp-memory--delegate 'update id updates project-id))
 
