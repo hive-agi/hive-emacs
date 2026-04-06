@@ -263,15 +263,21 @@ Also records shout timestamp for Layer 2 idle detection."
   (let* [agent-id (plist-get event-data :agent-id)
          event-type (plist-get event-data :event-type)
          slave (gethash agent-id hive-mcp-swarm--slaves)]
-    ;; Auto-register headless/external agents on first hivemind event
+    ;; Auto-register unknown agents on first hivemind event.
+    ;; Try to recover an existing vterm buffer by naming convention so that
+    ;; Olympus arrange can find it (forge-strike lings lose their hash entry
+    ;; after smite but their vterm buffer survives).
     (when (and (not slave) agent-id (not (string-empty-p agent-id)))
-      (let [new-slave (list :id agent-id :name agent-id
-                            :status 'working :depth 1
-                            :spawn-mode "headless" :cwd nil)]
+      (let* [candidate-buf (get-buffer (format "%s%s*" hive-mcp-swarm-buffer-prefix agent-id))
+             live-buf (when (and candidate-buf (buffer-live-p candidate-buf)) candidate-buf)
+             new-slave (list :id agent-id :name agent-id
+                             :status 'working :depth 1
+                             :spawn-mode (if live-buf "claude" "headless")
+                             :buffer live-buf :cwd nil)]
         (puthash agent-id new-slave hive-mcp-swarm--slaves)
         (setq slave new-slave)
-        (message "[swarm-sync] Auto-registered headless agent '%s' (event: %s)"
-                 agent-id event-type)))
+        (message "[swarm-sync] Auto-registered agent '%s' (event: %s, buffer: %s)"
+                 agent-id event-type (if live-buf "found" "none"))))
     (when slave
       ;; Agent found (or just registered) - proceed with sync
       ;; Layer 2: Record shout for idle detection
