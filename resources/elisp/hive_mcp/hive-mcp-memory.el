@@ -126,7 +126,7 @@
   ((quote global) "scope:global")
   ((quote domain) (format "scope:domain:%s" name))
   ((quote project) (format "scope:project:%s" name))
-  (_ (error "Invalid scope level: %s" level))))
+  ('_ (error "Invalid scope level: %s" level))))
 
 (defun hive-mcp-memory--parse-scope-tag (tag)
   "Parse a scope TAG into (level . name) cons.\nReturns nil if TAG is not a scope tag."
@@ -289,12 +289,12 @@
   ((quote migrate) (let* ((old-project-id (nth 0 args))
         (new-project-id (nth 1 args)))
     (format "(hive-mcp.tools.memory/handle-memory {:command \"migrate\" :old-project-id %S :new-project-id %S})" old-project-id new-project-id)))
-  (_ (error "Unknown memory operation: %s" op))))
+  ('_ (error "Unknown memory operation: %s" op))))
 
 (defun hive-mcp-memory-init-cider-delegate ()
   "Initialize the CIDER-based storage delegate.\nCall this after CIDER connects to enable memory operations."
   (interactive)
-  (setq hive-mcp-memory--storage-delegate #'hive-mcp-memory--cider-delegate)
+  (setq hive-mcp-memory--storage-delegate #'-cider-delegate)
   (message "hive-mcp-memory: CIDER delegate initialized"))
 
 (defun hive-mcp-memory--delegate (&rest args)
@@ -419,10 +419,17 @@
   (let* ((pid (hive-mcp-memory--project-id)))
     (list :project-id pid :project-root (hive-mcp-memory--get-project-root) :notes (hive-mcp-memory-query 'note nil pid 10) :conventions (hive-mcp-memory-query 'convention nil pid) :recent-decisions (hive-mcp-memory-query 'decision nil pid 5) :snippets (hive-mcp-memory-query 'snippet nil pid 20))))
 
+(defun hive-mcp-memory--on-cider-connected ()
+  "Hook: auto-init storage delegate when CIDER connects."
+  (when (and (featurep 'cider) (cider-connected-p) (not hive-mcp-memory--storage-delegate))
+    (hive-mcp-memory-init-cider-delegate)))
+
 (defun hive-mcp-memory-init ()
-  "Initialize memory system.\nIn Chroma-delegate mode, this just clears caches."
+  "Initialize memory system.\nIn Chroma-delegate mode, clears caches and wires CIDER delegate.\nIf CIDER is already connected, sets delegate immediately.\nOtherwise registers on cider-connected-hook for deferred init."
   (clrhash hive-mcp-memory--project-config-cache)
   (clrhash hive-mcp-memory--cache)
+  (if (and (featurep 'cider) (cider-connected-p)) (hive-mcp-memory-init-cider-delegate) (when (featurep 'cider)
+    (add-hook 'cider-connected-hook 'hive-mcp-memory--on-cider-connected)))
   (message "hive-mcp-memory initialized (Chroma-delegate mode)"))
 
 (provide 'hive-mcp-memory)
