@@ -223,10 +223,13 @@
         (event-type (plist-get event-data :event-type))
         (slave (gethash agent-id hive-mcp-swarm--slaves)))
     (when (and (not slave) agent-id (not (string-empty-p agent-id)))
-    (let* ((new-slave (list :id agent-id :name agent-id :status 'working :depth 1 :spawn-mode "headless" :cwd nil)))
+    (let* ((candidate-buf (get-buffer (format "%s%s*" hive-mcp-swarm-buffer-prefix agent-id)))
+        (live-buf (when (and candidate-buf (buffer-live-p candidate-buf))
+    candidate-buf))
+        (new-slave (list :id agent-id :name agent-id :status 'working :depth 1 :spawn-mode (if live-buf "claude" "headless") :buffer live-buf :cwd nil)))
     (puthash agent-id new-slave hive-mcp-swarm--slaves)
     (setq slave new-slave)
-    (message "[swarm-sync] Auto-registered headless agent '%s' (event: %s)" agent-id event-type)))
+    (message "[swarm-sync] Auto-registered agent '%s' (event: %s, buffer: %s)" agent-id event-type (if live-buf "found" "none"))))
     (when slave
     (when (fboundp 'hive-mcp-swarm-terminal--record-shout)
     (hive-mcp-swarm-terminal--record-shout agent-id))
@@ -248,7 +251,7 @@
 (defun hive-mcp-swarm-start-auto-approve ()
   "Start the auto-approve watcher timer."
   (interactive)
-  (hive-mcp-swarm-prompts-start-watcher hive-mcp-swarm--slaves #'hive-mcp-swarm--get-terminal-type)
+  (hive-mcp-swarm-prompts-start-watcher hive-mcp-swarm--slaves #'-get-terminal-type)
   (message "[swarm] Auto-approve watcher started"))
 
 (defun hive-mcp-swarm-stop-auto-approve ()
@@ -276,7 +279,7 @@
   "Start the auto-shout completion watcher timer.\nAlso starts Layer 2 idle detection watcher."
   (interactive)
   (when (fboundp 'hive-mcp-swarm-terminal-start-completion-watcher)
-    (hive-mcp-swarm-terminal-start-completion-watcher #'hive-mcp-swarm--on-task-completion))
+    (hive-mcp-swarm-terminal-start-completion-watcher #'-on-task-completion))
   (when (fboundp 'hive-mcp-swarm-terminal-start-idle-watcher)
     (hive-mcp-swarm-terminal-start-idle-watcher))
   (message "[swarm] Completion + idle watchers started (auto-shout + Layer 2)"))
@@ -304,7 +307,7 @@
 
 (defalias 'hive-mcp-swarm-reload-presets 'hive-mcp-swarm-presets-reload)
 
-(defalias 'hive-mcp-swarm-list-presets 'hive-mcp-swarm-presets-list)
+(defalias 'hive-mcp-swarm-list-presets 'hive-mcp-swarm-presets-list-presets)
 
 (defalias 'hive-mcp-swarm--build-system-prompt 'hive-mcp-swarm-presets-build-system-prompt)
 
@@ -518,7 +521,7 @@
 (defun hive-mcp-swarm-api-pending-prompts ()
   "API: Get list of pending prompts awaiting human decision.\nReturns list of prompts with slave-id, prompt text, and timestamp.\nCLARITY: L - Uses extracted helper for formatting."
   (hive-mcp-with-fallback (let* ((pending (hive-mcp-swarm-prompts-get-pending))
-        (prompts (mapcar #'hive-mcp-swarm--format-pending-prompt pending)))
+        (prompts (mapcar #'-format-pending-prompt pending)))
     (list :count (length prompts) :prompts prompts :mode hive-mcp-swarm-prompts-mode)) (list :error "pending-prompts-failed" :count 0 :prompts nil)))
 
 (defun hive-mcp-swarm-api-respond-prompt (slave-id response)
@@ -559,12 +562,12 @@
 (defun hive-mcp-swarm--register-hivemind-sync-hooks ()
   "Register sync handler with all hivemind event types."
   (dolist (event-type '(:hivemind-started :hivemind-progress :hivemind-completed :hivemind-error :hivemind-blocked))
-    (hive-mcp-swarm-hooks-register event-type #'hive-mcp-swarm--sync-state-from-hivemind)))
+    (hive-mcp-swarm-hooks-register event-type #'-sync-state-from-hivemind)))
 
 (defun hive-mcp-swarm--unregister-hivemind-sync-hooks ()
   "Unregister sync handler from all hivemind event types."
   (dolist (event-type '(:hivemind-started :hivemind-progress :hivemind-completed :hivemind-error :hivemind-blocked))
-    (hive-mcp-swarm-hooks-unregister event-type #'hive-mcp-swarm--sync-state-from-hivemind)))
+    (hive-mcp-swarm-hooks-unregister event-type #'-sync-state-from-hivemind)))
 
 (defun hive-mcp-swarm--addon-init ()
   "Initialize swarm addon."
@@ -591,7 +594,7 @@
   (setq hive-mcp-swarm--session-id nil))
 
 (with-eval-after-load 'hive-mcp-addons
-  (hive-mcp-addon-register 'swarm :version "0.1.0" :description "Claude swarm orchestration for parallel task execution" :requires '() :provides '(hive-mcp-swarm-mode hive-mcp-swarm-transient) :init #'hive-mcp-swarm--addon-init :shutdown #'hive-mcp-swarm--addon-shutdown))
+  (hive-mcp-addon-register 'swarm :version "0.1.0" :description "Claude swarm orchestration for parallel task execution" :requires '() :provides '(hive-mcp-swarm-mode hive-mcp-swarm-transient) :init #'-addon-init :shutdown #'-addon-shutdown))
 
 (provide 'hive-mcp-swarm)
 ;;; hive-mcp-swarm.el ends here
