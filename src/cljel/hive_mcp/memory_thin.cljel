@@ -754,11 +754,24 @@ Includes notes, conventions, recent decisions, relevant snippets."
 ;;; Initialization
 ;;; ============================================================
 
+(defn- -on-cider-connected ()
+  "Hook: auto-init storage delegate when CIDER connects."
+  (when (and (featurep 'cider) (cider-connected-p)
+             (not hive-mcp-memory--storage-delegate))
+    (hive-mcp-memory-init-cider-delegate)))
+
 (defn init []
   "Initialize memory system.
-In Chroma-delegate mode, this just clears caches."
+In Chroma-delegate mode, clears caches and wires CIDER delegate.
+If CIDER is already connected, sets delegate immediately.
+Otherwise registers on cider-connected-hook for deferred init."
   (clrhash hive-mcp-memory--project-config-cache)
   (clrhash hive-mcp-memory--cache)
+  ;; Wire delegate now if CIDER already connected, else hook for later
+  (if (and (featurep 'cider) (cider-connected-p))
+      (hive-mcp-memory-init-cider-delegate)
+    (when (featurep 'cider)
+      (add-hook 'cider-connected-hook 'hive-mcp-memory--on-cider-connected)))
   (message "hive-mcp-memory initialized (Chroma-delegate mode)"))
 
 (provide 'hive-mcp-memory)
