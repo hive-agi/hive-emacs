@@ -5,7 +5,7 @@
 
         ;; DataScript for daemon store (DaemonDS)
         datascript/datascript {:mvn/version "1.7.8"}
-        org.replikativ/persistent-sorted-set {:mvn/version "0.4.121"}
+        org.replikativ/persistent-sorted-set {:mvn/version "0.4.122"}
 
         ;; hive-dsl — Result monad, rescue/guard DSL
         io.github.hive-agi/hive-dsl
