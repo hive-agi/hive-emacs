@@ -264,17 +264,17 @@ Handles keywords (:idle), symbols (idle), and strings (\"idle\")."
 ;; ============================================================================
 
 (defn -ensure-api []
-  "Ensure hive-mcp-api is available, hive-mcp-api-call is bound, and CIDER is connected."
+  "Ensure hive-mcp-api is available and a CIDER REPL exists.
+Checks for any live CIDER REPL buffer, bypassing sesman project linking
+so Olympus works regardless of which buffer context it's called from."
   (when-not (featurep 'hive-mcp-api)
     (require 'hive-mcp-api nil t))
   (and (fboundp 'hive-mcp-api-call)
        (featurep 'cider)
-       (fboundp 'cider-connected-p)
-       (condition-case nil
-           (cider-connected-p)
-         (wrong-number-of-arguments
-          ;; CIDER/sesman session filter lambda arity mismatch — try direct REPL check
-          (car (cider-repl-buffers))))))
+       (seq-some (lambda (b)
+                   (and (buffer-live-p b)
+                        (string-match-p "cider-repl" (buffer-name b))))
+                 (buffer-list))))
 
 (defn- coerce-to-hash [plist]
   "Convert a keyword-keyed PLIST to a hash-table.
@@ -285,11 +285,22 @@ E.g. (:foo 1 :bar 2) -> {foo: 1, bar: 2}."
       (setq plist (cddr plist)))
     ht))
 
+(defn- find-hive-mcp-repl []
+  "Find the hive-mcp CIDER REPL buffer (port 7910).
+Returns the buffer or nil.  Used to route MCP API calls to the correct
+nREPL connection regardless of sesman session linking."
+  (seq-find (lambda (b)
+              (and (buffer-live-p b)
+                   (string-match-p "cider-repl.*7910" (buffer-name b))))
+            (buffer-list)))
+
 (defn -build-local-state []
   "Build olympus state directly from local hive-mcp-swarm--slaves.
-No CIDER connection required — reads Elisp state directly."
+No CIDER connection required — reads Elisp state directly.
+Returns nil when no lings are registered, allowing fallback to MCP/DataScript."
   (when (and (boundp 'hive-mcp-swarm--slaves)
-             (hash-table-p hive-mcp-swarm--slaves))
+             (hash-table-p hive-mcp-swarm--slaves)
+             (> (hash-table-count hive-mcp-swarm--slaves) 0))
     (let [n (hash-table-count hive-mcp-swarm--slaves)
           grid (olympus-ui/-calculate-grid n)
           rows (car grid)
@@ -323,29 +334,32 @@ No CIDER connection required — reads Elisp state directly."
 (defn -fetch-status []
   "Fetch current Olympus status.
 Reads directly from local swarm state (fast, no CIDER needed).
-Falls back to MCP via CIDER if local state unavailable."
+Falls back to MCP via hive-mcp REPL (port 7910), routing through
+the correct CIDER connection regardless of sesman session linking."
   (or (olympus-ui/-build-local-state)
       (when (olympus-ui/-ensure-api)
         (condition-case err
-            (let [response (hive-mcp-api-call "olympus" (list :command "status"))]
-              (when (and response (plist-get response :success))
-                (let [hm-raw (hive-mcp-api-call "hivemind" (list :command "status"))
-                      hm-status (if (plist-get hm-raw :text)
-                                    (json-parse-string (plist-get hm-raw :text)
-                                                       :object-type 'plist :null-object nil)
-                                  hm-raw)
-                      agents-plist (plist-get hm-status :agents)
-                      positions-plist (plist-get response :positions)]
-                  (list :ling-count (plist-get response :ling-count)
-                        :layout (plist-get response :layout)
-                        :positions (if (hash-table-p positions-plist)
-                                     positions-plist
-                                     (olympus-ui--coerce-to-hash (or positions-plist '())))
-                        :active-tab (plist-get response :active-tab)
-                        :layout-mode (plist-get response :layout-mode)
-                        :lings (if (hash-table-p agents-plist)
-                                  agents-plist
-                                  (olympus-ui--coerce-to-hash (or agents-plist '())))))))
+            (when-let [repl-buf (olympus-ui/-find-hive-mcp-repl)]
+              (with-current-buffer repl-buf
+                (let [response (hive-mcp-api-call "olympus" (list :command "status"))]
+                  (when (and response (plist-get response :success))
+                    (let [hm-raw (hive-mcp-api-call "hivemind" (list :command "status"))
+                          hm-status (if (plist-get hm-raw :text)
+                                        (json-parse-string (plist-get hm-raw :text)
+                                                           :object-type 'plist :null-object nil)
+                                      hm-raw)
+                          agents-plist (plist-get hm-status :agents)
+                          positions-plist (plist-get response :positions)]
+                      (list :ling-count (plist-get response :ling-count)
+                            :layout (plist-get response :layout)
+                            :positions (if (hash-table-p positions-plist)
+                                         positions-plist
+                                         (olympus-ui--coerce-to-hash (or positions-plist '())))
+                            :active-tab (plist-get response :active-tab)
+                            :layout-mode (plist-get response :layout-mode)
+                            :lings (if (hash-table-p agents-plist)
+                                      agents-plist
+                                      (olympus-ui--coerce-to-hash (or agents-plist '())))))))))
           (error
            (message "[olympus] Failed to fetch status: %s" err)
            nil)))))
@@ -733,6 +747,17 @@ EVENT is a plist with :agent-id, :event-type, :message."
 \\{olympus-ui-mode-map}"
   (setq buffer-read-only t)
   (setq truncate-lines t)
+  ;; Evil: bind keys locally so they override evil-replace etc.
+  (when (bound-and-true-p evil-mode)
+    (evil-local-set-key 'normal (kbd "r") #'olympus-ui/refresh)
+    (evil-local-set-key 'normal (kbd "a") #'olympus-ui/arrange)
+    (evil-local-set-key 'normal (kbd "A") #'olympus-ui/arrange-windows)
+    (evil-local-set-key 'normal (kbd "f") #'olympus-ui/focus-ling)
+    (evil-local-set-key 'normal (kbd "u") #'olympus-ui/unfocus)
+    (evil-local-set-key 'normal (kbd "n") #'olympus-ui/next-tab)
+    (evil-local-set-key 'normal (kbd "p") #'olympus-ui/prev-tab)
+    (evil-local-set-key 'normal (kbd "q") #'olympus-ui/hide)
+    (evil-local-set-key 'normal (kbd "s") #'olympus-ui/subscribe-to-events))
   ;; Subscribe to real-time events
   (olympus-ui/subscribe-to-events))
 

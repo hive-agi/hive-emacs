@@ -165,12 +165,11 @@
   ('_ "?"))))
 
 (defun olympus-ui--ensure-api ()
-  "Ensure hive-mcp-api is available, hive-mcp-api-call is bound, and CIDER is connected."
+  "Ensure hive-mcp-api is available and a CIDER REPL exists.\nChecks for any live CIDER REPL buffer, bypassing sesman project linking\nso Olympus works regardless of which buffer context it's called from."
   (if (featurep 'hive-mcp-api) nil (progn
   (require 'hive-mcp-api nil t)))
-  (and (fboundp 'hive-mcp-api-call) (featurep 'cider) (fboundp 'cider-connected-p) (condition-case nil
-    (cider-connected-p)
-  (wrong-number-of-arguments (car (cider-repl-buffers))))))
+  (and (fboundp 'hive-mcp-api-call) (featurep 'cider) (seq-some (lambda (b)
+    (and (buffer-live-p b) (string-match-p "cider-repl" (buffer-name b)))) (buffer-list))))
 
 (defun olympus-ui--coerce-to-hash (plist)
   "Convert a keyword-keyed PLIST to a hash-table.\nE.g. (:foo 1 :bar 2) -> {foo: 1, bar: 2}."
@@ -180,9 +179,14 @@
     (setq plist (cddr plist)))
     ht))
 
+(defun olympus-ui--find-hive-mcp-repl ()
+  "Find the hive-mcp CIDER REPL buffer (port 7910).\nReturns the buffer or nil.  Used to route MCP API calls to the correct\nnREPL connection regardless of sesman session linking."
+  (seq-find (lambda (b)
+    (and (buffer-live-p b) (string-match-p "cider-repl.*7910" (buffer-name b)))) (buffer-list)))
+
 (defun olympus-ui--build-local-state ()
-  "Build olympus state directly from local hive-mcp-swarm--slaves.\nNo CIDER connection required — reads Elisp state directly."
-  (when (and (boundp 'hive-mcp-swarm--slaves) (hash-table-p hive-mcp-swarm--slaves))
+  "Build olympus state directly from local hive-mcp-swarm--slaves.\nNo CIDER connection required — reads Elisp state directly.\nReturns nil when no lings are registered, allowing fallback to MCP/DataScript."
+  (when (and (boundp 'hive-mcp-swarm--slaves) (hash-table-p hive-mcp-swarm--slaves) (> (hash-table-count hive-mcp-swarm--slaves) 0))
     (let* ((n (hash-table-count hive-mcp-swarm--slaves))
         (grid (olympus-ui--calculate-grid n))
         (rows (car grid))
@@ -206,16 +210,18 @@
     (list :ling-count n :layout (list :rows rows :cols cols) :positions positions :active-tab 0 :layout-mode :auto :lings lings))))
 
 (defun olympus-ui--fetch-status ()
-  "Fetch current Olympus status.\nReads directly from local swarm state (fast, no CIDER needed).\nFalls back to MCP via CIDER if local state unavailable."
+  "Fetch current Olympus status.\nReads directly from local swarm state (fast, no CIDER needed).\nFalls back to MCP via hive-mcp REPL (port 7910), routing through\nthe correct CIDER connection regardless of sesman session linking."
   (or (olympus-ui--build-local-state) (when (olympus-ui--ensure-api)
     (condition-case err
+    (when-let ((repl-buf (olympus-ui--find-hive-mcp-repl)))
+    (with-current-buffer repl-buf
     (let* ((response (hive-mcp-api-call "olympus" (list :command "status"))))
     (when (and response (plist-get response :success))
     (let* ((hm-raw (hive-mcp-api-call "hivemind" (list :command "status")))
         (hm-status (if (plist-get hm-raw :text) (json-parse-string (plist-get hm-raw :text) :object-type 'plist :null-object nil) hm-raw))
         (agents-plist (plist-get hm-status :agents))
         (positions-plist (plist-get response :positions)))
-    (list :ling-count (plist-get response :ling-count) :layout (plist-get response :layout) :positions (if (hash-table-p positions-plist) positions-plist (olympus-ui--coerce-to-hash (or positions-plist '()))) :active-tab (plist-get response :active-tab) :layout-mode (plist-get response :layout-mode) :lings (if (hash-table-p agents-plist) agents-plist (olympus-ui--coerce-to-hash (or agents-plist '())))))))
+    (list :ling-count (plist-get response :ling-count) :layout (plist-get response :layout) :positions (if (hash-table-p positions-plist) positions-plist (olympus-ui--coerce-to-hash (or positions-plist '()))) :active-tab (plist-get response :active-tab) :layout-mode (plist-get response :layout-mode) :lings (if (hash-table-p agents-plist) agents-plist (olympus-ui--coerce-to-hash (or agents-plist '())))))))))
   (error (message "[olympus] Failed to fetch status: %s" err)
       nil)))))
 
@@ -447,7 +453,16 @@
     map)
   "Keymap for olympus-ui-mode.")
 
-(define-derived-mode olympus-ui-mode special-mode "Olympus" "Major mode for Olympus grid display.\n\n\\{olympus-ui-mode-map}" (setq buffer-read-only t) (setq truncate-lines t) (olympus-ui-subscribe-to-events))
+(define-derived-mode olympus-ui-mode special-mode "Olympus" "Major mode for Olympus grid display.\n\n\\{olympus-ui-mode-map}" (setq buffer-read-only t) (setq truncate-lines t) (when (bound-and-true-p evil-mode)
+    (evil-local-set-key 'normal (kbd "r") #'olympus-ui-refresh)
+    (evil-local-set-key 'normal (kbd "a") #'olympus-ui-arrange)
+    (evil-local-set-key 'normal (kbd "A") #'olympus-ui-arrange-windows)
+    (evil-local-set-key 'normal (kbd "f") #'olympus-ui-focus-ling)
+    (evil-local-set-key 'normal (kbd "u") #'olympus-ui-unfocus)
+    (evil-local-set-key 'normal (kbd "n") #'olympus-ui-next-tab)
+    (evil-local-set-key 'normal (kbd "p") #'olympus-ui-prev-tab)
+    (evil-local-set-key 'normal (kbd "q") #'olympus-ui-hide)
+    (evil-local-set-key 'normal (kbd "s") #'olympus-ui-subscribe-to-events)) (olympus-ui-subscribe-to-events))
 
 (with-eval-after-load 'evil
   (evil-define-key 'normal olympus-ui-mode-map "r" #'olympus-ui-refresh "g" nil "gr" #'olympus-ui-refresh "a" #'olympus-ui-arrange "A" #'olympus-ui-arrange-windows "f" #'olympus-ui-focus-ling "u" #'olympus-ui-unfocus "n" #'olympus-ui-next-tab "p" #'olympus-ui-prev-tab "q" #'olympus-ui-hide "s" #'olympus-ui-subscribe-to-events))
