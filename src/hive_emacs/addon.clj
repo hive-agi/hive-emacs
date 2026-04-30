@@ -22,7 +22,7 @@
   "Lazily collect tool definitions from Emacs-specific consolidated tool namespace.
    Flat tool namespaces removed — all functionality via consolidated tools."
   []
-  (let [tool-nses '[hive-mcp.tools.consolidated.emacs]]
+  (let [tool-nses '[hive-emacs.tools.emacs]]
     (->> tool-nses
          (mapcat (fn [ns-sym]
                    (let [tools (r/guard Exception []
