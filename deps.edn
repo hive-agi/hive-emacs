@@ -13,7 +13,7 @@
 
         ;; hive-di — typed env var resolution with ADT backing (defconfig)
         io.github.hive-agi/hive-di
-        {:git/tag "v0.2.0" :git/sha "6ff3e60"}
+        {:git/tag "v0.3.1" :git/sha "ab63fd0"}
 
         ;; Process execution for emacsclient subprocess
         babashka/process {:mvn/version "0.6.25"}}
