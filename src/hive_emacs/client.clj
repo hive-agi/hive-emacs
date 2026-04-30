@@ -6,19 +6,21 @@
    structured data for observability."
   (:require [clojure.java.shell :refer [sh]]
             [clojure.string :as str]
+            [hive-emacs.config :as config]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (def ^:dynamic *emacsclient-path*
-  "Path to emacsclient binary."
-  (or (System/getenv "EMACSCLIENT") "emacsclient"))
+  "Path to emacsclient binary. Resolved via hive-emacs.config (env EMACSCLIENT)."
+  (config/emacsclient-path))
 
 (def ^:dynamic *emacs-socket-name*
   "Emacs daemon socket name. When set, emacsclient calls include `-s <name>`.
-   Reads from EMACS_SOCKET_NAME env var. nil = default daemon (no -s flag)."
-  (System/getenv "EMACS_SOCKET_NAME"))
+   Resolved via hive-emacs.config (env EMACS_SOCKET_NAME).
+   nil = default daemon (no -s flag)."
+  (config/socket-name))
 
 (def ^:dynamic *default-timeout-ms*
   "Default timeout for emacsclient calls in milliseconds."

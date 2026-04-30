@@ -12,7 +12,8 @@
    4. Project affinity (optional) — prefer daemons already hosting same-project lings
 
    DDD: Domain Service — stateless selection algorithm."
-  (:require [hive-emacs.daemon :as daemon]
+  (:require [hive-emacs.config :as config]
+            [hive-emacs.daemon :as daemon]
             [hive-mcp.swarm.datascript.connection :as conn]
             [datascript.core :as d]
             [taoensso.timbre :as log]))
@@ -182,8 +183,7 @@
   [store & [{:keys [project-id default-id]}]]
   (let [all-daemons (daemon/get-all-daemons store)
         default-id  (or default-id
-                        (System/getenv "EMACS_SOCKET_NAME")
-                        "server")]
+                        (config/default-daemon-id))]
     (if (empty? all-daemons)
       ;; No daemons registered — fall back to default
       (do

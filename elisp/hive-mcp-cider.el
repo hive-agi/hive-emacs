@@ -24,7 +24,7 @@
 
 (defalias 'hive-mcp-cider-list-sessions 'hive-mcp-cider-sessions-list-all)
 
-(defalias 'hive-mcp-cider-get-session 'hive-mcp-cider-sessions-get)
+(defalias 'hive-mcp-cider-get-session 'hive-mcp-cider-sessions-lookup)
 
 (defalias 'hive-mcp-cider-start-nrepl 'hive-mcp-cider-nrepl-start-default)
 
@@ -70,7 +70,7 @@
   (let* ((rtype (or repl-type 'clj))
         (the-port (or port (hive-mcp-cider-sessions-find-available-port #'hive-mcp-cider-nrepl-port-open-p)))
         (dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype)))
-        (process (hive-mcp-cider-nrepl-start-process name the-port rtype dir))
+        (process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir))
         (timer (run-with-timer 2 1 (lambda ()
     (condition-case err
     (hive-mcp-cider-connection-try-connect-session name)
@@ -97,7 +97,7 @@
 (defun hive-mcp-cider-kill-session (name)
   "Kill the CIDER session NAME — stops process and cleans up."
   (interactive (list (completing-read "Kill session: " (hive-mcp-cider-sessions-names))))
-  (let* ((session (hive-mcp-cider-sessions-get name)))
+  (let* ((session (hive-mcp-cider-sessions-lookup name)))
     (when session
     (when-let* ((timer (plist-get session :timer)))
     (when (timerp timer)

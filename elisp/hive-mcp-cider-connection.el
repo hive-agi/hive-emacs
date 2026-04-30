@@ -9,7 +9,7 @@
 
 (require 'cl-lib)
 
-(declare-function hive-mcp-cider-sessions-get "hive-mcp-cider-sessions")
+(declare-function hive-mcp-cider-sessions-lookup "hive-mcp-cider-sessions")
 
 (declare-function hive-mcp-cider-sessions-get-prop "hive-mcp-cider-sessions")
 
@@ -136,21 +136,23 @@
 
 (defun hive-mcp-cider-connection--cancel-session-timer (name)
   "Cancel the auto-connect timer for session NAME."
-  (when-let* ((session (hive-mcp-cider-sessions-get name))
+  (when-let* ((session (hive-mcp-cider-sessions-lookup name))
          (timer (plist-get session :timer)))
     (when (timerp timer)
     (cancel-timer timer))
     (hive-mcp-cider-sessions-update-prop name :timer nil)))
 
 (defun hive-mcp-cider-connection-try-connect-session (name)
-  "Try to connect CIDER to session NAME.\nCalled by timer for spawned sessions. Dispatches based on :repl-type."
-  (let* ((session (hive-mcp-cider-sessions-get name))
+  "Try to connect CIDER to session NAME.\nCalled by timer for spawned sessions. Dispatches based on :repl-type.\nBinds default-directory to the session's :project-dir so CIDER labels\nthe REPL buffer with the correct project root (not the current buffer's dir)."
+  (let* ((session (hive-mcp-cider-sessions-lookup name))
         (port (plist-get session :port))
         (status (plist-get session :status))
-        (repl-type (or (plist-get session :repl-type) 'clj)))
+        (repl-type (or (plist-get session :repl-type) 'clj))
+        (proj-dir (plist-get session :project-dir)))
     (when (and session (eq status 'starting))
     (if (hive-mcp-cider-nrepl-port-open-p port) (condition-case err
-    (let* ((conn (hive-mcp-cider-connection-connect-by-repl-type repl-type port)))
+    (let* ((default-directory (or (and proj-dir (file-name-as-directory (expand-file-name proj-dir))) default-directory))
+        (conn (hive-mcp-cider-connection-connect-by-repl-type repl-type port)))
     (hive-mcp-cider-connection--cancel-session-timer name)
     (hive-mcp-cider-sessions-update-props name :status 'connected :cider-buffer (buffer-name conn))
     (message "hive-mcp-cider: Session '%s' (%s) connected on port %d" name (symbol-name repl-type) port))
