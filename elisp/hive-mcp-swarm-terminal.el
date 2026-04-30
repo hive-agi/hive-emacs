@@ -356,7 +356,7 @@
     (eat-exec buf "swarm-shell" "/bin/bash" nil '("-l")))
     buf)))))
 
-(defun hive-mcp-swarm-terminal-kill-buffer (buffer)
+(defun hive-mcp-swarm-terminal-cleanup-buffer (buffer)
   "Kill terminal BUFFER without prompts.\nHandles process cleanup to prevent confirmation dialogs."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
@@ -368,7 +368,7 @@
     (let* ((kill-buffer-query-functions nil)
         (kill-buffer-hook nil)
         (vterm-exit-functions nil))
-    (hive-mcp-swarm-terminal-kill-buffer buffer))))
+    (kill-buffer buffer))))
 
 (defun hive-mcp-swarm-terminal--check-buffer-completion (buffer)
   "Check if BUFFER has completed its task (working -> ready transition).\nReturns a plist with completion info if done, nil otherwise."

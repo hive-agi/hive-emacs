@@ -126,7 +126,7 @@
   ((quote global) "scope:global")
   ((quote domain) (format "scope:domain:%s" name))
   ((quote project) (format "scope:project:%s" name))
-  ('_ (error "Invalid scope level: %s" level))))
+  (_ (error "Invalid scope level: %s" level))))
 
 (defun hive-mcp-memory--parse-scope-tag (tag)
   "Parse a scope TAG into (level . name) cons.\nReturns nil if TAG is not a scope tag."
@@ -289,12 +289,12 @@
   ((quote migrate) (let* ((old-project-id (nth 0 args))
         (new-project-id (nth 1 args)))
     (format "(hive-mcp.tools.memory/handle-memory {:command \"migrate\" :old-project-id %S :new-project-id %S})" old-project-id new-project-id)))
-  ('_ (error "Unknown memory operation: %s" op))))
+  (_ (error "Unknown memory operation: %s" op))))
 
 (defun hive-mcp-memory-init-cider-delegate ()
   "Initialize the CIDER-based storage delegate.\nCall this after CIDER connects to enable memory operations."
   (interactive)
-  (setq hive-mcp-memory--storage-delegate #'-cider-delegate)
+  (setq hive-mcp-memory--storage-delegate #'hive-mcp-memory--cider-delegate)
   (message "hive-mcp-memory: CIDER delegate initialized"))
 
 (defun hive-mcp-memory--delegate (&rest args)

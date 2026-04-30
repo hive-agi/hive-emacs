@@ -114,7 +114,7 @@
   (when (hive-mcp-swarm-presets--chroma-available-p)
     (condition-case err
     (when (fboundp 'hive-mcp-api-call-tool)
-    (let* ((result (hive-mcp-api-call-tool "preset_get" (hive-mcp-swarm-presets-list :name name))))
+    (let* ((result (hive-mcp-api-call-tool "preset_get" (list :name name))))
     (when (and result (not (plist-get result :error)))
     (let* ((preset (plist-get result :preset)))
     (when preset
@@ -138,7 +138,7 @@
   (when (hive-mcp-swarm-presets--chroma-available-p)
     (condition-case nil
     (when (fboundp 'hive-mcp-api-call-tool)
-    (let* ((result (hive-mcp-api-call-tool "preset_search" (hive-mcp-swarm-presets-list :query query :limit (or limit 5)))))
+    (let* ((result (hive-mcp-api-call-tool "preset_search" (list :query query :limit (or limit 5)))))
     (when (and result (not (plist-get result :error)))
     (mapcar (lambda (r)
     (plist-get r :name)) (plist-get result :results)))))
@@ -164,7 +164,7 @@
   "Get preset NAME from memory system (conventions tagged swarm-preset).\nReturns nil if memory delegate is not yet configured."
   (when (fboundp 'hive-mcp-memory-query)
     (condition-case _err
-    (let* ((entries (hive-mcp-memory-query 'convention (hive-mcp-swarm-presets-list "swarm-preset" name) nil 1 nil nil)))
+    (let* ((entries (hive-mcp-memory-query 'convention (list "swarm-preset" name) nil 1 nil nil)))
     (when entries
     (plist-get (car entries) :content)))
   (error nil))))
@@ -176,7 +176,7 @@
     (hive-mcp-swarm-presets-detect-from-task task-description))))
     (cl-remove-duplicates (append explicit-presets task-presets defaults) :test #'string= :from-end t)))
 
-(defun hive-mcp-swarm-presets-list ()
+(defun hive-mcp-swarm-presets-list-presets ()
   "List all available presets (chroma + file-based + memory-based)."
   (interactive)
   (hive-mcp-swarm-presets--ensure-loaded)
@@ -186,7 +186,7 @@
         (all-names (cl-remove-duplicates (append chroma-presets file-presets memory-presets) :test #'string=)))
     (if (called-interactively-p 'any) (message "Available presets: %s (chroma: %d, file: %d, memory: %d)" (string-join (clel-sort all-names #'string<) ", ") (length chroma-presets) (length file-presets) (length memory-presets)) all-names)))
 
-(defun hive-mcp-swarm-presets-get (name)
+(defun hive-mcp-swarm-presets-get-preset (name)
   "Get content of preset NAME.\nPriority: chroma -> memory-based (project-scoped) -> file-based (.md fallback)."
   (or (hive-mcp-swarm-presets--get-chroma-content name) (hive-mcp-swarm-presets--get-memory-content name) (hive-mcp-swarm-presets--get-file-content name)))
 
@@ -194,7 +194,7 @@
   "Build full system prompt by concatenating PRESETS content.\nINJECTED-CONTEXT is prepended if non-nil."
   (let* ((contents '()))
     (dolist (preset presets)
-    (when-let* ((content (hive-mcp-swarm-presets-get preset)))
+    (when-let* ((content (hive-mcp-swarm-presets-get-preset preset)))
     (push content contents)))
     (when (or contents injected-context)
     (let* ((preset-body (when contents
@@ -212,7 +212,7 @@
   "Fetch lazy header for PRESETS via MCP tool.\nReturns header string or nil if unavailable."
   (condition-case err
     (when (fboundp 'hive-mcp-api-call-tool)
-    (let* ((result (hive-mcp-api-call-tool "preset" (hive-mcp-swarm-presets-list :command "header" :presets presets :lazy t))))
+    (let* ((result (hive-mcp-api-call-tool "preset" (list :command "header" :presets presets :lazy t))))
     (when (and result (not (plist-get result :error)))
     (plist-get result :header))))
   (error (message "hive-mcp-swarm-presets: Lazy header fetch failed: %s" err)
@@ -248,7 +248,7 @@
 
 (defun hive-mcp-swarm-presets-role-to-presets (role)
   "Convert ROLE to list of preset names."
-  (or (cdr (assoc role hive-mcp-swarm-presets-role-mapping)) (hive-mcp-swarm-presets-list role)))
+  (or (cdr (assoc role hive-mcp-swarm-presets-role-mapping)) (list role)))
 
 (defcustom hive-mcp-swarm-presets-task-patterns '(("\\bSAA\\b\\|\\bSilence[- ]Abstract[- ]Act\\b" . ("saa")) ("\\b[Ss]ilence\\b\\|\\bground\\(ing\\)?\\b\\|\\bterritory\\b\\|\\bread first\\b\\|\\bexplor\\(e\\|ation\\|ing\\)\\b" . ("saa" "explorer")) ("\\b[Aa]bstract\\b\\|\\bEDN plan\\b\\|\\bstructure\\b\\|\\bcreate.*plan\\b\\|\\bplan\\(ning\\)?\\b" . ("saa" "planner")) ("\\b[Aa]ct\\b\\|\\bexecut\\(e\\|ion\\)\\b\\|\\bimplement\\(ation\\)?\\b\\|\\bTDD\\b\\|\\bDAG-Wave\\b" . ("saa" "executor")))
   "Patterns to detect SAA-related tasks and inject appropriate presets.\nEach entry is (REGEXP . PRESETS-LIST)."

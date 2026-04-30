@@ -185,15 +185,21 @@ CONN is the original connection buffer object."
 
 (defn try-connect-session [name]
   "Try to connect CIDER to session NAME.
-Called by timer for spawned sessions. Dispatches based on :repl-type."
+Called by timer for spawned sessions. Dispatches based on :repl-type.
+Binds default-directory to the session's :project-dir so CIDER labels
+the REPL buffer with the correct project root (not the current buffer's dir)."
   (let* [session (hive-mcp-cider-sessions-lookup name)
          port (plist-get session :port)
          status (plist-get session :status)
-         repl-type (or (plist-get session :repl-type) 'clj)]
+         repl-type (or (plist-get session :repl-type) 'clj)
+         proj-dir (plist-get session :project-dir)]
     (when (and session (eq status 'starting))
       (if (hive-mcp-cider-nrepl-port-open-p port)
           (condition-case err
-              (let [conn (connect-by-repl-type repl-type port)]
+              (let* [default-directory (or (and proj-dir (file-name-as-directory
+                                                           (expand-file-name proj-dir)))
+                                           default-directory)
+                     conn (connect-by-repl-type repl-type port)]
                 (-cancel-session-timer name)
                 (hive-mcp-cider-sessions-update-props name
                   :status 'connected

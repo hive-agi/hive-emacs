@@ -38,6 +38,16 @@ containing the compiler and nREPL middleware."
   :type 'string
   :group 'hive-mcp-cider)
 
+(defcustom hive-mcp-cider-nrepl-version "1.7.0"
+  "nREPL version for inline -Sdeps spawn."
+  :type 'string
+  :group 'hive-mcp-cider)
+
+(defcustom hive-mcp-cider-nrepl-cider-nrepl-version "0.58.0"
+  "cider-nrepl version for inline -Sdeps spawn."
+  :type 'string
+  :group 'hive-mcp-cider)
+
 ;; ============================================================================
 ;; Internal State
 ;; ============================================================================
@@ -53,18 +63,29 @@ containing the compiler and nREPL middleware."
   "Build the nREPL start command for REPL-TYPE on PORT in DIR.
 Returns a list of (program . args) for start-process.
 REPL-TYPE is one of 'clj, 'cljs, or 'cljel.
+Uses inline -Sdeps so spawn works in any project without requiring a :nrepl alias.
 This is a pure function — no side effects."
-  (let [port-str (number-to-string port)]
+  (let [port-str (number-to-string port)
+        clj-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"}}}"
+                         hive-mcp-cider-nrepl-version
+                         hive-mcp-cider-nrepl-cider-nrepl-version)
+        cljel-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"} io.github.BuddhiLW/clojure-elisp {:local/root \"%s\"}}}"
+                           hive-mcp-cider-nrepl-version
+                           hive-mcp-cider-nrepl-cider-nrepl-version
+                           (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir))]
     (pcase repl-type
       ('cljs
        (list "npx" "shadow-cljs" "watch" hive-mcp-cider-nrepl-shadow-build))
       ('cljel
-       (list "clojure" "-M:dev" "-m" "nrepl.cmdline"
+       (list "clojure" "-Sdeps" cljel-deps
+             "-M" "-m" "nrepl.cmdline"
              "--port" port-str
              "--middleware" "[cider.nrepl/cider-middleware,clojure-elisp.nrepl/wrap-cljel]"))
       (_
-       (list "clojure" "-M:nrepl"
-             "-p" port-str)))))
+       (list "clojure" "-Sdeps" clj-deps
+             "-M" "-m" "nrepl.cmdline"
+             "--port" port-str
+             "--middleware" "[cider.nrepl/cider-middleware]")))))
 
 (defn project-dir [repl-type]
   "Resolve the project directory for REPL-TYPE.

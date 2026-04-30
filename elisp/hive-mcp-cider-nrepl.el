@@ -29,16 +29,28 @@
   :group 'hive-mcp-cider
   :type 'string)
 
+(defcustom hive-mcp-cider-nrepl-version "1.7.0"
+  "nREPL version for inline -Sdeps spawn."
+  :group 'hive-mcp-cider
+  :type 'string)
+
+(defcustom hive-mcp-cider-nrepl-cider-nrepl-version "0.58.0"
+  "cider-nrepl version for inline -Sdeps spawn."
+  :group 'hive-mcp-cider
+  :type 'string)
+
 (defvar hive-mcp-cider-nrepl--default-process nil
   "Process object for the auto-started default nREPL server.")
 
 (defun hive-mcp-cider-nrepl-build-command (repl-type port dir)
-  "Build the nREPL start command for REPL-TYPE on PORT in DIR.\nReturns a list of (program . args) for start-process.\nREPL-TYPE is one of 'clj, 'cljs, or 'cljel.\nThis is a pure function — no side effects."
-  (let* ((port-str (number-to-string port)))
+  "Build the nREPL start command for REPL-TYPE on PORT in DIR.\nReturns a list of (program . args) for start-process.\nREPL-TYPE is one of 'clj, 'cljs, or 'cljel.\nUses inline -Sdeps so spawn works in any project without requiring a :nrepl alias.\nThis is a pure function — no side effects."
+  (let* ((port-str (number-to-string port))
+        (clj-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"}}}" hive-mcp-cider-nrepl-version hive-mcp-cider-nrepl-cider-nrepl-version))
+        (cljel-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"} io.github.BuddhiLW/clojure-elisp {:local/root \"%s\"}}}" hive-mcp-cider-nrepl-version hive-mcp-cider-nrepl-cider-nrepl-version (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir))))
     (pcase repl-type
   ((quote cljs) (list "npx" "shadow-cljs" "watch" hive-mcp-cider-nrepl-shadow-build))
-  ((quote cljel) (list "clojure" "-M:dev" "-m" "nrepl.cmdline" "--port" port-str "--middleware" "[cider.nrepl/cider-middleware,clojure-elisp.nrepl/wrap-cljel]"))
-  (_ (list "clojure" "-M:nrepl" "-p" port-str)))))
+  ((quote cljel) (list "clojure" "-Sdeps" cljel-deps "-M" "-m" "nrepl.cmdline" "--port" port-str "--middleware" "[cider.nrepl/cider-middleware,clojure-elisp.nrepl/wrap-cljel]"))
+  (_ (list "clojure" "-Sdeps" clj-deps "-M" "-m" "nrepl.cmdline" "--port" port-str "--middleware" "[cider.nrepl/cider-middleware]")))))
 
 (defun hive-mcp-cider-nrepl-project-dir (repl-type)
   "Resolve the project directory for REPL-TYPE.\nReturns absolute path string."
@@ -54,7 +66,7 @@
     t)
   (error nil)))
 
-(defun hive-mcp-cider-nrepl-start-process (name port repl-type &optional dir)
+(defun hive-mcp-cider-nrepl-launch-process (name port repl-type &optional dir)
   "Start an nREPL process named NAME on PORT for REPL-TYPE.\nOptional DIR overrides the working directory.\nReturns the process object."
   (let* ((resolved-dir (or dir (hive-mcp-cider-nrepl-project-dir repl-type)))
         (default-directory resolved-dir)
@@ -72,7 +84,7 @@
   (let* ((default-directory (hive-mcp-cider-nrepl-project-dir 'clj))
         (port (number-to-string hive-mcp-cider-nrepl-port)))
     (message "hive-mcp-cider-nrepl: Starting on port %s in %s..." port default-directory)
-    (setq hive-mcp-cider-nrepl--default-process (hive-mcp-cider-nrepl-start-process "nrepl-server" "*nREPL-server*" "clojure" "-M:dev" "-m" "nrepl.cmdline" "--port" port "--middleware" "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"))))
+    (setq hive-mcp-cider-nrepl--default-process (start-process "nrepl-server" "*nREPL-server*" "clojure" "-M:dev" "-m" "nrepl.cmdline" "--port" port "--middleware" "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"))))
 
 (defun hive-mcp-cider-nrepl-stop-default ()
   "Stop the default nREPL server."

@@ -5,7 +5,8 @@
    from swarm sync, emacsclient, and coordinator modules.
 
    DDD: Infrastructure layer - singleton access to repository."
-  (:require [hive-emacs.daemon :as daemon]
+  (:require [hive-emacs.config :as config]
+            [hive-emacs.daemon :as daemon]
             [hive-emacs.daemon-ds :as daemon-ds]
             [hive-emacs.daemon-selection :as selection]
             [hive-emacs.daemon-autoheal :as autoheal]
@@ -91,9 +92,10 @@
 
 (defn default-daemon-id
   "Get the default daemon ID from environment or use 'server'.
-   This matches the socket name used by *emacs-socket-name* in emacsclient.clj."
+   This matches the socket name used by *emacs-socket-name* in emacsclient.clj.
+   Delegates to hive-emacs.config — single source of truth."
   []
-  (or (System/getenv "EMACS_SOCKET_NAME") "server"))
+  (config/default-daemon-id))
 
 (defn ensure-default-daemon!
   "Ensure the default daemon is registered.

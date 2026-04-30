@@ -9,7 +9,7 @@
 
 (require 'cl-lib)
 
-(declare-function hive-mcp-cider-sessions-get "hive-mcp-cider-sessions")
+(declare-function hive-mcp-cider-sessions-lookup "hive-mcp-cider-sessions")
 
 (declare-function hive-mcp-cider-sessions-get-prop "hive-mcp-cider-sessions")
 
@@ -62,7 +62,7 @@
 
 (defun hive-mcp-cider-eval-eval-in-session (name code &optional timeout)
   "Evaluate CODE in the CIDER session NAME.\nOptional TIMEOUT in seconds (default: `hive-mcp-cider-eval-timeout').\nUses async evaluation with heartbeat polling."
-  (let* ((session (hive-mcp-cider-sessions-get name))
+  (let* ((session (hive-mcp-cider-sessions-lookup name))
         (cider-buf (plist-get session :cider-buffer)))
     (unless session
     (error "Session '%s' not found" name))

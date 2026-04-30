@@ -35,7 +35,7 @@
     (remhash name hive-mcp-cider-sessions--registry)
     session))
 
-(defun hive-mcp-cider-sessions-get (name)
+(defun hive-mcp-cider-sessions-lookup (name)
   "Get session plist for NAME, or nil if not found."
   (gethash name hive-mcp-cider-sessions--registry))
 
