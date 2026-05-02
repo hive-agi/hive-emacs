@@ -20,7 +20,9 @@
             [hive-emacs.vessel :as vessel]
             [taoensso.timbre :as log]
             [clojure.java.io :as io]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [hive-emacs.dsl.ext-hooks :as eh]
+            [hive-emacs.dsl.multi-hooks :as mh]))
 ;; Copyright (C) 2024-2026 hive-agi contributors
 ;;
 ;; SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0
@@ -206,7 +208,15 @@
                 {:status :degraded
                  :details {:message "IEditor protocol unavailable"}}))
             {:status :down
-             :details {:message "hive-emacs not initialized"}}))))))
+             :details {:message "hive-emacs not initialized"}}))
+
+        (excluded-tools [_] #{})
+
+        (hooks [_]
+          ;; `:multi/*` keys (verbs) → multi.registry; `:emacs/*` keys (callables)
+          ;; → opaque ext registry. Routed by namespace dispatch in
+          ;; hive-mcp.addons.core init/shutdown walks.
+          (merge mh/contributions eh/contributions))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Nil-railway pipeline (lsp-mcp pattern)

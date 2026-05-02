@@ -13,7 +13,8 @@
             [hive-mcp.protocols.editor :as ed]
             [hive-emacs.editor-adapter :as ema]
             [taoensso.timbre :as log]
-            [hive-emacs.dsl.multi-hooks :as mh]))
+            [hive-emacs.dsl.multi-hooks :as mh]
+            [hive-emacs.dsl.ext-hooks :as eh]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -84,7 +85,7 @@
       {:status :down
        :details {:message "EmacsAddon not initialized"}}))
 
-  (hooks [_] mh/contributions))
+  (hooks [_] (merge mh/contributions eh/contributions)))
 
 (defn ->emacs-addon
   "Create a new EmacsAddon instance."
