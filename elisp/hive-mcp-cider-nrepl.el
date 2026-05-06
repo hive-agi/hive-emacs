@@ -15,7 +15,7 @@
   :type 'integer)
 
 (defcustom hive-mcp-cider-nrepl-project-dir nil
-  "Project directory for starting nREPL.\nIf nil, uses the current project root or `default-directory'."
+  "Project directory for starting nREPL.\nIf nil, callers MUST supply project-dir explicitly (no project-current\nfallback — the Emacs daemon's current buffer is rarely the right project\nwhen spawn is triggered from an MCP tool boundary)."
   :group 'hive-mcp-cider
   :type '(choice (const nil) directory))
 
@@ -53,10 +53,9 @@
   (_ (list "clojure" "-Sdeps" clj-deps "-M" "-m" "nrepl.cmdline" "--port" port-str "--middleware" "[cider.nrepl/cider-middleware]")))))
 
 (defun hive-mcp-cider-nrepl-project-dir (repl-type)
-  "Resolve the project directory for REPL-TYPE.\nReturns absolute path string."
-  (or hive-mcp-cider-nrepl-project-dir (if (eq repl-type 'cljel) (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir) (or (when (fboundp 'project-root)
-    (when-let* ((proj (project-current)))
-    (project-root proj))) default-directory))))
+  "Resolve the project directory for REPL-TYPE.\nReturns absolute path string, or nil if no explicit dir is configured.\n\nFor 'cljel — falls back to `hive-mcp-cider-nrepl-cljel-project-dir'\ndefcustom (the cljel toolchain has a single canonical project).\n\nFor 'clj/'cljs — returns nil if `hive-mcp-cider-nrepl-project-dir' is\nunset. Callers must supply project-dir explicitly. The Emacs daemon's\ncurrent buffer is NOT a reliable proxy when spawn is triggered from an\nMCP tool boundary — it leaks hive-mcp into every other project's REPL."
+  (or hive-mcp-cider-nrepl-project-dir (when (eq repl-type 'cljel)
+    (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir))))
 
 (defun hive-mcp-cider-nrepl-port-open-p (port)
   "Check if PORT is accepting connections on localhost.\nReturns t if port is open, nil otherwise."
@@ -67,12 +66,14 @@
   (error nil)))
 
 (defun hive-mcp-cider-nrepl-launch-process (name port repl-type &optional dir)
-  "Start an nREPL process named NAME on PORT for REPL-TYPE.\nOptional DIR overrides the working directory.\nReturns the process object."
-  (let* ((resolved-dir (or dir (hive-mcp-cider-nrepl-project-dir repl-type)))
-        (default-directory resolved-dir)
+  "Start an nREPL process named NAME on PORT for REPL-TYPE.\nOptional DIR overrides the working directory.\nErrors if no dir can be resolved — explicit project routing only.\nReturns the process object."
+  (let* ((resolved-dir (or dir (hive-mcp-cider-nrepl-project-dir repl-type))))
+    (unless resolved-dir
+    (error "hive-mcp-cider-nrepl: no project-dir for session '%s' (type=%s) — pass project-dir explicitly or set `hive-mcp-cider-nrepl-project-dir'" name (symbol-name repl-type)))
+    (let* ((default-directory resolved-dir)
         (buf-name (format "*nREPL-%s*" name))
         (cmd (hive-mcp-cider-nrepl-build-command repl-type port resolved-dir)))
-    (apply #'start-process (format "nrepl-%s" name) buf-name cmd)))
+    (apply #'start-process (format "nrepl-%s" name) buf-name cmd))))
 
 (defun hive-mcp-cider-nrepl-stop-process (process)
   "Kill a running nREPL process."

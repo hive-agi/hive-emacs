@@ -79,14 +79,16 @@
     (message "hive-mcp-cider: Spawning %s session '%s' on port %d..." (symbol-name rtype) name the-port)
     (list :name name :port the-port :repl-type (symbol-name rtype) :status "starting")))
 
-(defun hive-mcp-cider-connect-session (name host port &optional repl-type agent-id)
-  "Connect to an existing nREPL server as a named session.\nNAME is the session identifier.\nHOST is the nREPL host (default \"localhost\").\nPORT is the nREPL port number.\nREPL-TYPE is one of \"clj\" (default), \"cljs\", or \"cljel\".\nAGENT-ID optionally links this session to a swarm agent.\n\nConnection is deferred to Emacs event loop to avoid blocking emacsclient."
+(defun hive-mcp-cider-connect-session (name host port &optional repl-type agent-id project-dir)
+  "Connect to an existing nREPL server as a named session.\nNAME is the session identifier.\nHOST is the nREPL host (default \"localhost\").\nPORT is the nREPL port number.\nREPL-TYPE is one of \"clj\" (default), \"cljs\", or \"cljel\".\nAGENT-ID optionally links this session to a swarm agent.\nPROJECT-DIR (optional) labels the REPL buffer with the target project\nso cross-project sessions don't all collide under the current buffer's\nproject root.\n\nConnection is deferred to Emacs event loop to avoid blocking emacsclient."
   (interactive "sSession name: \nsHost (localhost): \nnPort: ")
   (let* ((host (or host "localhost"))
-        (rtype (or (and repl-type (intern repl-type)) 'clj)))
-    (hive-mcp-cider-sessions-register name (hive-mcp-cider-sessions-make-session port :agent-id agent-id :repl-type rtype :status 'connecting))
+        (rtype (or (and repl-type (intern repl-type)) 'clj))
+        (expanded-dir (and project-dir (file-name-as-directory (expand-file-name project-dir)))))
+    (hive-mcp-cider-sessions-register name (hive-mcp-cider-sessions-make-session port :agent-id agent-id :repl-type rtype :project-dir expanded-dir :status 'connecting))
     (condition-case err
-    (let* ((conn (hive-mcp-cider-connection-connect-deferred rtype port))
+    (let* ((default-directory (or expanded-dir default-directory))
+        (conn (hive-mcp-cider-connection-connect-deferred rtype port expanded-dir))
         (cider-buf (buffer-name conn)))
     (hive-mcp-cider-sessions-update-props name :status 'connected :cider-buffer cider-buf)
     (message "hive-mcp-cider: Session '%s' (%s) connected to %s:%d" name (symbol-name rtype) host port)

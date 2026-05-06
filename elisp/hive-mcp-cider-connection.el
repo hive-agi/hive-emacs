@@ -78,15 +78,16 @@
 (defvar hive-mcp-cider-connection--auto-attempts 0
   "Number of auto-connect attempts made.")
 
-(defun hive-mcp-cider-connection--connect-clj-no-prompt (port)
-  "Connect CIDER CLJ to PORT, suppressing the duplicate session prompt.\nCIDER's y-or-n-p blocks forever in non-interactive (emacsclient) contexts."
+(defun hive-mcp-cider-connection--connect-clj-no-prompt (port &optional project-dir)
+  "Connect CIDER CLJ to PORT, suppressing the duplicate session prompt.\nCIDER's y-or-n-p blocks forever in non-interactive (emacsclient) contexts.\nPROJECT-DIR (optional) is passed to cider-connect-clj so the resulting\nREPL buffer is labeled with the target project. Without it, CIDER infers\nthe project from the calling buffer's default-directory, which defaults\nto whatever Emacs buffer happens to be current when the timer fires —\ntypically wrong when the spawn was triggered by an MCP tool call."
   (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _)
-    t))) (cider-connect-clj (list :host "localhost" :port port))))
+    t))) (let* ((args (list :host "localhost" :port port)))
+    (cider-connect-clj (if project-dir (append args (list :project-dir project-dir)) args)))))
 
-(defun hive-mcp-cider-connection-connect-by-repl-type (repl-type port)
-  "Connect CIDER to nREPL on PORT using the appropriate method for REPL-TYPE.\nReturns the connection buffer.\nFor cljs and cljel, connects as CLJ first, then upgrades asynchronously."
+(defun hive-mcp-cider-connection-connect-by-repl-type (repl-type port &optional project-dir)
+  "Connect CIDER to nREPL on PORT using the appropriate method for REPL-TYPE.\nReturns the connection buffer.\nFor cljs and cljel, connects as CLJ first, then upgrades asynchronously.\nPROJECT-DIR (optional) is threaded to cider-connect-clj so the REPL\nbuffer is labeled with the target project rather than whatever buffer\nis current at connect time."
   (pcase repl-type
-  ((quote cljs) (let* ((conn (hive-mcp-cider-connection--connect-clj-no-prompt port))
+  ((quote cljs) (let* ((conn (hive-mcp-cider-connection--connect-clj-no-prompt port project-dir))
         (select-form (format "(do (require '[shadow.cljs.devtools.api :as shadow]) (shadow/nrepl-select %s))" hive-mcp-cider-nrepl-shadow-build)))
     (run-at-time 3.0 nil (lambda ()
     (when (buffer-live-p conn)
@@ -96,21 +97,21 @@
     (run-at-time 0.5 nil (lambda ()
     (hive-mcp-cider-connection--update-session-buffer-name conn))))))))))
     conn))
-  ((quote cljel) (let* ((conn (hive-mcp-cider-connection--connect-clj-no-prompt port)))
+  ((quote cljel) (let* ((conn (hive-mcp-cider-connection--connect-clj-no-prompt port project-dir)))
     (run-at-time 1.0 nil (lambda ()
     (when (and (buffer-live-p conn) (fboundp 'cider-cljel-start))
     (with-current-buffer conn
     (cider-cljel-start)))))
     conn))
-  (_ (hive-mcp-cider-connection--connect-clj-no-prompt port))))
+  (_ (hive-mcp-cider-connection--connect-clj-no-prompt port project-dir))))
 
-(defun hive-mcp-cider-connection-connect-deferred (repl-type port)
-  "Connect CIDER to nREPL on PORT without blocking emacsclient.\nDefers cider-connect-clj to Emacs event loop via run-at-time,\npolls with accept-process-output until connected or timeout.\nReturns the connection buffer or signals error.\n\nUses closure-local mutable cell instead of global defvars."
+(defun hive-mcp-cider-connection-connect-deferred (repl-type port &optional project-dir)
+  "Connect CIDER to nREPL on PORT without blocking emacsclient.\nDefers cider-connect-clj to Emacs event loop via run-at-time,\npolls with accept-process-output until connected or timeout.\nReturns the connection buffer or signals error.\nPROJECT-DIR (optional) labels the REPL buffer with the target project.\n\nUses closure-local mutable cell instead of global defvars."
   (let* ((cell (cons nil nil)))
     (run-at-time 0 nil (lambda ()
     (condition-case err
     (progn
-  (setcar cell (hive-mcp-cider-connection-connect-by-repl-type repl-type port))
+  (setcar cell (hive-mcp-cider-connection-connect-by-repl-type repl-type port project-dir))
   (setcdr cell t))
   (error (setcar cell err)
       (setcdr cell 'error)))))
@@ -143,7 +144,7 @@
     (hive-mcp-cider-sessions-update-prop name :timer nil)))
 
 (defun hive-mcp-cider-connection-try-connect-session (name)
-  "Try to connect CIDER to session NAME.\nCalled by timer for spawned sessions. Dispatches based on :repl-type.\nBinds default-directory to the session's :project-dir so CIDER labels\nthe REPL buffer with the correct project root (not the current buffer's dir)."
+  "Try to connect CIDER to session NAME.\nCalled by timer for spawned sessions. Dispatches based on :repl-type.\nBinds default-directory to the session's :project-dir so CIDER labels\nthe REPL buffer with the correct project root (not the current buffer's dir).\n\nSwitches to *scratch* before invoking cider-connect — timer callbacks\nfire with unpredictable current-buffer (could be *Messages* — read-only,\nor a killed buffer). CIDER's `cider--gather-connect-params` inspects\ncurrent-buffer for `nrepl-endpoint`; firing from a non-REPL/non-server\nbuffer that the gather call walks into raises 'not a REPL or SERVER\nbuffer'. *scratch* is always alive, fundamental-mode, and\nwrite-friendly — a stable evaluation context for the connect."
   (let* ((session (hive-mcp-cider-sessions-lookup name))
         (port (plist-get session :port))
         (status (plist-get session :status))
@@ -151,8 +152,11 @@
         (proj-dir (plist-get session :project-dir)))
     (when (and session (eq status 'starting))
     (if (hive-mcp-cider-nrepl-port-open-p port) (condition-case err
-    (let* ((default-directory (or (and proj-dir (file-name-as-directory (expand-file-name proj-dir))) default-directory))
-        (conn (hive-mcp-cider-connection-connect-by-repl-type repl-type port)))
+    (let* ((expanded-dir (and proj-dir (file-name-as-directory (expand-file-name proj-dir))))
+        (scratch (or (get-buffer "*scratch*") (get-buffer-create "*scratch*")))
+        (conn (with-current-buffer scratch
+    (let* ((default-directory (or expanded-dir default-directory)))
+    (hive-mcp-cider-connection-connect-by-repl-type repl-type port expanded-dir)))))
     (hive-mcp-cider-connection--cancel-session-timer name)
     (hive-mcp-cider-sessions-update-props name :status 'connected :cider-buffer (buffer-name conn))
     (message "hive-mcp-cider: Session '%s' (%s) connected on port %d" name (symbol-name repl-type) port))

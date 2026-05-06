@@ -82,19 +82,31 @@ Design principles (SOLID/CLARITY):
 ;; CIDER Connection Dispatch
 ;; ============================================================================
 
-(defn- -connect-clj-no-prompt [port]
+(defn- -connect-clj-no-prompt [port &optional project-dir]
   "Connect CIDER CLJ to PORT, suppressing the duplicate session prompt.
-CIDER's y-or-n-p blocks forever in non-interactive (emacsclient) contexts."
+CIDER's y-or-n-p blocks forever in non-interactive (emacsclient) contexts.
+PROJECT-DIR (optional) is passed to cider-connect-clj so the resulting
+REPL buffer is labeled with the target project. Without it, CIDER infers
+the project from the calling buffer's default-directory, which defaults
+to whatever Emacs buffer happens to be current when the timer fires —
+typically wrong when the spawn was triggered by an MCP tool call."
   (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
-    (cider-connect-clj (list :host "localhost" :port port))))
+    (let [args (list :host "localhost" :port port)]
+      (cider-connect-clj
+        (if project-dir
+            (append args (list :project-dir project-dir))
+          args)))))
 
-(defn connect-by-repl-type [repl-type port]
+(defn connect-by-repl-type [repl-type port &optional project-dir]
   "Connect CIDER to nREPL on PORT using the appropriate method for REPL-TYPE.
 Returns the connection buffer.
-For cljs and cljel, connects as CLJ first, then upgrades asynchronously."
+For cljs and cljel, connects as CLJ first, then upgrades asynchronously.
+PROJECT-DIR (optional) is threaded to cider-connect-clj so the REPL
+buffer is labeled with the target project rather than whatever buffer
+is current at connect time."
   (pcase repl-type
     ('cljs
-     (let [conn (-connect-clj-no-prompt port)
+     (let [conn (-connect-clj-no-prompt port project-dir)
            select-form (format "(do (require '[shadow.cljs.devtools.api :as shadow]) (shadow/nrepl-select %s))"
                                hive-mcp-cider-nrepl-shadow-build)]
        (run-at-time 3.0 nil
@@ -110,7 +122,7 @@ For cljs and cljel, connects as CLJ first, then upgrades asynchronously."
                                               (-update-session-buffer-name conn))))))))))
        conn))
     ('cljel
-     (let [conn (-connect-clj-no-prompt port)]
+     (let [conn (-connect-clj-no-prompt port project-dir)]
        (run-at-time 1.0 nil
                     (lambda ()
                       (when (and (buffer-live-p conn)
@@ -119,17 +131,18 @@ For cljs and cljel, connects as CLJ first, then upgrades asynchronously."
                           (cider-cljel-start)))))
        conn))
     (_
-     (-connect-clj-no-prompt port))))
+     (-connect-clj-no-prompt port project-dir))))
 
 ;; ============================================================================
 ;; Deferred Connection (non-blocking for emacsclient)
 ;; ============================================================================
 
-(defn connect-deferred [repl-type port]
+(defn connect-deferred [repl-type port &optional project-dir]
   "Connect CIDER to nREPL on PORT without blocking emacsclient.
 Defers cider-connect-clj to Emacs event loop via run-at-time,
 polls with accept-process-output until connected or timeout.
 Returns the connection buffer or signals error.
+PROJECT-DIR (optional) labels the REPL buffer with the target project.
 
 Uses closure-local mutable cell instead of global defvars."
   (let [cell (cons nil nil)]  ;; (result . done-p)
@@ -138,7 +151,7 @@ Uses closure-local mutable cell instead of global defvars."
                  (lambda ()
                    (condition-case err
                        (progn
-                         (setcar cell (connect-by-repl-type repl-type port))
+                         (setcar cell (connect-by-repl-type repl-type port project-dir))
                          (setcdr cell t))
                      (error
                       (setcar cell err)
@@ -187,7 +200,15 @@ CONN is the original connection buffer object."
   "Try to connect CIDER to session NAME.
 Called by timer for spawned sessions. Dispatches based on :repl-type.
 Binds default-directory to the session's :project-dir so CIDER labels
-the REPL buffer with the correct project root (not the current buffer's dir)."
+the REPL buffer with the correct project root (not the current buffer's dir).
+
+Switches to *scratch* before invoking cider-connect — timer callbacks
+fire with unpredictable current-buffer (could be *Messages* — read-only,
+or a killed buffer). CIDER's `cider--gather-connect-params` inspects
+current-buffer for `nrepl-endpoint`; firing from a non-REPL/non-server
+buffer that the gather call walks into raises 'not a REPL or SERVER
+buffer'. *scratch* is always alive, fundamental-mode, and
+write-friendly — a stable evaluation context for the connect."
   (let* [session (hive-mcp-cider-sessions-lookup name)
          port (plist-get session :port)
          status (plist-get session :status)
@@ -196,10 +217,13 @@ the REPL buffer with the correct project root (not the current buffer's dir)."
     (when (and session (eq status 'starting))
       (if (hive-mcp-cider-nrepl-port-open-p port)
           (condition-case err
-              (let* [default-directory (or (and proj-dir (file-name-as-directory
-                                                           (expand-file-name proj-dir)))
-                                           default-directory)
-                     conn (connect-by-repl-type repl-type port)]
+              (let* [expanded-dir (and proj-dir (file-name-as-directory
+                                                  (expand-file-name proj-dir)))
+                     scratch (or (get-buffer "*scratch*")
+                                 (get-buffer-create "*scratch*"))
+                     conn (with-current-buffer scratch
+                            (let [default-directory (or expanded-dir default-directory)]
+                              (connect-by-repl-type repl-type port expanded-dir)))]
                 (-cancel-session-timer name)
                 (hive-mcp-cider-sessions-update-props name
                   :status 'connected

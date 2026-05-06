@@ -37,26 +37,27 @@
 ;; =============================================================================
 ;; Elisp Load-Path Injection (hive-claude/lsp-mcp exemplar)
 ;; =============================================================================
-;; Compiled cljel .el files live under resources/elisp/hive_mcp/ on the classpath.
-;; Source .cljel files stay in src/cljel/hive_mcp/ (clean separation like cljs).
-;; File names don't match feature names (e.g. presets.el provides hive-mcp-swarm-presets),
-;; so we use (load "/abs/path") instead of (require 'feature).
+;; Compiled cljel .el files live FLAT in elisp/ on the classpath, named by
+;; their (provide 'symbol) — emacs idiom (one feature per file, filename
+;; matches feature). build.sh outputs there; deps.edn :paths includes it.
+;; Source .cljel files stay in src/cljel/ (clean separation like cljs).
+
+(def ^:private addons-marker
+  "Marker file used to locate the elisp output dir on classpath.
+   The provide name 'hive-mcp-addons stays stable across builds, so the
+   filename hive-mcp-addons.el is a reliable anchor."
+  "hive-mcp-addons.el")
 
 (defn- resolve-cljel-dirs
   "Locate compiled cljel elisp directories on classpath.
    Returns vector of absolute directory paths to inject into Emacs load-path."
   []
   (let [dirs (atom [])]
-    ;; hive-emacs compiled cljel elisp (marker: addons.el is always present)
-    (when-let [res-url (io/resource "elisp/hive_mcp/addons.el")]
-      (let [cljel-base (-> (.getPath res-url)
-                           (str/replace #"/hive_mcp/addons\.el$" ""))]
-        (doseq [f (file-seq (io/file cljel-base))]
-          (when (and (.isDirectory f)
-                     (str/includes? (.getAbsolutePath f) "hive_mcp")
-                     (some #(str/ends-with? (.getName %) ".el")
-                           (seq (.listFiles f))))
-            (swap! dirs conj (.getAbsolutePath f))))))
+    ;; hive-emacs compiled cljel elisp (flat layout, marker = addons-marker)
+    (when-let [res-url (io/resource addons-marker)]
+      (let [elisp-dir (-> (.getPath res-url)
+                          (str/replace (re-pattern (str "/" addons-marker "$")) ""))]
+        (swap! dirs conj elisp-dir)))
     ;; clojure-elisp runtime (required by all compiled .el files)
     (when-let [rt-url (io/resource "clojure-elisp/clojure-elisp-runtime.el")]
       (swap! dirs conj (-> (.getPath rt-url)
@@ -64,17 +65,16 @@
     @dirs))
 
 (defn- collect-cljel-files
-  "Collect compiled .el files under elisp/hive_mcp/ on classpath.
-   Returns absolute paths sorted by depth (parents before children)."
+  "Collect compiled .el files under the flat elisp/ output dir on classpath.
+   Returns absolute paths sorted by name (deterministic load order)."
   []
-  (when-let [res-url (io/resource "elisp/hive_mcp/addons.el")]
-    (let [hive-mcp-dir (-> (.getPath res-url)
-                           (str/replace #"/addons\.el$" ""))]
-      (->> (file-seq (io/file hive-mcp-dir))
+  (when-let [res-url (io/resource addons-marker)]
+    (let [elisp-dir (-> (.getPath res-url)
+                        (str/replace (re-pattern (str "/" addons-marker "$")) ""))]
+      (->> (file-seq (io/file elisp-dir))
            (filter #(and (.isFile %)
                          (str/ends-with? (.getName %) ".el")))
-           (sort-by (fn [f] [(count (str/split (.getPath f) #"/"))
-                             (.getPath f)]))
+           (sort-by #(.getName %))
            (mapv #(.getAbsolutePath %))))))
 
 (defonce ^:private elisp-loaded?

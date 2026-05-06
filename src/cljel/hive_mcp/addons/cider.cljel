@@ -124,18 +124,23 @@ AGENT-ID optionally links this session to a swarm agent."
              (symbol-name rtype) name the-port)
     (list :name name :port the-port :repl-type (symbol-name rtype) :status "starting")))
 
-(defn connect-session [name host port &optional repl-type agent-id]
+(defn connect-session [name host port &optional repl-type agent-id project-dir]
   "Connect to an existing nREPL server as a named session.
 NAME is the session identifier.
 HOST is the nREPL host (default \"localhost\").
 PORT is the nREPL port number.
 REPL-TYPE is one of \"clj\" (default), \"cljs\", or \"cljel\".
 AGENT-ID optionally links this session to a swarm agent.
+PROJECT-DIR (optional) labels the REPL buffer with the target project
+so cross-project sessions don't all collide under the current buffer's
+project root.
 
 Connection is deferred to Emacs event loop to avoid blocking emacsclient."
   (interactive "sSession name: \nsHost (localhost): \nnPort: ")
   (let* [host (or host "localhost")
-         rtype (or (and repl-type (intern repl-type)) 'clj)]
+         rtype (or (and repl-type (intern repl-type)) 'clj)
+         expanded-dir (and project-dir (file-name-as-directory
+                                          (expand-file-name project-dir)))]
     ;; Register session as connecting
     (hive-mcp-cider-sessions-register
      name
@@ -143,11 +148,15 @@ Connection is deferred to Emacs event loop to avoid blocking emacsclient."
        port
        :agent-id agent-id
        :repl-type rtype
+       :project-dir expanded-dir
        :status 'connecting))
-    ;; Deferred connect (non-blocking)
+    ;; Deferred connect (non-blocking) — bind default-directory so any
+    ;; CIDER fallbacks pick up the target project, and pass project-dir
+    ;; explicitly to cider-connect-clj for buffer labeling.
     (condition-case err
-        (let [conn (hive-mcp-cider-connection-connect-deferred rtype port)
-              cider-buf (buffer-name conn)]
+        (let* [default-directory (or expanded-dir default-directory)
+               conn (hive-mcp-cider-connection-connect-deferred rtype port expanded-dir)
+               cider-buf (buffer-name conn)]
           (hive-mcp-cider-sessions-update-props name
             :status 'connected
             :cider-buffer cider-buf)
