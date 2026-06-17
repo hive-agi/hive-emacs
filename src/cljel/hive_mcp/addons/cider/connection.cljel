@@ -246,27 +246,66 @@ write-friendly — a stable evaluation context for the connect."
 ;; Ensure Connected (cascading strategy)
 ;; ============================================================================
 
+(defn- -session-buffer-alive-p [name]
+  "Return non-nil if session NAME's :cider-buffer is a live buffer
+with an active CIDER connection. Stale registry entries (buffer killed,
+nREPL died, or CIDER detached) return nil so callers can evict them."
+  (let* [cider-buf (hive-mcp-cider-sessions-get-prop name :cider-buffer)
+         buf (and cider-buf (get-buffer cider-buf))]
+    (and buf
+         (buffer-live-p buf)
+         (with-current-buffer buf
+           (and (featurep 'cider) (cider-connected-p))))))
+
+(defn- -evict-stale-session [name]
+  "Demote session NAME to :status 'stale so it stops being returned by
+find-by-status lookups. Caller is the one that detected the dead buffer."
+  (message "hive-mcp-cider: Evicting stale session '%s' (cider buffer dead)" name)
+  (hive-mcp-cider-sessions-update-prop name :status 'stale))
+
+(defn- -find-live-connected-session []
+  "Find first registry session whose :status is 'connected AND whose
+CIDER buffer is actually live. Demotes stale entries (status says
+connected but buffer is dead) so they stop poisoning the lookup.
+Returns session name string or nil."
+  (let [candidate (hive-mcp-cider-sessions-find-by-status 'connected)]
+    (cond
+     ((null candidate) nil)
+     ((-session-buffer-alive-p candidate) candidate)
+     (t
+      (-evict-stale-session candidate)
+      (-find-live-connected-session)))))
+
 (defn- -switch-to-session [name]
   "Switch to session NAME, making it the default CIDER connection.
-Returns t if successful, nil otherwise."
-  (let* [cider-buf (hive-mcp-cider-sessions-get-prop name :cider-buffer)]
-    (when (and cider-buf (get-buffer cider-buf))
-      (with-current-buffer cider-buf
-        (when (fboundp 'cider-make-connection-default)
-          (cider-make-connection-default (current-buffer))
-          t)))))
+Returns t on success, nil if the cider buffer is dead or
+cider-make-connection-default is unavailable. Evicts NAME from the
+registry on a dead-buffer cache miss."
+  (let* [cider-buf (hive-mcp-cider-sessions-get-prop name :cider-buffer)
+         buf (and cider-buf (get-buffer cider-buf))]
+    (cond
+     ((not (and buf (buffer-live-p buf)))
+      (when cider-buf (-evict-stale-session name))
+      nil)
+     ((not (fboundp 'cider-make-connection-default))
+      nil)
+     (t
+      (with-current-buffer buf
+        (cider-make-connection-default (current-buffer)))
+      t))))
 
 (defn ensure-connected []
   "Ensure CIDER is connected, reusing existing session or auto-connecting.
 Returns t if connected, nil otherwise.
-Priority: 1) Already connected 2) Reuse registry session 3) Connect to default port."
+Priority: 1) Already connected 2) Reuse live registry session 3) Connect to default port.
+Stale registry sessions (status 'connected but buffer dead) are demoted
+to 'stale so they stop short-circuiting the cascade with a lie."
   (cond
    ((and (featurep 'cider) (cider-connected-p))
     t)
-   ((when-let* [session-name (hive-mcp-cider-sessions-find-by-status 'connected)]
+   ((when-let* [session-name (-find-live-connected-session)]
       (message "hive-mcp-cider: Reusing session '%s'" session-name)
-      (-switch-to-session session-name)
-      t))
+      (-switch-to-session session-name)))
    ((hive-mcp-cider-nrepl-port-open-p hive-mcp-cider-nrepl-port)
     (message "hive-mcp-cider: Auto-connecting to port %d" hive-mcp-cider-nrepl-port)
     (condition-case nil

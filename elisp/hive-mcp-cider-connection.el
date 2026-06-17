@@ -165,23 +165,50 @@
       (message "hive-mcp-cider: Session '%s' connection failed: %s" name (error-message-string err)))) (let* ((attempts (or (plist-get session :attempts) 0)))
     (if (< attempts 30) (hive-mcp-cider-sessions-update-prop name :attempts (1+ attempts)) (hive-mcp-cider-connection--cancel-session-timer name)))))))
 
+(defun hive-mcp-cider-connection--session-buffer-alive-p (name)
+  "Return non-nil if session NAME's :cider-buffer is a live buffer\nwith an active CIDER connection. Stale registry entries (buffer killed,\nnREPL died, or CIDER detached) return nil so callers can evict them."
+  (let* ((cider-buf (hive-mcp-cider-sessions-get-prop name :cider-buffer))
+        (buf (and cider-buf (get-buffer cider-buf))))
+    (and buf (buffer-live-p buf) (with-current-buffer buf
+    (and (featurep 'cider) (cider-connected-p))))))
+
+(defun hive-mcp-cider-connection--evict-stale-session (name)
+  "Demote session NAME to :status 'stale so it stops being returned by\nfind-by-status lookups. Caller is the one that detected the dead buffer."
+  (message "hive-mcp-cider: Evicting stale session '%s' (cider buffer dead)" name)
+  (hive-mcp-cider-sessions-update-prop name :status 'stale))
+
+(defun hive-mcp-cider-connection--find-live-connected-session ()
+  "Find first registry session whose :status is 'connected AND whose\nCIDER buffer is actually live. Demotes stale entries (status says\nconnected but buffer is dead) so they stop poisoning the lookup.\nReturns session name string or nil."
+  (let* ((candidate (hive-mcp-cider-sessions-find-by-status 'connected)))
+    (cond
+  ((null candidate) nil)
+  ((hive-mcp-cider-connection--session-buffer-alive-p candidate) candidate)
+  (t (progn
+  (hive-mcp-cider-connection--evict-stale-session candidate)
+  (hive-mcp-cider-connection--find-live-connected-session))))))
+
 (defun hive-mcp-cider-connection--switch-to-session (name)
-  "Switch to session NAME, making it the default CIDER connection.\nReturns t if successful, nil otherwise."
-  (let* ((cider-buf (hive-mcp-cider-sessions-get-prop name :cider-buffer)))
-    (when (and cider-buf (get-buffer cider-buf))
-    (with-current-buffer cider-buf
-    (when (fboundp 'cider-make-connection-default)
-    (cider-make-connection-default (current-buffer))
-    t)))))
+  "Switch to session NAME, making it the default CIDER connection.\nReturns t on success, nil if the cider buffer is dead or\ncider-make-connection-default is unavailable. Evicts NAME from the\nregistry on a dead-buffer cache miss."
+  (let* ((cider-buf (hive-mcp-cider-sessions-get-prop name :cider-buffer))
+        (buf (and cider-buf (get-buffer cider-buf))))
+    (cond
+  ((not (and buf (buffer-live-p buf))) (progn
+  (when cider-buf
+    (hive-mcp-cider-connection--evict-stale-session name))
+  nil))
+  ((not (fboundp 'cider-make-connection-default)) nil)
+  (t (progn
+  (with-current-buffer buf
+    (cider-make-connection-default (current-buffer)))
+  t)))))
 
 (defun hive-mcp-cider-connection-ensure-connected ()
-  "Ensure CIDER is connected, reusing existing session or auto-connecting.\nReturns t if connected, nil otherwise.\nPriority: 1) Already connected 2) Reuse registry session 3) Connect to default port."
+  "Ensure CIDER is connected, reusing existing session or auto-connecting.\nReturns t if connected, nil otherwise.\nPriority: 1) Already connected 2) Reuse live registry session 3) Connect to default port.\nStale registry sessions (status 'connected but buffer dead) are demoted\nto 'stale so they stop short-circuiting the cascade with a lie."
   (cond
   ((and (featurep 'cider) (cider-connected-p)) t)
-  ((when-let* ((session-name (hive-mcp-cider-sessions-find-by-status 'connected)))
+  ((when-let* ((session-name (hive-mcp-cider-connection--find-live-connected-session)))
     (message "hive-mcp-cider: Reusing session '%s'" session-name)
-    (hive-mcp-cider-connection--switch-to-session session-name)
-    t) (progn
+    (hive-mcp-cider-connection--switch-to-session session-name)) (progn
   ))
   ((hive-mcp-cider-nrepl-port-open-p hive-mcp-cider-nrepl-port) (progn
   (message "hive-mcp-cider: Auto-connecting to port %d" hive-mcp-cider-nrepl-port)

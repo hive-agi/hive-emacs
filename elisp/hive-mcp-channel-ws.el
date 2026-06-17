@@ -113,7 +113,9 @@
     (websocket-send-text hive-mcp-channel-ws--connection "pong")
   (error nil))))
   (t (condition-case parse-err
-    (let* ((msg (json-read-from-string text)))
+    (let* ((msg (if (fboundp 'json-parse-string) (json-parse-string text :object-type 'alist :array-type 'list :null-object nil :false-object nil) (let* ((max-lisp-eval-depth 32000)
+        (max-specpdl-size 32000))
+    (json-read-from-string text)))))
     (hive-mcp-channel-ws--dispatch msg))
   (error (message "hive-mcp-channel-ws: Parse error: %s" (error-message-string parse-err)))))))
   (error (message "hive-mcp-channel-ws: on-message error: %s" (error-message-string err)))))
