@@ -123,7 +123,7 @@
     (dolist (col columns)
     (let* ((col-name (car col))
         (col-tasks (cdr (assoc col-name tasks-by-status)))
-        (task (nth row col-tasks)))
+        (task (clel-nth row col-tasks)))
     (if task (let* ((title (or (cdr (assoc 'title task)) "Untitled"))
         (id (cdr (assoc 'id task)))
         (truncated (if (> (length title) (- col-width 4)) (concat (substring title 0 (- col-width 7)) "...") title))
@@ -251,7 +251,7 @@
     (let* ((cols '("TODO" "IN-PROGRESS" "IN-REVIEW" "DONE"))
         (current-idx (cl-position current-col cols :test #'equal))
         (new-idx (+ current-idx direction))
-        (new-col (and (>= new-idx 0) (< new-idx 4) (nth new-idx cols))))
+        (new-col (and (>= new-idx 0) (< new-idx 4) (clel-nth new-idx cols))))
     (when new-col
     (let* ((vibe-status (hive-mcp-kanban-protocol--org-to-vibe-status new-col)))
     (hive-mcp-org-kanban-move-task id vibe-status))

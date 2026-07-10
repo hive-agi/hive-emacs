@@ -61,7 +61,7 @@
     (setq col-windows (append col-windows (list new-win)))))
     (dolist (win col-windows)
     (when (< buf-idx n)
-    (set-window-buffer win (nth buf-idx buffers))
+    (set-window-buffer win (clel-nth buf-idx buffers))
     (setq buf-idx (1+ buf-idx)))))))
     (balance-windows)
     (select-window (car row-windows)))))
@@ -326,7 +326,7 @@
     (let* ((line-parts nil))
     (dolist (cell cells)
     (let* ((lines (split-string cell "\n")))
-    (push (nth line-idx lines) line-parts)))
+    (push (clel-nth line-idx lines) line-parts)))
     (push (string-join (reverse line-parts) "  ") merged-lines)))
     (concat (string-join (reverse merged-lines) "\n") "\n\n")))))))
 

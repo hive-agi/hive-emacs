@@ -141,7 +141,7 @@
 
 (defun hive-mcp-hooks--notify (format-string &rest args)
   "Send a notification with FORMAT-STRING and ARGS."
-  (apply hive-mcp-hooks-notify-function format-string args))
+  (apply #'hive-mcp-hooks-notify-function format-string args))
 
 (defun hive-mcp-hooks--notify-warning (message &optional title)
   "Send a warning notification with MESSAGE and optional TITLE."

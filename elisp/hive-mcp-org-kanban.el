@@ -171,7 +171,7 @@
         (task-names (mapcar (lambda (tsk)
     (format "%s [%s]" (alist-get 'title tsk) (alist-get 'status tsk))) tasks))
         (selection (completing-read "Task: " task-names nil t))
-        (task (nth (cl-position selection task-names :test #'equal) tasks))
+        (task (clel-nth (cl-position selection task-names :test #'equal) tasks))
         (new-status (completing-read "New status: " (mapcar #'cdr hive-mcp-kanban-protocol-status-map) nil t)))
     (hive-mcp-org-kanban-move-task (alist-get 'id task) new-status)
     (message "Moved task to %s" new-status)))

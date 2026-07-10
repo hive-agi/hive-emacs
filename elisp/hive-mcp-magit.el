@@ -112,13 +112,13 @@
         (lines (hive-mcp-magit--shell-lines (format "git log -n%d --format='%s' 2>/dev/null" n format-str))))
     (mapcar (lambda (line)
     (let* ((parts (split-string line "\x00")))
-    (list :hash (nth 0 parts) :short-hash (nth 1 parts) :author (nth 2 parts) :email (nth 3 parts) :subject (nth 4 parts) :date (nth 5 parts)))) lines)))
+    (list :hash (clel-nth 0 parts) :short-hash (clel-nth 1 parts) :author (clel-nth 2 parts) :email (clel-nth 3 parts) :subject (clel-nth 4 parts) :date (clel-nth 5 parts)))) lines)))
 
 (defun hive-mcp-magit--get-ahead-behind ()
   "Return commits ahead/behind upstream as plist."
   (let* ((result (hive-mcp-magit--shell-command "git rev-list --left-right --count @{upstream}...HEAD 2>/dev/null")))
     (if (string-empty-p result) (list :ahead 0 :behind 0) (let* ((parts (split-string result)))
-    (list :behind (string-to-number (or (nth 0 parts) "0")) :ahead (string-to-number (or (nth 1 parts) "0")))))))
+    (list :behind (string-to-number (or (clel-nth 0 parts) "0")) :ahead (string-to-number (or (clel-nth 1 parts) "0")))))))
 
 (defun hive-mcp-magit--list-local-branches ()
   "Return list of local branch names."

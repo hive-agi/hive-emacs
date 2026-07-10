@@ -119,7 +119,7 @@
 (defun hive-mcp-channel--bdecode-fallback (str)
   "Decode bencode STR (fallback).\nReturns (decoded-value . consumed-bytes)."
   (let* ((pos 0))
-    (cl-labels ((decode-one (nil) (let* ((c (aref str pos)))
+    (cl-labels ((decode-one nil (let* ((c (aref str pos)))
     (cond
   ((equal c 105) (progn
   (cl-incf pos)

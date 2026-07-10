@@ -8,45 +8,45 @@
 
 
 
-(declare-function hive-mcp-initialize "hive-mcp" (nil))
+(declare-function hive-mcp-initialize "hive-mcp" nil)
 
-(declare-function hive-mcp-reset "hive-mcp" (nil))
+(declare-function hive-mcp-reset "hive-mcp" nil)
 
-(declare-function hive-mcp-add-note-interactive "hive-mcp-triggers" (nil))
+(declare-function hive-mcp-add-note-interactive "hive-mcp-triggers" nil)
 
-(declare-function hive-mcp-add-snippet-interactive "hive-mcp-triggers" (nil))
+(declare-function hive-mcp-add-snippet-interactive "hive-mcp-triggers" nil)
 
-(declare-function hive-mcp-add-convention-interactive "hive-mcp-triggers" (nil))
+(declare-function hive-mcp-add-convention-interactive "hive-mcp-triggers" nil)
 
-(declare-function hive-mcp-add-decision-interactive "hive-mcp-triggers" (nil))
+(declare-function hive-mcp-add-decision-interactive "hive-mcp-triggers" nil)
 
-(declare-function hive-mcp-show-memory "hive-mcp-triggers" (nil))
+(declare-function hive-mcp-show-memory "hive-mcp-triggers" nil)
 
-(declare-function hive-mcp-show-context "hive-mcp-triggers" (nil))
+(declare-function hive-mcp-show-context "hive-mcp-triggers" nil)
 
-(declare-function hive-mcp-run-workflow-interactive "hive-mcp-triggers" (nil))
+(declare-function hive-mcp-run-workflow-interactive "hive-mcp-triggers" nil)
 
-(declare-function hive-mcp-workflows-workflow-wrap "hive-mcp-workflows" (nil))
+(declare-function hive-mcp-workflows-workflow-wrap "hive-mcp-workflows" nil)
 
-(declare-function hive-mcp-workflows-workflow-catchup "hive-mcp-workflows" (nil))
+(declare-function hive-mcp-workflows-workflow-catchup "hive-mcp-workflows" nil)
 
-(declare-function hive-mcp-show-conversation-history "hive-mcp-triggers" (nil))
+(declare-function hive-mcp-show-conversation-history "hive-mcp-triggers" nil)
 
-(declare-function hive-mcp-clear-conversation "hive-mcp-triggers" (nil))
+(declare-function hive-mcp-clear-conversation "hive-mcp-triggers" nil)
 
-(declare-function hive-mcp-hivemind-status "hive-mcp-hivemind" (nil))
+(declare-function hive-mcp-hivemind-status "hive-mcp-hivemind" nil)
 
-(declare-function hive-mcp-hivemind-show-log "hive-mcp-hivemind" (nil))
+(declare-function hive-mcp-hivemind-show-log "hive-mcp-hivemind" nil)
 
-(declare-function hive-mcp-hivemind-clear "hive-mcp-hivemind" (nil))
+(declare-function hive-mcp-hivemind-clear "hive-mcp-hivemind" nil)
 
-(declare-function hive-mcp-channel-connect "hive-mcp-channel" (nil))
+(declare-function hive-mcp-channel-connect "hive-mcp-channel" nil)
 
-(declare-function hive-mcp-channel-disconnect "hive-mcp-channel" (nil))
+(declare-function hive-mcp-channel-disconnect "hive-mcp-channel" nil)
 
-(declare-function hive-mcp-channel-connected-p "hive-mcp-channel" (nil))
+(declare-function hive-mcp-channel-connected-p "hive-mcp-channel" nil)
 
-(declare-function hive-mcp-kanban-board "hive-mcp-kanban-board" (nil))
+(declare-function hive-mcp-kanban-board "hive-mcp-kanban-board" nil)
 
 (defvar hive-mcp--initialized)
 

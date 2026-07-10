@@ -124,28 +124,28 @@
   (let ((level (nth 0 args)) (component (nth 1 args)) (format-string (nth 2 args)) (args (nthcdr 3 args)))
     "Log a message at LEVEL for COMPONENT using FORMAT-STRING and ARGS.\n\nLEVEL is one of: debug, info, warn, error.\nCOMPONENT is a symbol or string identifying the subsystem.\nFORMAT-STRING and ARGS work like `format'."
   (when (and (hive-mcp-log--level-enabled-p level) (hive-mcp-log--component-enabled-p component))
-    (let* ((message (apply format format-string args)))
+    (let* ((message (apply #'format format-string args)))
     (hive-mcp-log--emit level component message)))))
 
 (defun hive-mcp-log-log-debug (&rest args)
   (let ((component (nth 0 args)) (format-string (nth 1 args)) (args (nthcdr 2 args)))
     "Log a debug message for COMPONENT using FORMAT-STRING and ARGS."
-  (apply hive-mcp-log-log 'debug component format-string args)))
+  (apply #'hive-mcp-log-log 'debug component format-string args)))
 
 (defun hive-mcp-log-log-info (&rest args)
   (let ((component (nth 0 args)) (format-string (nth 1 args)) (args (nthcdr 2 args)))
     "Log an info message for COMPONENT using FORMAT-STRING and ARGS."
-  (apply hive-mcp-log-log 'info component format-string args)))
+  (apply #'hive-mcp-log-log 'info component format-string args)))
 
 (defun hive-mcp-log-log-warn (&rest args)
   (let ((component (nth 0 args)) (format-string (nth 1 args)) (args (nthcdr 2 args)))
     "Log a warning message for COMPONENT using FORMAT-STRING and ARGS."
-  (apply hive-mcp-log-log 'warn component format-string args)))
+  (apply #'hive-mcp-log-log 'warn component format-string args)))
 
 (defun hive-mcp-log-log-error (&rest args)
   (let ((component (nth 0 args)) (format-string (nth 1 args)) (args (nthcdr 2 args)))
     "Log an error message for COMPONENT using FORMAT-STRING and ARGS."
-  (apply hive-mcp-log-log 'error component format-string args)))
+  (apply #'hive-mcp-log-log 'error component format-string args)))
 
 (defun hive-mcp-log-log-recent (&optional count)
   "Return the COUNT most recent log entries (default: 10).\nReturns a list of plists with :timestamp, :level, :component, :message."
