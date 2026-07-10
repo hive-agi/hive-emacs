@@ -9,7 +9,7 @@
 
         ;; hive-dsl — Result monad, rescue/guard DSL
         io.github.hive-agi/hive-dsl
-        {:git/tag "v0.5.1" :git/sha "335869e023e1bd5bf57c72be881baa647edf4a78"}
+        {:git/tag "v0.5.2" :git/sha "8d9760c2f0cf210555db8b3d9fc47ce1af46d3f4"}
 
         ;; hive-di — typed env var resolution with ADT backing (defconfig)
         io.github.hive-agi/hive-di
