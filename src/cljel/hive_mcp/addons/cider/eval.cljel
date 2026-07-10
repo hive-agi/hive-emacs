@@ -40,49 +40,100 @@ Smaller values = more responsive, larger values = less CPU overhead."
 ;; Core Eval Engine
 ;; ============================================================================
 
+;; Eval state is a 5-slot vector [value err out compiled state] instead of an
+;; overloaded (result . done) cons. Distinct slots stop value/err/out from
+;; clobbering each other; STATE is the completion signal:
+;;   nil     -- still waiting
+;;   t       -- done, success
+;;   'error  -- done, evaluation error (from status, NOT mere stderr presence)
+(defn make-eval-state []
+  "Create a fresh eval-state vector: [value err out compiled state]."
+  (make-vector 5 nil))
+
+(defn apply-response [st response]
+  "Fold one nREPL RESPONSE dict into eval-state vector ST; mutate and return ST.
+
+Pure with respect to everything but ST, so it is drivable from ERT without a
+live nREPL. `err' and `out' accumulate across chunks (str-concat). The error
+state is derived ONLY from an \"eval-error\" status — a plain stderr write
+during an otherwise-successful eval must NOT be treated as failure. A
+cljel-active session returns its result under `cljel-compiled-elisp' (never
+`value'), captured here for local execution in `finalize-eval-state'."
+  (let [value (nrepl-dict-get response "value")
+        err (nrepl-dict-get response "err")
+        out (nrepl-dict-get response "out")
+        compiled (nrepl-dict-get response "cljel-compiled-elisp")
+        status (nrepl-dict-get response "status")]
+    (when value
+      (aset st 0 value))
+    (when err
+      (aset st 1 (str (or (aref st 1) "") err)))
+    (when out
+      (aset st 2 (str (or (aref st 2) "") out)))
+    (when compiled
+      (aset st 3 compiled))
+    (when (member "eval-error" status)
+      (aset st 4 'error))
+    (when (member "done" status)
+      (unless (aref st 4)
+        (aset st 4 t)))
+    st))
+
+(defn finalize-eval-state [st]
+  "Compute the final result string from a completed eval-state ST.
+
+For a cljel-active session the response carries only compiled Elisp; the
+client must execute it locally in Emacs (the middleware only compiles). We
+delegate to the cider-cljel client helper when present, else eval the read
+form directly. On a plain clj eval, prepend accumulated stdout to the value."
+  (let [value (aref st 0)
+        err (aref st 1)
+        out (aref st 2)
+        compiled (aref st 3)
+        state (aref st 4)]
+    (elisp-cond
+     ((eq state 'error)
+      (or err "Eval error"))
+     (compiled
+      (progn
+        (ignore-errors (require 'clojure-elisp-runtime nil t))
+        (if (fboundp 'cider-cljel--eval-elisp-string)
+            (cider-cljel--eval-elisp-string compiled)
+          (condition-case e
+              (format "%S" (eval (car (read-from-string compiled)) t))
+            (error (format "cljel client eval error: %S" e))))))
+     ((and value out (not (string= "" out)))
+      (str out value))
+     (value value)
+     ((and out (not (string= "" out)))
+      out)
+     (t "nil"))))
+
 (defn eval-with-heartbeat [code &optional timeout-override]
   "Evaluate CODE asynchronously with heartbeat polling.
 Optional TIMEOUT-OVERRIDE in seconds (default: `hive-mcp-cider-eval-timeout').
 Returns result string when ready or signals error on timeout.
 
-Uses closure-local mutable cell instead of global defvars:
-  cell = (result . nil)       -- waiting
-  cell = (result . t)         -- done (result in car)
-  cell = (error-msg . error)  -- failed"
-  (let [cell (cons nil nil)]  ;; closure-local state
-    ;; Send async request — callback mutates the local cell
+Async state lives in a closure-local eval-state vector (see `make-eval-state');
+the callback folds each nREPL response into it via `apply-response', and
+`finalize-eval-state' turns the completed state into the result string —
+executing compiled cljel locally in Emacs when the session is cljel-active."
+  (let [st (make-eval-state)]
+    ;; Send async request — callback folds responses into the local state
     (cider-nrepl-request:eval
      code
      (lambda (response)
-       (let [value (nrepl-dict-get response "value")
-             err (nrepl-dict-get response "err")
-             out (nrepl-dict-get response "out")
-             status (nrepl-dict-get response "status")]
-         (when value
-           (setcar cell value))
-         (when err
-           (setcar cell err)
-           (setcdr cell 'error))
-         (when (and out (not (car cell)))
-           (setcar cell out))
-         (when (member "done" status)
-           (unless (cdr cell)
-             (setcdr cell t))))))
+       (apply-response st response)))
     ;; Poll with heartbeat until done or timeout
     (let [start-time (float-time)
           timeout (or timeout-override hive-mcp-cider-eval-timeout)
           interval hive-mcp-cider-eval-poll-interval]
-      (while (and (not (cdr cell))
+      (while (and (not (aref st 4))
                   (< (- (float-time) start-time) timeout))
         (accept-process-output nil interval))
-      (elisp-cond
-       ((not (cdr cell))
-        (error "Eval timed out after %d seconds (heartbeat polling)" timeout))
-       ((eq (cdr cell) 'error)
-        (car cell))
-       ((car cell)
-        (car cell))
-       (t "nil")))))
+      (if (not (aref st 4))
+          (error "Eval timed out after %d seconds (heartbeat polling)" timeout)
+        (finalize-eval-state st)))))
 
 ;; ============================================================================
 ;; Session-Routed Eval

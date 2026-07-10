@@ -31,34 +31,62 @@
   :group 'hive-mcp-cider
   :type 'number)
 
-(defun hive-mcp-cider-eval-eval-with-heartbeat (code &optional timeout-override)
-  "Evaluate CODE asynchronously with heartbeat polling.\nOptional TIMEOUT-OVERRIDE in seconds (default: `hive-mcp-cider-eval-timeout').\nReturns result string when ready or signals error on timeout.\n\nUses closure-local mutable cell instead of global defvars:\n  cell = (result . nil)       -- waiting\n  cell = (result . t)         -- done (result in car)\n  cell = (error-msg . error)  -- failed"
-  (let* ((cell (cons nil nil)))
-    (cider-nrepl-request:eval code (lambda (response)
-    (let* ((value (nrepl-dict-get response "value"))
+(defun hive-mcp-cider-eval-make-eval-state ()
+  "Create a fresh eval-state vector: [value err out compiled state]."
+  (make-vector 5 nil))
+
+(defun hive-mcp-cider-eval-apply-response (st response)
+  "Fold one nREPL RESPONSE dict into eval-state vector ST; mutate and return ST.\n\nPure with respect to everything but ST, so it is drivable from ERT without a\nlive nREPL. `err' and `out' accumulate across chunks (str-concat). The error\nstate is derived ONLY from an \"eval-error\" status — a plain stderr write\nduring an otherwise-successful eval must NOT be treated as failure. A\ncljel-active session returns its result under `cljel-compiled-elisp' (never\n`value'), captured here for local execution in `finalize-eval-state'."
+  (let* ((value (nrepl-dict-get response "value"))
         (err (nrepl-dict-get response "err"))
         (out (nrepl-dict-get response "out"))
+        (compiled (nrepl-dict-get response "cljel-compiled-elisp"))
         (status (nrepl-dict-get response "status")))
     (when value
-    (setcar cell value))
+    (aset st 0 value))
     (when err
-    (setcar cell err)
-    (setcdr cell 'error))
-    (when (and out (not (car cell)))
-    (setcar cell out))
+    (aset st 1 (clel-str (or (aref st 1) "") err)))
+    (when out
+    (aset st 2 (clel-str (or (aref st 2) "") out)))
+    (when compiled
+    (aset st 3 compiled))
+    (when (member "eval-error" status)
+    (aset st 4 'error))
     (when (member "done" status)
-    (unless (cdr cell)
-    (setcdr cell t))))))
+    (unless (aref st 4)
+    (aset st 4 t)))
+    st))
+
+(defun hive-mcp-cider-eval-finalize-eval-state (st)
+  "Compute the final result string from a completed eval-state ST.\n\nFor a cljel-active session the response carries only compiled Elisp; the\nclient must execute it locally in Emacs (the middleware only compiles). We\ndelegate to the cider-cljel client helper when present, else eval the read\nform directly. On a plain clj eval, prepend accumulated stdout to the value."
+  (let* ((value (aref st 0))
+        (err (aref st 1))
+        (out (aref st 2))
+        (compiled (aref st 3))
+        (state (aref st 4)))
+    (cond
+  ((eq state 'error) (or err "Eval error"))
+  (compiled (progn
+  (ignore-errors (require 'clojure-elisp-runtime nil t))
+  (if (fboundp 'cider-cljel--eval-elisp-string) (cider-cljel--eval-elisp-string compiled) (condition-case e
+    (format "%S" (eval (car (read-from-string compiled)) t))
+  (error (format "cljel client eval error: %S" e))))))
+  ((and value out (not (string= "" out))) (clel-str out value))
+  (value value)
+  ((and out (not (string= "" out))) out)
+  (t "nil"))))
+
+(defun hive-mcp-cider-eval-eval-with-heartbeat (code &optional timeout-override)
+  "Evaluate CODE asynchronously with heartbeat polling.\nOptional TIMEOUT-OVERRIDE in seconds (default: `hive-mcp-cider-eval-timeout').\nReturns result string when ready or signals error on timeout.\n\nAsync state lives in a closure-local eval-state vector (see `make-eval-state');\nthe callback folds each nREPL response into it via `apply-response', and\n`finalize-eval-state' turns the completed state into the result string —\nexecuting compiled cljel locally in Emacs when the session is cljel-active."
+  (let* ((st (hive-mcp-cider-eval-make-eval-state)))
+    (cider-nrepl-request:eval code (lambda (response)
+    (hive-mcp-cider-eval-apply-response st response)))
     (let* ((start-time (float-time))
         (timeout (or timeout-override hive-mcp-cider-eval-timeout))
         (interval hive-mcp-cider-eval-poll-interval))
-    (while (and (not (cdr cell)) (< (- (float-time) start-time) timeout))
+    (while (and (not (aref st 4)) (< (- (float-time) start-time) timeout))
     (accept-process-output nil interval))
-    (cond
-  ((not (cdr cell)) (error "Eval timed out after %d seconds (heartbeat polling)" timeout))
-  ((eq (cdr cell) 'error) (car cell))
-  ((car cell) (car cell))
-  (t "nil")))))
+    (if (not (aref st 4)) (error "Eval timed out after %d seconds (heartbeat polling)" timeout) (hive-mcp-cider-eval-finalize-eval-state st)))))
 
 (defun hive-mcp-cider-eval-eval-in-session (name code &optional timeout)
   "Evaluate CODE in the CIDER session NAME.\nOptional TIMEOUT in seconds (default: `hive-mcp-cider-eval-timeout').\nUses async evaluation with heartbeat polling."
