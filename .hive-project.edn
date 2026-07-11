@@ -1,0 +1,5 @@
+{:project-id "hive-emacs"
+ :parent "hive"
+ :description "Emacs client for the hive ecosystem — the emacs<->hive-mcp bridge (nREPL/cider session management, tool routing), the agent/FleetView UI surface, and ling orchestration. Written in cljel (a Clojure dialect we author that compiles to elisp)."
+ :language :clojure-elisp
+ :tags ["hive-emacs" "emacs" "cljel" "client" "bridge" "nrepl" "cider" "ui" "ling"]}
