@@ -25,7 +25,7 @@
             [hive-emacs.dsl.multi-hooks :as mh]))
 ;; Copyright (C) 2024-2026 hive-agi contributors
 ;;
-;; SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0
+;; SPDX-License-Identifier: MIT OR GPL-2.0-or-later WITH Classpath-exception-2.0
 
 (defn- try-resolve
   "Attempt to resolve a fully-qualified symbol. Returns var or nil."

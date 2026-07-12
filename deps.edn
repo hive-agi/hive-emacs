@@ -8,12 +8,10 @@
         org.replikativ/persistent-sorted-set {:mvn/version "0.4.122"}
 
         ;; hive-dsl — Result monad, rescue/guard DSL
-        io.github.hive-agi/hive-dsl
-        {:git/tag "v0.5.2" :git/sha "8d9760c2f0cf210555db8b3d9fc47ce1af46d3f4"}
+        io.github.hive-agi/hive-dsl {:mvn/version "0.5.2"}
 
         ;; hive-di — typed env var resolution with ADT backing (defconfig)
-        io.github.hive-agi/hive-di
-        {:git/tag "v0.3.1" :git/sha "ab63fd0"}
+        io.github.hive-agi/hive-di {:mvn/version "0.3.1"}
 
         ;; Process execution for emacsclient subprocess
         babashka/process {:mvn/version "0.6.25"}}
@@ -24,4 +22,9 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.1"}}
-   :main-opts ["-m" "cognitect.test-runner"]}}}
+   :main-opts ["-m" "cognitect.test-runner"]}
+
+  :build
+  {:deps {io.github.clojure/tools.build {:mvn/version "0.10.9"}
+          slipset/deps-deploy {:mvn/version "0.2.2"}}
+   :ns-default build}}}

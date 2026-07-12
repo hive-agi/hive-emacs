@@ -18,7 +18,7 @@
             [hive-dsl.result :as r]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
-;; SPDX-License-Identifier: AGPL-3.0-or-later
+;; SPDX-License-Identifier: MIT
 
 (defconfig EmacsConfig
   :emacsclient-path (env "EMACSCLIENT"
