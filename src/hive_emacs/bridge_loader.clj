@@ -67,12 +67,10 @@
   (true? (:success result)))
 
 (defn ensure-loaded!
-  "Ensure the bridge is ready in Emacs.
+  "Ensure required bridge entrypoints are ready in Emacs.
 
    EVAL-FN accepts Elisp plus timeout milliseconds and returns a map with
-   :success. Readiness is re-probed because Emacs can restart independently
-   from the host JVM. Loading is serialized so concurrent addon initialization
-   cannot race."
+   :success."
   [eval-fn]
   (locking load-lock
     (if (eval-success? (eval-fn (bridge-ready-elisp) 5000))
