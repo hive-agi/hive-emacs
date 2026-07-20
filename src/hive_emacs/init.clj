@@ -266,6 +266,17 @@
           step-init
           step-store-instance))
 
+(defn addon-ctor
+  "Pure constructor for the `hive.emacs` IAddon — (config -> IAddon | nil).
+   The mounter (hive-addon.mount) resolves this via :addon/init-fn; the host
+   then drives register!/initialize!. Returns nil when the IAddon protocol is
+   absent from the classpath (graceful, standalone mode). No registration, no
+   init!, no side effects — construction only (elisp load + editor/vessel
+   wiring run inside the reify's initialize!). Additive: the self-registering
+   `init-as-addon!` path remains for the current hive-mcp loader."
+  [_config]
+  (make-addon))
+
 (defn init-as-addon!
   "Register hive-emacs as an IAddon. Entry point called by classpath scanner."
   []
