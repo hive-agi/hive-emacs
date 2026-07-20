@@ -10,19 +10,18 @@
    - Daemon lifecycle management
 
    Elisp loading:
-   On initialize!, injects compiled cljel .el files into Emacs load-path
-   and loads them (overriding old hive-mcp elisp with migrated cljel versions).
-   Follows the hive-claude/lsp-mcp exemplar for load-path injection.
+   On initialize!, delegates to the dependency-free bridge loader, which adds
+   compiled Elisp directories to load-path, requires the hive-mcp and CIDER
+   entrypoints, validates their callable API, and enables hive-mcp-mode.
 
    Usage:
      (init-as-addon!)   ;; called by classpath scanner"
-  (:require [hive-emacs.editor-adapter :as ema]
-            [hive-emacs.vessel :as vessel]
-            [taoensso.timbre :as log]
-            [clojure.java.io :as io]
-            [clojure.string :as str]
+  (:require [hive-emacs.bridge-loader :as bridge]
             [hive-emacs.dsl.ext-hooks :as eh]
-            [hive-emacs.dsl.multi-hooks :as mh]))
+            [hive-emacs.dsl.multi-hooks :as mh]
+            [hive-emacs.editor-adapter :as ema]
+            [hive-emacs.vessel :as vessel]
+            [taoensso.timbre :as log]))
 ;; Copyright (C) 2024-2026 hive-agi contributors
 ;;
 ;; SPDX-License-Identifier: MIT OR GPL-2.0-or-later WITH Classpath-exception-2.0
@@ -42,73 +41,15 @@
 ;; matches feature). build.sh outputs there; deps.edn :paths includes it.
 ;; Source .cljel files stay in src/cljel/ (clean separation like cljs).
 
-(def ^:private addons-marker
-  "Marker file used to locate the elisp output dir on classpath.
-   The provide name 'hive-mcp-addons stays stable across builds, so the
-   filename hive-mcp-addons.el is a reliable anchor."
-  "hive-mcp-addons.el")
-
-(defn- resolve-cljel-dirs
-  "Locate compiled cljel elisp directories on classpath.
-   Returns vector of absolute directory paths to inject into Emacs load-path."
-  []
-  (let [dirs (atom [])]
-    ;; hive-emacs compiled cljel elisp (flat layout, marker = addons-marker)
-    (when-let [res-url (io/resource addons-marker)]
-      (let [elisp-dir (-> (.getPath res-url)
-                          (str/replace (re-pattern (str "/" addons-marker "$")) ""))]
-        (swap! dirs conj elisp-dir)))
-    ;; clojure-elisp runtime (required by all compiled .el files)
-    (when-let [rt-url (io/resource "clojure-elisp/clojure-elisp-runtime.el")]
-      (swap! dirs conj (-> (.getPath rt-url)
-                           (str/replace #"/clojure-elisp-runtime\.el$" ""))))
-    @dirs))
-
-(defn- collect-cljel-files
-  "Collect compiled .el files under the flat elisp/ output dir on classpath.
-   Returns absolute paths sorted by name (deterministic load order)."
-  []
-  (when-let [res-url (io/resource addons-marker)]
-    (let [elisp-dir (-> (.getPath res-url)
-                        (str/replace (re-pattern (str "/" addons-marker "$")) ""))]
-      (->> (file-seq (io/file elisp-dir))
-           (filter #(and (.isFile %)
-                         (str/ends-with? (.getName %) ".el")))
-           (sort-by #(.getName %))
-           (mapv #(.getAbsolutePath %))))))
-
-(defonce ^:private elisp-loaded?
-  (delay
-    (when-let [eval-fn (try-resolve 'hive-mcp.emacs.client/eval-elisp-with-timeout)]
-      (let [dirs  (resolve-cljel-dirs)
-            files (collect-cljel-files)]
-        (when (and (seq dirs) (seq files))
-          (log/debug "hive-emacs: cljel load-paths:" dirs)
-          ;; Step 1: Inject all dirs into Emacs load-path
-          (let [lp-elisp (format "(progn %s t)"
-                                 (str/join " " (map #(format "(add-to-list 'load-path \"%s\")" %) dirs)))
-                lp-result (eval-fn lp-elisp 5000)]
-            (if-not (:success lp-result)
-              (do (log/warn "hive-emacs: load-path injection failed:" (:error lp-result))
-                  false)
-              ;; Step 2: Load each .el file with per-file error handling
-              (let [load-forms (mapv (fn [f]
-                                       (let [path (str/replace f #"\.el$" "")]
-                                         (format "(condition-case err (load \"%s\") (error (message \"hive-emacs cljel: failed %s: %%s\" err)))"
-                                                 path (.getName (io/file f)))))
-                                     files)
-                    load-elisp (format "(progn %s t)" (str/join "\n" load-forms))
-                    load-result (eval-fn load-elisp 15000)]
-                (if (:success load-result)
-                  (do (log/info "hive-emacs: cljel elisp loaded" {:files (count files)})
-                      true)
-                  (do (log/warn "hive-emacs: cljel load failed:" (:error load-result))
-                      false))))))))))
-
 (defn- ensure-elisp-loaded!
-  "Ensure compiled cljel elisp is loaded in Emacs. Idempotent."
+  "Ensure the Emacs-side hive-mcp and CIDER entrypoints are ready."
   []
-  @elisp-loaded?)
+  (when-let [eval-fn (try-resolve 'hive-mcp.emacs.client/eval-elisp-with-timeout)]
+    (let [loaded? (bridge/ensure-loaded! eval-fn)]
+      (if loaded?
+        (log/info "hive-emacs: bridge entrypoints ready")
+        (log/warn "hive-emacs: bridge entrypoints failed to load"))
+      loaded?)))
 
 ;; =============================================================================
 ;; IAddon Implementation
@@ -154,11 +95,11 @@
             {:success? true :already-initialized? true}
             (try
               ;; Load compiled cljel elisp into Emacs (idempotent, best-effort)
-              (let [_elisp-ok? (ensure-elisp-loaded!)
+              (let [elisp-ok? (ensure-elisp-loaded!)
                     set-editor!  (try-resolve 'hive-mcp.protocols.editor/set-editor!)
                     get-editor   (try-resolve 'hive-mcp.protocols.editor/get-editor)
                     editor-id-fn (try-resolve 'hive-mcp.protocols.editor/editor-id)]
-                (if (and set-editor! get-editor editor-id-fn)
+                (if (and elisp-ok? set-editor! get-editor editor-id-fn)
                   (do
                     (set-editor! (ema/->emacsclient-editor))
                     ;; Register EmacsVessel in IVessel registry (self-registration)
@@ -171,7 +112,11 @@
                     {:success? true
                      :metadata {:editor-id (editor-id-fn (get-editor))}})
                   {:success? false
-                   :errors ["IEditor protocol not found on classpath"]}))
+                   :errors (cond-> []
+                             (not elisp-ok?)
+                             (conj "Emacs bridge entrypoints failed to load")
+                             (not (and set-editor! get-editor editor-id-fn))
+                             (conj "IEditor protocol not found on classpath"))}))
               (catch Exception e
                 (log/error "hive-emacs initialization failed" {:error (.getMessage e)})
                 {:success? false
