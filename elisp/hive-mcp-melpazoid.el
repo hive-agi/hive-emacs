@@ -240,7 +240,9 @@
   :group 'hive-mcp-melpazoid
   (if hive-mcp-melpazoid-mode (progn
   (require 'hive-mcp-api nil t)
-  (message "Emacs-mcp-melpazoid enabled")) (hive-mcp-melpazoid-stop)))
+  (message "Emacs-mcp-melpazoid enabled")) (progn
+  (hive-mcp-melpazoid-stop)
+  (message "Emacs-mcp-melpazoid disabled"))))
 
 (with-eval-after-load 'hive-mcp-addons
   (hive-mcp-addon-register 'melpazoid :version "0.1.0" :description "Melpazoid Docker-based MELPA testing" :requires '(hive-mcp-api) :provides '(hive-mcp-melpazoid-mode hive-mcp-melpazoid-transient)))

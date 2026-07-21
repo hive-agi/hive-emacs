@@ -49,6 +49,14 @@ find "$SRC_DIR" -name '*.cljel' | sort | while read -r cljel_file; do
       provide_name=$(grep -oP "^\(provide '\K[^)]+" "$el_file" | head -1)
       if [[ -n "$provide_name" ]]; then
         dest="$OUT_DIR/${provide_name}.el"
+        # Two sources can converge on one provide symbol (the compiler maps
+        # dots to dashes, so hive-mcp.docs and hive-mcp-docs collide). Output
+        # is named by that symbol, so the second write would silently destroy
+        # the first and drop a module from the build.
+        if [[ -e "$dest" ]]; then
+          echo "  FAIL (provide collision): $rel would overwrite ${provide_name}.el" >&2
+          exit 1
+        fi
         mv "$el_file" "$dest"
         echo "  $provide_name ← $rel"
         ((compiled++)) || true

@@ -240,7 +240,9 @@
     t))
   (error (message "hive-mcp-channel: Send error: %s" (error-message-string err))
       (push msg hive-mcp-channel--message-queue)
-      nil)) (push msg hive-mcp-channel--message-queue)))
+      nil)) (progn
+  (push msg hive-mcp-channel--message-queue)
+  nil)))
 
 (defun hive-mcp-channel-on (event-type handler)
   "Register HANDLER for EVENT-TYPE.\nEVENT-TYPE should be a keyword like :task-completed.\nHANDLER receives the decoded message as an alist."

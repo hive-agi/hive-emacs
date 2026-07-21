@@ -163,7 +163,10 @@
   (error (hive-mcp-cider-connection--cancel-session-timer name)
       (hive-mcp-cider-sessions-update-prop name :status 'error)
       (message "hive-mcp-cider: Session '%s' connection failed: %s" name (error-message-string err)))) (let* ((attempts (or (plist-get session :attempts) 0)))
-    (if (< attempts 30) (hive-mcp-cider-sessions-update-prop name :attempts (1+ attempts)) (hive-mcp-cider-connection--cancel-session-timer name)))))))
+    (if (< attempts 30) (hive-mcp-cider-sessions-update-prop name :attempts (1+ attempts)) (progn
+  (hive-mcp-cider-connection--cancel-session-timer name)
+  (hive-mcp-cider-sessions-update-prop name :status 'timeout)
+  (message "hive-mcp-cider: Session '%s' timed out waiting for nREPL" name))))))))
 
 (defun hive-mcp-cider-connection--session-buffer-alive-p (name)
   "Return non-nil if session NAME's :cider-buffer is a live buffer\nwith an active CIDER connection. Stale registry entries (buffer killed,\nnREPL died, or CIDER detached) return nil so callers can evict them."

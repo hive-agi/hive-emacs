@@ -137,7 +137,9 @@
 
 (defun hive-mcp-swarm-prompts--send-desktop-notification (title body)
   "Send desktop notification with TITLE and BODY via notify-send.\nFalls back to beep + message if notify-send unavailable."
-  (if (and hive-mcp-swarm-prompts-desktop-notify (executable-find "notify-send")) (start-process "swarm-notify" nil "notify-send" "--urgency=critical" "--app-name=Swarm" title body) (ding t)))
+  (if (and hive-mcp-swarm-prompts-desktop-notify (executable-find "notify-send")) (start-process "swarm-notify" nil "notify-send" "--urgency=critical" "--app-name=Swarm" title body) (progn
+  (ding t)
+  (message "SWARM: %s - %s" title body))))
 
 (defun hive-mcp-swarm-prompts--display-prompt (slave-id prompt-text)
   "Display PROMPT-TEXT from SLAVE-ID in the prompts buffer."

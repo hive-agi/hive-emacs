@@ -190,7 +190,9 @@
   (if hive-mcp-gptel-mode (progn
   (hive-mcp-gptel--setup-hooks)
   (setq hive-mcp-gptel--initialized t)
-  (message "hive-mcp-gptel: enabled")) (hive-mcp-gptel--teardown-hooks)))
+  (message "hive-mcp-gptel: enabled")) (progn
+  (hive-mcp-gptel--teardown-hooks)
+  (message "hive-mcp-gptel: disabled"))))
 
 (with-eval-after-load 'transient
   (transient-define-prefix hive-mcp-gptel-menu ()

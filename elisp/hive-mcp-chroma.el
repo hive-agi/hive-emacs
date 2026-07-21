@@ -123,7 +123,9 @@
     (setq hive-mcp-chroma--process (apply #'start-process "hive-mcp-chroma" "*hive-mcp-chroma*" (car cmd) args))
     (set-process-sentinel hive-mcp-chroma--process (lambda (proc _event)
     (when (eq (process-status proc) 'exit)
-    (if (zerop (process-exit-status proc)) (hive-mcp-chroma--wait-for-healthy) (setq hive-mcp-chroma--status 'stopped))))))))
+    (if (zerop (process-exit-status proc)) (hive-mcp-chroma--wait-for-healthy) (progn
+  (setq hive-mcp-chroma--status 'stopped)
+  (message "Failed to start Chroma container")))))))))
 
 (defun hive-mcp-chroma--wait-for-healthy ()
   "Wait for Chroma to become healthy, then configure."
