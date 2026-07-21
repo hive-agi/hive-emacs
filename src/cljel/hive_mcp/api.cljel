@@ -836,7 +836,7 @@ E.g. (:command \"status\" :ling-id \"foo\") -> {:command \"status\" :ling-id \"f
               val (cadr plist)]
           (push (format "%s %s"
                         (symbol-name key)
-                        (cond
+                        (elisp-cond
                           ((stringp val) (format "\"%s\"" (replace-regexp-in-string "\"" "\\\\\"" val)))
                           ((eq val t) "true")
                           ((eq val nil) "nil")

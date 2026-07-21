@@ -217,7 +217,7 @@ With one known subagent, opens it; otherwise prompts."
   (interactive)
   (let [ids (hive-mcp-workflow-chat-agent-ids)
         id (or agent-id
-               (cond
+               (elisp-cond
                 ((null ids) nil)
                 ((= 1 (length ids)) (car ids))
                 (t (completing-read "Subagent: " ids nil t))))]

@@ -106,7 +106,7 @@
 
 (defn- phase-face [phase]
   "Return the face for PHASE string."
-  (cond
+  (elisp-cond
     ((string= phase "started") 'hive-mcp-workflow-ui-started)
     ((string= phase "step") 'hive-mcp-workflow-ui-step)
     ((string= phase "completed") 'hive-mcp-workflow-ui-completed)
@@ -116,7 +116,7 @@
 
 (defn- phase-glyph [phase]
   "Return a short glyph for PHASE string."
-  (cond
+  (elisp-cond
     ((string= phase "started") "◐")
     ((string= phase "step") "▸")
     ((string= phase "completed") "✓")
@@ -167,7 +167,7 @@ segment when the run has completed/failed past the last recorded segment."
         cur (hive-mcp-workflow-ui--as-string (alist-get 'state-id frame))
         terminal (or (string= phase "completed") (string= phase "failed"))
         tail-state (if segs (hive-mcp-workflow-ui--seg-state (last segs)) "")]
-    (cond
+    (elisp-cond
      ((and (= (length segs) 0) (> (length cur) 0))
       (list (list (cons 'state-id cur) (cons 'status phase))))
      ((and terminal (> (length cur) 0) (not (string= cur tail-state)))
@@ -214,7 +214,7 @@ alists shaped {task-id ling-id}."
   (let [phase (hive-mcp-workflow-ui--as-string (alist-get 'phase frame))
         variant (hive-mcp-workflow-ui--as-string (alist-get 'variant frame))
         wave (alist-get 'wave frame)
-        label (cond ((> (length variant) 0) variant)
+        label (elisp-cond ((> (length variant) 0) variant)
                     ((> (length phase) 0) phase)
                     (wave "wave")
                     (t ""))

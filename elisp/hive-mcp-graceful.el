@@ -64,8 +64,8 @@
   (let* ((timeout-val (gensym "timeout-")))
     (list 'let (list (list timeout-val (list '/ timeout-ms 1000.0))) (list 'with-timeout (list timeout-val '(progn (when hive-mcp-graceful-log-errors (message "[hive-mcp-graceful] timeout exceeded")) nil)) (cons 'progn body)))))
 
-(defun hive-mcp-graceful-safe-call (&rest args)
-  (let ((fn (nth 0 args)) (args (nthcdr 1 args)))
+(defun hive-mcp-graceful-safe-call (&rest clel--args)
+  (let ((fn (nth 0 clel--args)) (args (nthcdr 1 clel--args)))
     "Call FN with ARGS, catching any errors and returning nil."
   (condition-case err
     (apply fn args)
@@ -118,8 +118,8 @@
   "Create a failed result containing ERROR."
   (hive-mcp-result--create :ok nil :value nil :error error))
 
-(defun hive-mcp-graceful-result-try (&rest args)
-  (let ((fn (nth 0 args)) (args (nthcdr 1 args)))
+(defun hive-mcp-graceful-result-try (&rest clel--args)
+  (let ((fn (nth 0 clel--args)) (args (nthcdr 1 clel--args)))
     "Call FN with ARGS, returning an hive-mcp-result."
   (condition-case err
     (hive-mcp-result-success (apply fn args))
@@ -139,8 +139,8 @@
   "Create a circuit breaker named NAME."
   (hive-mcp-circuit-breaker--create :name name :threshold (or threshold 5) :reset-timeout (or reset-timeout 60)))
 
-(defun hive-mcp-graceful-circuit-breaker-call (&rest args)
-  (let ((breaker (nth 0 args)) (fn (nth 1 args)) (args (nthcdr 2 args)))
+(defun hive-mcp-graceful-circuit-breaker-call (&rest clel--args)
+  (let ((breaker (nth 0 clel--args)) (fn (nth 1 clel--args)) (args (nthcdr 2 clel--args)))
     "Call FN with ARGS through circuit BREAKER."
   (let* ((state (hive-mcp-circuit-breaker-state breaker))
         (last-fail (hive-mcp-circuit-breaker-last-failure breaker))

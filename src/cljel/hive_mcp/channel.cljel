@@ -183,7 +183,7 @@ Returns (decoded-value . consumed-bytes)."
     (cl-labels
         ((decode-one ()
            (let [c (aref str pos)]
-             (cond
+             (elisp-cond
               ;; Integer
               ((= c ?i)
                (cl-incf pos)
@@ -259,7 +259,7 @@ _PROC is the process (unused, required by Emacs process API)."
    ((string-match-p "deleted\\|connection broken\\|exited\\|failed" event)
     ;; Atomic state update: clear process immediately
     (setq hive-mcp-channel--process nil)
-    (cond
+    (elisp-cond
      ;; Already in degraded mode - stay silent
      (hive-mcp-channel--degraded-mode
       nil)

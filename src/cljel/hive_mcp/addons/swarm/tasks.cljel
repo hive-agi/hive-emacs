@@ -173,7 +173,7 @@ Returns non-nil if slave should be considered dead."
       t  ; No entry = truly dead
     (let [status (plist-get slave :status)
           buffer (plist-get slave :buffer)]
-      (cond
+      (elisp-cond
        ;; Error status = dead
        ((eq status 'error) t)
        ;; Spawning/starting = not dead, just not ready yet
@@ -197,7 +197,7 @@ Returns:
          context (plist-get entry :context)
          queued-at (plist-get entry :queued-at)
          slave (gethash slave-id hive-mcp-swarm--slaves)]
-    (cond
+    (elisp-cond
      ;; Slave truly dead (not spawning) - fail
      ((-slave-truly-dead-p slave)
       (message "[swarm-tasks] Queue: %s slave dead, dropping dispatch" slave-id)

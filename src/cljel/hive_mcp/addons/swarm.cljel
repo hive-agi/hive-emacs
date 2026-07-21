@@ -773,7 +773,7 @@ fallback to ensure MCP clients never receive errors."
              elapsed-ms (when dispatched-at
                           (* 1000 (- (float-time)
                                      (float-time (date-to-time dispatched-at)))))]
-        (cond
+        (elisp-cond
          ;; Task not found
          ((not task)
           (list :task-id task-id :status "error" :error "Task not found"))

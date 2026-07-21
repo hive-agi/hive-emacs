@@ -162,7 +162,7 @@ Uses closure-local mutable cell instead of global defvars."
       (while (and (not (cdr cell))
                   (< (- (float-time) start-time) timeout))
         (accept-process-output nil 0.2))
-      (cond
+      (elisp-cond
        ((eq (cdr cell) 'error)
         (error "Connect failed: %s" (error-message-string (car cell))))
        ((not (cdr cell))
@@ -269,7 +269,7 @@ CIDER buffer is actually live. Demotes stale entries (status says
 connected but buffer is dead) so they stop poisoning the lookup.
 Returns session name string or nil."
   (let [candidate (hive-mcp-cider-sessions-find-by-status 'connected)]
-    (cond
+    (elisp-cond
      ((null candidate) nil)
      ((-session-buffer-alive-p candidate) candidate)
      (t
@@ -283,7 +283,7 @@ cider-make-connection-default is unavailable. Evicts NAME from the
 registry on a dead-buffer cache miss."
   (let* [cider-buf (hive-mcp-cider-sessions-get-prop name :cider-buffer)
          buf (and cider-buf (get-buffer cider-buf))]
-    (cond
+    (elisp-cond
      ((not (and buf (buffer-live-p buf)))
       (when cider-buf (-evict-stale-session name))
       nil)
@@ -300,7 +300,7 @@ Returns t if connected, nil otherwise.
 Priority: 1) Already connected 2) Reuse live registry session 3) Connect to default port.
 Stale registry sessions (status 'connected but buffer dead) are demoted
 to 'stale so they stop short-circuiting the cascade with a lie."
-  (cond
+  (elisp-cond
    ((and (featurep 'cider) (cider-connected-p))
     t)
    ((when-let* [session-name (-find-live-connected-session)]
@@ -340,7 +340,7 @@ to 'stale so they stop short-circuiting the cascade with a lie."
       (progn
         (setq hive-mcp-cider-connection--auto-attempts
               (1+ hive-mcp-cider-connection--auto-attempts))
-        (cond
+        (elisp-cond
          ((and (featurep 'cider) (cider-connected-p))
           (stop-auto-connect)
           (message "hive-mcp-cider: Already connected"))

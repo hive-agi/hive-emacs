@@ -53,8 +53,8 @@
     (push (list :name name :description (plist-get spec :description) :params (plist-get spec :params)) workflows)) hive-mcp-workflow-registry)
     (nreverse workflows)))
 
-(defun hive-mcp-workflows-workflow-run (&rest args)
-  (let ((name (nth 0 args)) (args (nthcdr 1 args)))
+(defun hive-mcp-workflows-workflow-run (&rest clel--args)
+  (let ((name (nth 0 clel--args)) (args (nthcdr 1 clel--args)))
     "Execute workflow NAME with optional ARGS plist.\nRuns before/after hooks around execution."
   (if-let ((spec (gethash name hive-mcp-workflow-registry)))
     (progn
@@ -274,8 +274,8 @@
     (hive-mcp-kanban-stats)
   (error nil))))
 
-(defun hive-mcp-workflows--wrap--gather-recent-notes (&rest args)
-  (let ((directory (nthcdr 0 args)))
+(defun hive-mcp-workflows--wrap--gather-recent-notes (&rest clel--args)
+  (let ((directory (nthcdr 0 clel--args)))
     "Get memory entries (notes/snippets) created today.\nDIRECTORY specifies the project directory for scoping queries."
   (let* ((today (format-time-string "%Y-%m-%d"))
         (project-id (when directory
@@ -288,16 +288,16 @@
     notes) (when (listp snippets)
     snippets))))))
 
-(defun hive-mcp-workflows--wrap--gather-git-commits (&rest args)
-  (let ((directory (nthcdr 0 args)))
+(defun hive-mcp-workflows--wrap--gather-git-commits (&rest clel--args)
+  (let ((directory (nthcdr 0 clel--args)))
     "Get commits on current branch from today.\nDIRECTORY overrides `default-directory' if provided."
   (let* ((default-directory (or directory default-directory)))
     (let* ((output (shell-command-to-string "git log --since='midnight' --oneline 2>/dev/null")))
     (when (and output (not (string-empty-p output)))
     (split-string output "\n" t))))))
 
-(defun hive-mcp-workflows--wrap--gather-kanban-activity (&rest args)
-  (let ((directory (nthcdr 0 args)))
+(defun hive-mcp-workflows--wrap--gather-kanban-activity (&rest clel--args)
+  (let ((directory (nthcdr 0 clel--args)))
     "Get in-progress and review kanban tasks.\nDIRECTORY specifies the project directory for scoping queries."
   (when (fboundp 'hive-mcp-kanban-list-tasks)
     (condition-case nil
@@ -313,8 +313,8 @@
     (hive-mcp-channel-get-recent-events 10)
   (error nil))))
 
-(defun hive-mcp-workflows--wrap--gather-session-data (&rest args)
-  (let ((directory (nthcdr 0 args)))
+(defun hive-mcp-workflows--wrap--gather-session-data (&rest clel--args)
+  (let ((directory (nthcdr 0 clel--args)))
     "Auto-gather session data from all available sources.\nDIRECTORY specifies the project directory for git operations and project scoping.\nReturns plist with :recent-notes, :recent-commits,\n:kanban-activity, :ai-interactions."
   (list :recent-notes (hive-mcp-workflows--wrap--gather-recent-notes directory) :recent-commits (hive-mcp-workflows--wrap--gather-git-commits directory) :kanban-activity (hive-mcp-workflows--wrap--gather-kanban-activity directory) :ai-interactions (hive-mcp-workflows--wrap--gather-channel-events))))
 
@@ -366,8 +366,8 @@
     (push 'session-summary stored)))
     (nreverse stored)))
 
-(defun hive-mcp-workflows-workflow-wrap (&rest args)
-  (let ((args (nthcdr 0 args)))
+(defun hive-mcp-workflows-workflow-wrap (&rest clel--args)
+  (let ((args (nthcdr 0 clel--args)))
     "Execute wrap workflow with ARGS plist.\n\nARGS can contain:\n  :accomplishments - list of completed tasks (stored as note, short-term)\n  :decisions - list of decisions made (stored as decision, long-term)\n  :conventions - list of conventions (stored as convention, permanent)\n  :in-progress - list of in-progress items (for summary)\n  :next-actions - list of next session priorities (for summary)\n  :completed-tasks - list of kanban task IDs to mark done\n\nOption A: If channel connected, emits wrap-request to Clojure.\nOffline fallback: stores locally.\n\nReturns structured result plist."
   (interactive)
   (let* ((project-name (hive-mcp-memory--get-project-name))
@@ -391,8 +391,8 @@
     (let* ((kanban-after (hive-mcp-workflows--wrap--get-kanban-status)))
     (list :success t :date date :project (or project-name "global") :path path :stored (if (eq path 'channel) stored (nreverse stored)) :counts (list :accomplishments (length (plist-get args :accomplishments)) :decisions (length (plist-get args :decisions)) :conventions (length (plist-get args :conventions)) :tasks-completed (length completed-tasks)) :expired-cleaned expired-count :git git-info :kanban (list :before kanban-before :after kanban-after) :summary (format "Session wrapped for %s via %s. Stored: %s. Cleaned %d expired entries." (or project-name "global") path (mapconcat #'symbol-name stored ", ") expired-count))))))
 
-(defun hive-mcp-workflows--catchup--entry-to-meta (&rest args)
-  (let ((entry (nth 0 args)) (preview-len (nthcdr 1 args)))
+(defun hive-mcp-workflows--catchup--entry-to-meta (&rest clel--args)
+  (let ((entry (nth 0 clel--args)) (preview-len (nthcdr 1 clel--args)))
     "Convert ENTRY to metadata-only format as alist for proper JSON serialization.\nReturns alist with id, type, preview (PREVIEW-LEN chars, default 80), tags."
   (let* ((content (plist-get entry :content))
         (preview-length (or preview-len 80))
@@ -401,8 +401,8 @@
         (type-str (if (symbolp entry-type) (symbol-name entry-type) (format "%s" entry-type))))
     (list (cons "id" (plist-get entry :id)) (cons "type" type-str) (cons "preview" (truncate-string-to-width content-str preview-length)) (cons "tags" (vconcat (plist-get entry :tags)))))))
 
-(defun hive-mcp-workflows-workflow-catchup (&rest args)
-  (let ((_args (nthcdr 0 args)))
+(defun hive-mcp-workflows-workflow-catchup (&rest clel--args)
+  (let ((_args (nthcdr 0 clel--args)))
     "Execute optimized catchup workflow - restore context from memory.\nReturns metadata-only format (~1.5k tokens vs ~10k for full content).\nUse `mcp_memory_get_full` to fetch specific entries by ID when needed.\nARGS is unused but accepted for workflow handler compatibility."
   (interactive)
   (let* ((project-name (hive-mcp-memory--get-project-name))

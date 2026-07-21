@@ -210,8 +210,8 @@
 (defvar hive-mcp-memory--storage-delegate nil
   "Function to call for storage operations.\nShould accept (op type &rest args) and delegate to MCP.\nIf nil, storage operations will error with instructions.")
 
-(defun hive-mcp-memory--cider-delegate (&rest args)
-  (let ((op (nth 0 args)) (args (nthcdr 1 args)))
+(defun hive-mcp-memory--cider-delegate (&rest clel--args)
+  (let ((op (nth 0 clel--args)) (args (nthcdr 1 clel--args)))
     "Delegate memory operation OP to Clojure MCP handlers via CIDER.\nOP is one of: add, get, query, update, delete.\nARGS vary by operation:\n  - add: type content tags project-id duration\n  - get: id project-id\n  - query: type tags project-id limit duration scope-filter\n  - update: id updates project-id\n  - delete: id project-id\nReturns the result from Clojure or nil on failure."
   (unless (and (featurep 'cider) (cider-connected-p))
     (error "CIDER not connected. Memory operations require nREPL connection"))
@@ -297,8 +297,8 @@
   (setq hive-mcp-memory--storage-delegate #'hive-mcp-memory--cider-delegate)
   (message "hive-mcp-memory: CIDER delegate initialized"))
 
-(defun hive-mcp-memory--delegate (&rest args)
-  (let ((operation (nth 0 args)) (args (nthcdr 1 args)))
+(defun hive-mcp-memory--delegate (&rest clel--args)
+  (let ((operation (nth 0 clel--args)) (args (nthcdr 1 clel--args)))
     "Delegate OPERATION with ARGS to storage backend.\nIf no delegate is set, signal an error with instructions."
   (if hive-mcp-memory--storage-delegate (apply #'hive-mcp-memory--storage-delegate operation args) (error "hive-mcp-memory: Storage delegate not configured. Use MCP tools (mcp_memory_add, mcp_memory_query) directly, or set hive-mcp-memory--storage-delegate"))))
 
