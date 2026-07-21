@@ -557,7 +557,16 @@
   (when hive-mcp-swarm-auto-approve
     (hive-mcp-swarm-start-auto-approve))
   (hive-mcp-swarm-start-completion-watcher)
-  (message "hive-mcp-swarm enabled (session: %s, auto-approve: %s, auto-shout: on)" hive-mcp-swarm--session-id (if hive-mcp-swarm-auto-approve "on" "off"))) (hive-mcp-swarm-stop-auto-approve)))
+  (message "hive-mcp-swarm enabled (session: %s, auto-approve: %s, auto-shout: on)" hive-mcp-swarm--session-id (if hive-mcp-swarm-auto-approve "on" "off"))) (progn
+  (hive-mcp-swarm-stop-auto-approve)
+  (hive-mcp-swarm-stop-completion-watcher)
+  (hive-mcp-swarm-kill-all)
+  (hive-mcp-swarm--unregister-hivemind-sync-hooks)
+  (hive-mcp-swarm-hooks-shutdown)
+  (hive-mcp-swarm-prompts-shutdown)
+  (hive-mcp-swarm-presets-shutdown)
+  (hive-mcp-swarm-events-shutdown)
+  (message "hive-mcp-swarm disabled"))))
 
 (defun hive-mcp-swarm--register-hivemind-sync-hooks ()
   "Register sync handler with all hivemind event types."

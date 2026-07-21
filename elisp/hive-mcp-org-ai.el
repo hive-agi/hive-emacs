@@ -275,7 +275,11 @@
   :group 'hive-mcp-org-ai
   (if hive-mcp-org-ai-mode (if (not (featurep 'org-ai)) (progn
   (setq hive-mcp-org-ai-mode nil)
-  (message "hive-mcp-org-ai: org-ai not available, addon disabled")) (require 'hive-mcp-api nil t)) (message "Emacs-mcp-org-ai disabled")))
+  (message "hive-mcp-org-ai: org-ai not available, addon disabled")) (progn
+  (require 'hive-mcp-api nil t)
+  (when (boundp 'org-ai-mode-map)
+    (set-keymap-parent org-ai-mode-map hive-mcp-org-ai-block-map))
+  (message "Emacs-mcp-org-ai enabled"))) (message "Emacs-mcp-org-ai disabled")))
 
 (with-eval-after-load 'hive-mcp-addons
   (hive-mcp-addon-register 'org-ai :version "0.1.0" :description "Integration with org-ai (AI chat in org-mode)" :requires '(org-ai hive-mcp-api) :provides '(hive-mcp-org-ai-mode hive-mcp-org-ai-transient)))

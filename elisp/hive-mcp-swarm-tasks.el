@@ -153,7 +153,10 @@
     (let* ((result (hive-mcp-swarm-tasks-dispatch-immediate slave-id prompt :timeout timeout :priority priority :context context)))
     (if (equal (plist-get result :status) "dispatched") (progn
   (message "[swarm-tasks] Queue: %s dispatched after %d retries (task: %s)" slave-id retries (plist-get result :task-id))
-  :success) (message "[swarm-tasks] Queue: %s dispatch failed: %s" slave-id (plist-get result :error))))
+  :success) (progn
+  (message "[swarm-tasks] Queue: %s dispatch failed: %s" slave-id (plist-get result :error))
+  (hive-mcp-swarm-tasks--notify-dispatch-dropped slave-id (or (plist-get result :error) "dispatch-error") prompt retries queued-at)
+  :failed)))
   (error (message "[swarm-tasks] Queue: %s dispatch error: %s" slave-id (error-message-string err))
       (hive-mcp-swarm-tasks--notify-dispatch-dropped slave-id "dispatch-error" prompt retries queued-at)
       :failed)))
@@ -258,7 +261,9 @@
   (plist-put task :completed-at (format-time-string "%FT%T%z"))
   (plist-put slave :status 'idle)
   (plist-put slave :current-task nil)
-  (plist-put slave :tasks-completed (1+ (plist-get slave :tasks-completed)))) (plist-put task :status 'timeout))
+  (plist-put slave :tasks-completed (1+ (plist-get slave :tasks-completed)))) (progn
+  (plist-put task :status 'timeout)
+  (plist-put task :error "Collection timed out")))
     (when (called-interactively-p 'any)
     (message (if result "Collected result (%d chars)" "Collection timed out") (length (or result ""))))
     task))

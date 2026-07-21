@@ -89,7 +89,7 @@
     (let* ((delay (hive-mcp-graceful--calculate-delay attempt base-delay)))
     (sleep-for (/ delay 1000.0))))
       (cl-incf attempt))))
-    (when success result)))
+    (if success result nil)))
 
 (cl-defun hive-mcp-retry-async (fn callback &key max-retries delay-ms on-error)
   "Call FN asynchronously with retries, invoking CALLBACK on success."

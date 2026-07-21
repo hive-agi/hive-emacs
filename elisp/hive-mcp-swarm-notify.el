@@ -65,7 +65,9 @@
         (last-time (cdr last)))
     (if (and last-key last-time (string= key last-key) (< (- now last-time) hive-mcp-swarm-notify--dedup-window)) (progn
   (hive-mcp-swarm-notify--log 'info "Deduplicated: %s" title)
-  nil) (setq hive-mcp-swarm-notify--last-notification (cons key now)))))
+  nil) (progn
+  (setq hive-mcp-swarm-notify--last-notification (cons key now))
+  t))))
 
 (defun hive-mcp-swarm-notify--try-notify-send (title message urgency)
   "Try to send notification via notify-send.\nReturns t on success, nil on failure."
@@ -75,7 +77,9 @@
     (if (executable-find "notify-send") (progn
   (start-process "hive-notify" nil "notify-send" "-u" urgency-str "-t" timeout-str "-a" "Hive-MCP Swarm" "-i" "dialog-information" title message)
   (hive-mcp-swarm-notify--log 'info "notify-send: %s - %s" title message)
-  t) (hive-mcp-swarm-notify--log 'warn "notify-send not found in PATH")))
+  t) (progn
+  (hive-mcp-swarm-notify--log 'warn "notify-send not found in PATH")
+  nil)))
   (error (hive-mcp-swarm-notify--log 'error "notify-send failed: %s" (error-message-string err))
       nil)))
 
@@ -85,7 +89,9 @@
     (if (fboundp 'notifications-notify) (progn
   (notifications-notify :title title :body message :urgency urgency :timeout hive-mcp-swarm-notify-timeout :app-name "Hive-MCP Swarm")
   (hive-mcp-swarm-notify--log 'info "D-Bus notify: %s - %s" title message)
-  t) (hive-mcp-swarm-notify--log 'warn "notifications-notify not available"))
+  t) (progn
+  (hive-mcp-swarm-notify--log 'warn "notifications-notify not available")
+  nil))
   (error (hive-mcp-swarm-notify--log 'error "D-Bus notify failed: %s" (error-message-string err))
       nil)))
 

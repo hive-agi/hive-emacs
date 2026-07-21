@@ -220,7 +220,10 @@
 
 (defun hive-mcp-projectile--addon-init ()
   "Initialize projectile addon.\nDoes nothing if projectile is not available."
-  (if (not (featurep 'projectile)) (message "hive-mcp-projectile: projectile package not found, addon disabled") (require 'hive-mcp-api nil t)))
+  (if (not (featurep 'projectile)) (message "hive-mcp-projectile: projectile package not found, addon disabled") (progn
+  (require 'hive-mcp-api nil t)
+  (setq hive-mcp-projectile--initialized t)
+  (message "hive-mcp-projectile: initialized"))))
 
 (defun hive-mcp-projectile--addon-shutdown ()
   "Shutdown projectile addon."

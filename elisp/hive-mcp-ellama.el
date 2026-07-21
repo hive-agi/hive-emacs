@@ -262,7 +262,9 @@
   (if hive-mcp-ellama-mode (progn
   (hive-mcp-ellama--setup)
   (setq hive-mcp-ellama--initialized t)
-  (message "hive-mcp-ellama: enabled")) (hive-mcp-ellama--teardown)))
+  (message "hive-mcp-ellama: enabled")) (progn
+  (hive-mcp-ellama--teardown)
+  (message "hive-mcp-ellama: disabled"))))
 
 (with-eval-after-load 'transient
   (transient-define-prefix hive-mcp-ellama-menu ()

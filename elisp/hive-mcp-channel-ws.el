@@ -209,7 +209,9 @@
     t)
   (error (message "hive-mcp-channel-ws: Send error: %s" (error-message-string err))
       (push msg hive-mcp-channel-ws--message-queue)
-      nil)) (push msg hive-mcp-channel-ws--message-queue)))
+      nil)) (progn
+  (push msg hive-mcp-channel-ws--message-queue)
+  nil)))
 
 (defun hive-mcp-channel-ws-on (event-type handler)
   "Register HANDLER for EVENT-TYPE.\nEVENT-TYPE can be a string like \"hivemind-progress\", a keyword\nlike :hivemind-progress, or a symbol.\nHANDLER receives the parsed JSON message as an alist."

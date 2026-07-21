@@ -123,7 +123,9 @@
 
 (defun hive-mcp-cider--addon-init ()
   "Synchronous init for cider addon."
-  (if (not (featurep 'cider)) (message "hive-mcp-cider: cider package not found, addon disabled") (require 'hive-mcp-api nil t)))
+  (if (not (featurep 'cider)) (message "hive-mcp-cider: cider package not found, addon disabled") (progn
+  (require 'hive-mcp-api nil t)
+  (message "hive-mcp-cider: initialized"))))
 
 (defun hive-mcp-cider--addon-async-init ()
   "Asynchronous init — starts nREPL in background if configured."

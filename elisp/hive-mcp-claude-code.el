@@ -236,7 +236,13 @@
   :group 'hive-mcp-claude-code
   (if hive-mcp-claude-code-mode (if (not (featurep 'claude-code)) (progn
   (setq hive-mcp-claude-code-mode nil)
-  (message "hive-mcp-claude-code: claude-code not available, addon disabled")) (advice-add 'claude-code--do-send-command :around #'hive-mcp-claude-code--advise-send-command)) (advice-remove 'claude-code--do-send-command #'hive-mcp-claude-code--advise-send-command)))
+  (message "hive-mcp-claude-code: claude-code not available, addon disabled")) (progn
+  (advice-add 'claude-code--do-send-command :around #'hive-mcp-claude-code--advise-send-command)
+  (require 'hive-mcp-api nil t)
+  (define-key claude-code-command-map (kbd "M") #'hive-mcp-claude-code-transient)
+  (message "Emacs-mcp-claude-code enabled"))) (progn
+  (advice-remove 'claude-code--do-send-command #'hive-mcp-claude-code--advise-send-command)
+  (message "Emacs-mcp-claude-code disabled"))))
 
 (with-eval-after-load 'hive-mcp-addons
   (hive-mcp-addon-register 'claude-code :version "0.1.0" :description "Integration with claude-code.el (Claude Code CLI)" :requires '(claude-code hive-mcp-api) :provides '(hive-mcp-claude-code-mode hive-mcp-claude-code-transient)))

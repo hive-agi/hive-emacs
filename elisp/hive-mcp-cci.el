@@ -80,7 +80,7 @@
 (defun hive-mcp-cci--get-hivemind-status ()
   "Get hivemind status, handling both elisp and MCP responses."
   (condition-case nil
-    (when (fboundp 'hive-mcp-hivemind-status) (hive-mcp-hivemind-status))
+    (if (fboundp 'hive-mcp-hivemind-status) (hive-mcp-hivemind-status) nil)
   (error nil)))
 
 (defun hive-mcp-cci-sync-from-hivemind ()
@@ -279,7 +279,10 @@
     (setq hive-mcp-cci-mode nil)
     (error "claude-code-ide not available"))
   (hive-mcp-cci--start-sync-timer)
-  (message "hive-mcp-cci enabled (hivemind completion)")) (hive-mcp-cci--stop-sync-timer)))
+  (message "hive-mcp-cci enabled (hivemind completion)")) (progn
+  (hive-mcp-cci--stop-sync-timer)
+  (hive-mcp-cci-kill-all)
+  (message "hive-mcp-cci disabled"))))
 
 (defalias 'hive-mcp-cci-claude-code-ide-mode 'hive-mcp-cci-mode "Backwards compatibility alias for `hive-mcp-cci-mode'.")
 

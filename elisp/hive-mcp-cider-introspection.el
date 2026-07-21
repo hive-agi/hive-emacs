@@ -46,7 +46,7 @@
 (defun hive-mcp-cider-introspection-apropos (pattern &optional docs-p)
   "Search for symbols matching PATTERN using CIDER.\nIf DOCS-P is non-nil, also search in docstrings.\nReturns a vector of matching symbols with their info."
   (if (and (featurep 'cider) (cider-connected-p)) (let* ((ns (cider-current-ns))
-        (response (cider-nrepl-send-sync-request (list "op" "apropos" "query" pattern "ns" ns "docs?" (when docs-p "t") "privates?" "t" "case-sensitive?" nil)))
+        (response (cider-nrepl-send-sync-request (list "op" "apropos" "query" pattern "ns" ns "docs?" (if docs-p "t" nil) "privates?" "t" "case-sensitive?" nil)))
         (apropos-matches (nrepl-dict-get response "apropos-matches")))
     (if apropos-matches (vconcat (mapcar (lambda (match)
     (list :name (nrepl-dict-get match "name") :type (nrepl-dict-get match "type") :doc (or (nrepl-dict-get match "doc") ""))) apropos-matches)) (list ))) (error "CIDER not connected")))

@@ -69,9 +69,9 @@
   (let* ((last-call (gethash source hive-mcp-ai--rate-limit-table 0.0))
         (now (float-time))
         (elapsed (- now last-call)))
-    (when (>= elapsed hive-mcp-ai-rate-limit-interval) (progn
+    (if (>= elapsed hive-mcp-ai-rate-limit-interval) (progn
   (puthash source now hive-mcp-ai--rate-limit-table)
-  t))))
+  t) nil)))
 
 (defun hive-mcp-ai-bridge--memory-available-p ()
   "Check if memory system is available."

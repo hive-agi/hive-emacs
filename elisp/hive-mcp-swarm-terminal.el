@@ -417,8 +417,11 @@
     (if (string= status "error") (progn
   (when (fboundp 'hive-mcp-swarm-events-emit-auto-error)
     (hive-mcp-swarm-events-emit-auto-error completed-slave-id duration error-type error-preview))
-  (message "[swarm-terminal] Auto-shout: %s error detected (%s, %.1fs)" completed-slave-id error-type (or duration 0))) (when (fboundp 'hive-mcp-swarm-events-emit-auto-completed)
-    (hive-mcp-swarm-events-emit-auto-completed completed-slave-id duration status)))
+  (message "[swarm-terminal] Auto-shout: %s error detected (%s, %.1fs)" completed-slave-id error-type (or duration 0))) (progn
+  (when (fboundp 'hive-mcp-swarm-events-emit-auto-completed)
+    (hive-mcp-swarm-events-emit-auto-completed completed-slave-id duration status))
+  (message "[swarm-terminal] Auto-shout: %s completed task (%.1fs)" completed-slave-id (or duration 0))
+  (hive-mcp-swarm-terminal-trigger-auto-wrap completed-slave-id "task-completed")))
     (when (functionp hive-mcp-swarm-terminal--completion-callback)
     (funcall hive-mcp-swarm-terminal--completion-callback buffer completed-slave-id duration status error-type error-preview))))) hive-mcp-swarm--slaves))
   (error (message "[swarm-terminal] Completion watcher tick error: %s" (error-message-string err)))))
