@@ -1,0 +1,13 @@
+{:lint-as
+ {hive-di.core/defconfig clojure.core/def
+  hive-di.testing/defconfig-tests clojure.test/deftest
+  hive-schemas.test/deftrifecta-from-schema clojure.test/deftest
+  hive-spi.schema.typed-ann/defalias-schema clojure.core/def}
+
+ :config-in-call
+ {ansatz.core/theorem
+  {:linters {:unresolved-symbol {:level :off}
+             :invalid-arity {:level :off}}}
+
+  typed.clojure/ann
+  {:linters {:unresolved-symbol {:level :off}}}}}

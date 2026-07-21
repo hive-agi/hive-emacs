@@ -429,7 +429,7 @@ Returns t if safe to kill, nil otherwise."
     (let* [buf-name (buffer-name buffer)
            buf-name-lower (downcase buf-name)
            slave-name (-extract-name-from-id slave-id)]
-      (cond
+      (elisp-cond
        ;; Check 1: Must have swarm prefix
        ((not (string-prefix-p hive-mcp-swarm-buffer-prefix buf-name))
         (message "[swarm-kill] BLOCKED: Buffer '%s' lacks swarm prefix for slave %s"
@@ -474,7 +474,7 @@ Returns t on success, nil if slave not found or buffer invalid."
   (if-let* [slave (gethash slave-id hive-mcp-swarm--slaves)]
       (let [buffer (plist-get slave :buffer)
             slave-name (plist-get slave :name)]
-        (cond
+        (elisp-cond
          ;; Buffer is nil (spawn still in progress or already dead)
          ((null buffer)
           (message "[swarm-kill] Warning: slave %s has no buffer (spawn incomplete?)" slave-id)

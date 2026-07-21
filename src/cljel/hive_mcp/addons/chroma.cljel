@@ -97,7 +97,7 @@ Checks in order:
 3. Computed from load-file-name (fallback)"
   (or hive-mcp-chroma--project-root
       (setq hive-mcp-chroma--project-root
-            (cond
+            (elisp-cond
              ;; Prefer user-configured hive-mcp-root if available
              ((and (boundp 'hive-mcp-root) hive-mcp-root)
               hive-mcp-root)

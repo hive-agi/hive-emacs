@@ -208,8 +208,9 @@
   ((and (featurep 'cider) (cider-connected-p)) t)
   ((when-let* ((session-name (hive-mcp-cider-connection--find-live-connected-session)))
     (message "hive-mcp-cider: Reusing session '%s'" session-name)
-    (hive-mcp-cider-connection--switch-to-session session-name)) (progn
-  ))
+    (hive-mcp-cider-connection--switch-to-session session-name)) (when-let* ((session-name (hive-mcp-cider-connection--find-live-connected-session)))
+    (message "hive-mcp-cider: Reusing session '%s'" session-name)
+    (hive-mcp-cider-connection--switch-to-session session-name)))
   ((hive-mcp-cider-nrepl-port-open-p hive-mcp-cider-nrepl-port) (progn
   (message "hive-mcp-cider: Auto-connecting to port %d" hive-mcp-cider-nrepl-port)
   (condition-case nil

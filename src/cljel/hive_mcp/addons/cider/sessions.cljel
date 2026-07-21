@@ -1,13 +1,5 @@
 (ns hive-mcp-cider-sessions
-  "Session registry for named CIDER connections.
-
-Pure data store — knows nothing about CIDER, nREPL processes, or connections.
-Manages name-to-session mappings in a hash-table with port allocation.
-
-Design principles (SOLID/CLARITY):
-- Single Responsibility: Only manages session registry data
-- Open/Closed: New session properties added to plists, not new code paths
-- Interface Segregation: Callers use only the query/mutation they need")
+  "Named CIDER session registry and port allocation.")
 
 (require 'cl-lib)
 
@@ -40,10 +32,18 @@ Values are plists with :port, :process, :buffer, :agent-id, :project-dir,
 ;; CRUD Operations
 ;; ============================================================================
 
+(defn registry-has-name-p [name]
+  "Return non-nil when NAME is present, including when its stored value is nil."
+  (let [missing (make-symbol "missing-session")]
+    (not (eq (gethash name hive-mcp-cider-sessions--registry missing)
+             missing))))
+
 (defn register [name props]
   "Register a session NAME with PROPS plist in the registry.
 Signals error if NAME already exists."
-  (when (gethash name hive-mcp-cider-sessions--registry)
+  (unless (and name (stringp name))
+    (error "Invalid session name: %S" name))
+  (when (registry-has-name-p name)
     (error "Session '%s' already exists" name))
   (puthash name props hive-mcp-cider-sessions--registry)
   props)
@@ -84,26 +84,34 @@ Signals error if session not found."
 
 (defn exists-p [name]
   "Return non-nil if session NAME exists."
-  (gethash name hive-mcp-cider-sessions--registry))
+  (registry-has-name-p name))
 
 ;; ============================================================================
 ;; Query Operations
 ;; ============================================================================
+
+(defn enum-label [value fallback]
+  "Return FALLBACK for nil, symbol name for symbols, or VALUE unchanged."
+  (elisp-cond
+   ((null value) fallback)
+   ((symbolp value) (symbol-name value))
+   (t value)))
 
 (defn list-all []
   "Return a vector of session info plists for JSON encoding.
 Each entry contains :name, :port, :repl-type, :status, :agent-id, :cider-buffer."
   (let [sessions '()]
     (maphash (lambda (name props)
-               (let [status (plist-get props :status)
-                     rtype (plist-get props :repl-type)]
-                 (push (list :name name
-                             :port (plist-get props :port)
-                             :repl-type (if (symbolp rtype) (symbol-name rtype) (or rtype "clj"))
-                             :status (if (symbolp status) (symbol-name status) status)
-                             :agent-id (plist-get props :agent-id)
-                             :cider-buffer (plist-get props :cider-buffer))
-                       sessions)))
+               (when (stringp name)
+                 (let [status (plist-get props :status)
+                       rtype (plist-get props :repl-type)]
+                   (push (list :name name
+                               :port (plist-get props :port)
+                               :repl-type (enum-label rtype "clj")
+                               :status (enum-label status "unknown")
+                               :agent-id (plist-get props :agent-id)
+                               :cider-buffer (plist-get props :cider-buffer))
+                         sessions))))
              hive-mcp-cider-sessions--registry)
     (vconcat sessions)))
 
@@ -111,7 +119,8 @@ Each entry contains :name, :port, :repl-type, :status, :agent-id, :cider-buffer.
   "Find first session name with STATUS (symbol). Returns name string or nil."
   (let [result nil]
     (maphash (lambda (name props)
-               (when (and (not result)
+               (when (and (stringp name)
+                          (not result)
                           (eq (plist-get props :status) status))
                  (setq result name)))
              hive-mcp-cider-sessions--registry)
@@ -135,8 +144,7 @@ Each entry contains :name, :port, :repl-type, :status, :agent-id, :cider-buffer.
 
 (defn find-available-port [port-check-fn]
   "Find next available port in the session range.
-PORT-CHECK-FN is a predicate (port) -> bool that returns t if port is in use.
-This keeps port probing logic outside the registry (Dependency Inversion)."
+PORT-CHECK-FN is a predicate (port) -> bool that returns t if port is in use."
   (let [port hive-mcp-cider-sessions-port-base
         used-ports (mapcar (lambda (name)
                               (plist-get (gethash name hive-mcp-cider-sessions--registry) :port))

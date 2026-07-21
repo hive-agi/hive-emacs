@@ -120,30 +120,30 @@
     (when hive-mcp-log-to-buffer
     (hive-mcp-log--write-to-buffer formatted level)))))
 
-(defun hive-mcp-log-log (&rest args)
-  (let ((level (nth 0 args)) (component (nth 1 args)) (format-string (nth 2 args)) (args (nthcdr 3 args)))
+(defun hive-mcp-log-log (&rest clel--args)
+  (let ((level (nth 0 clel--args)) (component (nth 1 clel--args)) (format-string (nth 2 clel--args)) (args (nthcdr 3 clel--args)))
     "Log a message at LEVEL for COMPONENT using FORMAT-STRING and ARGS.\n\nLEVEL is one of: debug, info, warn, error.\nCOMPONENT is a symbol or string identifying the subsystem.\nFORMAT-STRING and ARGS work like `format'."
   (when (and (hive-mcp-log--level-enabled-p level) (hive-mcp-log--component-enabled-p component))
     (let* ((message (apply #'format format-string args)))
     (hive-mcp-log--emit level component message)))))
 
-(defun hive-mcp-log-log-debug (&rest args)
-  (let ((component (nth 0 args)) (format-string (nth 1 args)) (args (nthcdr 2 args)))
+(defun hive-mcp-log-log-debug (&rest clel--args)
+  (let ((component (nth 0 clel--args)) (format-string (nth 1 clel--args)) (args (nthcdr 2 clel--args)))
     "Log a debug message for COMPONENT using FORMAT-STRING and ARGS."
   (apply #'hive-mcp-log-log 'debug component format-string args)))
 
-(defun hive-mcp-log-log-info (&rest args)
-  (let ((component (nth 0 args)) (format-string (nth 1 args)) (args (nthcdr 2 args)))
+(defun hive-mcp-log-log-info (&rest clel--args)
+  (let ((component (nth 0 clel--args)) (format-string (nth 1 clel--args)) (args (nthcdr 2 clel--args)))
     "Log an info message for COMPONENT using FORMAT-STRING and ARGS."
   (apply #'hive-mcp-log-log 'info component format-string args)))
 
-(defun hive-mcp-log-log-warn (&rest args)
-  (let ((component (nth 0 args)) (format-string (nth 1 args)) (args (nthcdr 2 args)))
+(defun hive-mcp-log-log-warn (&rest clel--args)
+  (let ((component (nth 0 clel--args)) (format-string (nth 1 clel--args)) (args (nthcdr 2 clel--args)))
     "Log a warning message for COMPONENT using FORMAT-STRING and ARGS."
   (apply #'hive-mcp-log-log 'warn component format-string args)))
 
-(defun hive-mcp-log-log-error (&rest args)
-  (let ((component (nth 0 args)) (format-string (nth 1 args)) (args (nthcdr 2 args)))
+(defun hive-mcp-log-log-error (&rest clel--args)
+  (let ((component (nth 0 clel--args)) (format-string (nth 1 clel--args)) (args (nthcdr 2 clel--args)))
     "Log an error message for COMPONENT using FORMAT-STRING and ARGS."
   (apply #'hive-mcp-log-log 'error component format-string args)))
 

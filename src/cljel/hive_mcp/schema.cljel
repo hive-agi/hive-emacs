@@ -89,7 +89,7 @@ Returns schema vector or nil."
 (defn- -schema-type [schema]
   "Extract type tag from a schema form.
 :string -> :string, [:map ...] -> :map, [:enum ...] -> :enum"
-  (cond
+  (elisp-cond
     ((keywordp schema) schema)
     ((vectorp schema) (aref schema 0))
     (t nil)))
@@ -231,7 +231,7 @@ Returns list of error strings, or nil if valid."
              field-value (plist-get value key)
              optional (-optional-p props)
              field-path (append path (list key))]
-        (cond
+        (elisp-cond
           ;; Missing required field
           ((and (null field-value)
                 (not (plist-member value key))

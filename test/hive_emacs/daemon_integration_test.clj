@@ -7,23 +7,19 @@
    - Kill handler integration (ling unbinding)
    - Heartbeat loop lifecycle"
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
-            [hive-emacs.daemon :as proto]
             [hive-emacs.daemon-store :as daemon-store]
-            [hive-mcp.swarm.datascript.connection :as conn]))
+            [hive-emacs.test-support :as support]
+            [hive-test.isolation :as isolation]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
 ;;; =============================================================================
 
-(defn reset-db-fixture
-  "Reset DataScript database before each test."
-  [f]
-  (conn/reset-conn!)
-  ;; Stop heartbeat loop if running
-  (daemon-store/stop-heartbeat-loop!)
-  (f))
+(def ^:private world (atom (support/empty-world)))
 
-(use-fixtures :each reset-db-fixture)
+(use-fixtures :each
+  (isolation/with-isolations
+   {:type :hive-emacs/runtime :world world}))
 
 ;;; =============================================================================
 ;;; Singleton Tests

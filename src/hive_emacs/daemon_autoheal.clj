@@ -7,15 +7,12 @@
 
    Integration: Called from daemon_store.clj heartbeat loop on each cycle.
 
-   ADR-010: Compute isolation, not data isolation. DataScript is unified —
-   orphan cleanup works across all daemons from a single coordinator view."
+   All foreign ling/task state crosses injected runtime ports."
 
   (:require [hive-emacs.daemon :as daemon]
-            [hive-emacs.daemon-selection :as selection]
-            [hive-mcp.swarm.datascript.queries :as queries]
-            [hive-mcp.swarm.datascript.lings :as lings]
-            [taoensso.timbre :as log]
-            [hive-dsl.result :refer [rescue]]))
+            [hive-emacs.daemon-ranking :as ranking]
+            [hive-emacs.runtime-ports :as ports]
+            [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -54,12 +51,12 @@
                     daemon-status (:emacs-daemon/status d)
                     ling-ids (or (:emacs-daemon/lings d) #{})]
                 (map (fn [ling-id]
-                       (let [slave (queries/get-slave ling-id)]
+                       (let [ling (ports/lookup-ling ling-id)]
                          {:ling-id       ling-id
                           :daemon-id     daemon-id
                           :daemon-status daemon-status
-                          :ling-status   (or (:slave/status slave) :unknown)
-                          :project-id    (:slave/project-id slave)}))
+                          :ling-status   (or (:ling/status ling) :unknown)
+                          :project-id    (:ling/project-id ling)}))
                      ling-ids))))
            (seq)))))
 
@@ -96,7 +93,7 @@
      Map with :action :rebind, :new-daemon-id, :success?"
   [store {:keys [ling-id daemon-id project-id]}]
   (let [;; Find a healthy daemon to rebind to
-        selection-result (selection/select-daemon store {:project-id project-id})
+        selection-result (ranking/select-daemon store {:project-id project-id})
         new-daemon-id (:daemon-id selection-result)
         reason (:reason selection-result)]
     (if (and new-daemon-id
@@ -130,7 +127,7 @@
 
    Since the daemon is dead, the ling's Emacs process is gone.
    We clean up the DataScript state:
-   1. Fail any active tasks (releases claims via lings/fail-task!)
+   1. Fail any active tasks through the task port
    2. Release remaining claims
    3. Unbind from dead daemon
    4. Mark ling as :terminated
@@ -143,19 +140,19 @@
      Map with :action :terminate, :tasks-failed, :claims-released"
   [store {:keys [ling-id daemon-id]}]
   (let [;; Find and fail active tasks for this ling
-        active-tasks (queries/get-tasks-for-slave ling-id :dispatched)
+        active-tasks (ports/tasks-for-ling ling-id :dispatched)
         tasks-failed (count active-tasks)]
     ;; Fail each active task (this also releases task-specific claims)
     (doseq [task active-tasks]
       (when-let [task-id (:task/id task)]
         (log/warn "Auto-heal: Failing task" task-id "for orphan ling" ling-id)
-        (lings/fail-task! task-id :error)))
+        (ports/fail-task! task-id :error)))
     ;; Release any remaining claims not tied to tasks
-    (let [claims-released (lings/release-claims-for-slave! ling-id)]
+    (let [claims-released (ports/release-claims! ling-id)]
       ;; Unbind from dead daemon
       (daemon/unbind-ling! store daemon-id ling-id)
-      ;; Mark ling as terminated in DataScript
-      (lings/update-slave! ling-id {:slave/status :terminated})
+      ;; Mark ling as terminated through the ling update port
+      (ports/update-ling! ling-id {:ling/status :terminated})
       (log/warn "Auto-heal: Terminated orphan ling" ling-id
                 "from dead daemon" daemon-id
                 "tasks-failed:" tasks-failed
@@ -214,14 +211,12 @@
     (let [results (mapv #(heal-orphan! store %) orphans)
           healed  (count (filter :success? results))
           failed  (- (count results) healed)]
-      ;; Emit event for Olympus visibility
-      (rescue nil
-              (when-let [emit-fn (requiring-resolve 'hive-mcp.transport.olympus/emit-agent-event!)]
-                (emit-fn :daemon/orphans-healed
-                         {:orphans-found (count orphans)
-                          :healed healed
-                          :failed failed
-                          :details (mapv #(select-keys % [:ling-id :action :success?]) results)})))
+      (ports/emit! :daemon/orphans-healed
+                   {:orphans-found (count orphans)
+                    :healed healed
+                    :failed failed
+                    :details (mapv #(select-keys % [:ling-id :action :success?])
+                                   results)})
       {:orphans-found (count orphans)
        :healed        healed
        :failed        failed

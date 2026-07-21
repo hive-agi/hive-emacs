@@ -1,0 +1,4 @@
+hive_mcp/addons/cider/eval.cljel
+hive_mcp/addons/cider/eval_test.cljel
+hive_mcp/addons/cider/sessions.cljel
+hive_mcp/addons/cider/sessions_test.cljel

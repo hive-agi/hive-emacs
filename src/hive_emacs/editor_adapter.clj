@@ -1,59 +1,58 @@
 (ns hive-emacs.editor-adapter
-  "EmacsclientEditor — IEditor implementation wrapping emacs.client.
+  "Host-neutral Emacs editor capability.
 
-   Bridges the emacsclient subprocess layer into the IEditor protocol,
-   returning Result ADT values instead of legacy {:success :result :error} maps."
-  (:require [hive-mcp.protocols.editor :as ed]
-            [hive-emacs.client :as ec]
-            [hive-mcp.agent.ling.terminal-registry :as terminal-reg]
-            [hive-mcp.agent.ling.strategy :as strategy]
+   The returned map is data plus functions. A host-specific adapter may wrap it
+   in its own editor protocol; hive-emacs never imports or resolves that host."
+  (:require [clojure.string :as str]
             [hive-dsl.result :as result]
-            [clojure.string :as str]))
+            [hive-emacs.client :as ec]
+            [hive-emacs.runtime-ports :as ports]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
 
 (defn- ec-result->result
-  "Convert legacy emacs.client map to Result ADT.
-   {:success true :result r}  -> (ok r)
-   {:success false :error e}  -> (err :editor/eval-failed ...)"
   [{:keys [success result error timed-out]}]
   (cond
-    success     (result/ok result)
-    timed-out   (result/err :editor/timeout {:message error})
-    :else       (result/err :editor/eval-failed {:message error})))
+    success (result/ok result)
+    timed-out (result/err :editor/timeout {:message error})
+    :else (result/err :editor/eval-failed {:message error})))
 
-(defrecord EmacsclientEditor []
-  ed/IEditor
+(defn- feature-available?
+  [feature-name]
+  (try
+    (let [{:keys [success result]}
+          (ec/eval-elisp (format "(featurep '%s)" feature-name))]
+      (and success (= "t" (str/trim (or result "")))))
+    (catch Exception _ false)))
 
-  (editor-id [_this] :emacsclient)
-
-  (available? [_this]
-    (ec/emacs-running?))
-
-  (eval-expr [_this code]
-    (ec-result->result (ec/eval-elisp code)))
-
-  (eval-expr [_this code opts]
-    (let [timeout-ms (:timeout-ms opts ec/*default-timeout-ms*)]
-      (ec-result->result (ec/eval-elisp-with-timeout code timeout-ms))))
-
-  (feature-available? [_this feature-name]
-    (try
-      (let [{:keys [success result]} (ec/eval-elisp (format "(featurep '%s)" feature-name))]
-        (and success (= "t" (str/trim (or result "")))))
-      (catch Exception _ false)))
-
-  (send-to-terminal [_this terminal-id text]
-    (if-let [strat (or (terminal-reg/resolve-terminal-strategy :claude)
-                       (terminal-reg/resolve-terminal-strategy :vterm))]
-      (result/try-effect* :editor/dispatch-failed
-                          (strategy/strategy-dispatch! strat {:id terminal-id} {:task text :timeout-ms 60000})
-                          true)
-      (result/err :editor/no-terminal-addon {:message "No terminal addon for :claude or :vterm"}))))
+(defn- send-to-terminal
+  [terminal-id text]
+  (try
+    (let [response (ports/dispatch-terminal! terminal-id text)]
+      (cond
+        (result/err? response) response
+        (false? (:success? response))
+        (result/err :editor/no-terminal
+                    {:message (or (:message response)
+                                  (some-> (:error response) str))})
+        :else (result/ok true)))
+    (catch Exception e
+      (result/err :editor/dispatch-failed {:message (ex-message e)}))))
 
 (defn ->emacsclient-editor
-  "Create an EmacsclientEditor instance."
+  "Return the neutral editor capability consumed by a host adapter."
   []
-  (->EmacsclientEditor))
+  {:editor/id :emacsclient
+   :editor/available? ec/emacs-running?
+   :editor/eval
+   (fn
+     ([code]
+      (ec-result->result (ec/eval-elisp code)))
+     ([code opts]
+      (let [timeout-ms (:timeout-ms opts ec/*default-timeout-ms*)]
+        (ec-result->result
+         (ec/eval-elisp-with-timeout code timeout-ms)))))
+   :editor/feature-available? feature-available?
+   :editor/send-to-terminal send-to-terminal})

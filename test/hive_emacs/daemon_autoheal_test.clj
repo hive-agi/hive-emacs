@@ -11,10 +11,8 @@
             [hive-emacs.daemon-autoheal :as autoheal]
             [hive-emacs.daemon :as proto]
             [hive-emacs.daemon-ds :as daemon-ds]
-            [hive-emacs.daemon-selection :as selection]
-            [hive-mcp.swarm.datascript.connection :as conn]
-            [hive-mcp.swarm.datascript.lings :as lings]
-            [hive-mcp.swarm.datascript.queries :as queries]
+            [hive-emacs.test-support :as support]
+            [hive-test.isolation :as isolation]
             [datascript.core :as d]))
 
 ;;; =============================================================================
@@ -22,14 +20,11 @@
 ;;; =============================================================================
 
 (def ^:private store (daemon-ds/create-store))
+(def ^:private world (atom (support/empty-world)))
 
-(defn reset-db-fixture
-  "Reset DataScript database before each test."
-  [f]
-  (conn/reset-conn!)
-  (f))
-
-(use-fixtures :each reset-db-fixture)
+(use-fixtures :each
+  (isolation/with-isolations
+   {:type :hive-emacs/runtime :store store :world world}))
 
 ;;; =============================================================================
 ;;; Helper Functions
@@ -40,7 +35,7 @@
   [daemon-id & {:keys [status health-score]
                 :or {status :active health-score 100}}]
   (proto/register! store daemon-id {})
-  (let [c (conn/ensure-conn)
+  (let [c (daemon-ds/connection store)
         db @c
         eid (:db/id (d/entity db [:emacs-daemon/id daemon-id]))]
     (d/transact! c [(cond-> {:db/id eid
@@ -52,7 +47,7 @@
   "Create a ling (slave) and bind it to a daemon."
   [ling-id daemon-id & {:keys [status project-id]
                         :or {status :idle project-id "test-project"}}]
-  (lings/add-slave! ling-id {:status status :project-id project-id})
+  (support/add-ling! world ling-id status project-id)
   (proto/bind-ling! store daemon-id ling-id))
 
 ;;; =============================================================================
@@ -195,10 +190,9 @@
     (setup-daemon! "dead-d" :status :stale)
     (setup-ling! "working-orphan" "dead-d" :status :working)
     ;; Create an active task for this ling
-    (lings/add-task! "task-1" "working-orphan" {:status :dispatched
-                                                :files ["/src/foo.clj"]})
+    (support/add-task! world "task-1" "working-orphan" :dispatched)
     ;; Claim a file
-    (lings/claim-file! "/src/foo.clj" "working-orphan")
+    (support/add-claim! world "/src/foo.clj" "working-orphan")
     (let [orphan {:ling-id "working-orphan"
                   :daemon-id "dead-d"
                   :daemon-status :stale
@@ -209,17 +203,17 @@
       (is (true? (:success? result)))
       (is (= 1 (:tasks-failed result)))
       ;; Verify task was failed
-      (let [task (queries/get-task "task-1")]
+      (let [task (get-in @world [:tasks "task-1"])]
         (is (= :error (:task/status task))))
       ;; Verify ling is terminated
-      (let [slave (queries/get-slave "working-orphan")]
-        (is (= :terminated (:slave/status slave))))
+      (let [ling (get-in @world [:lings "working-orphan"])]
+        (is (= :terminated (:ling/status ling))))
       ;; Verify ling is unbound from dead daemon
       (let [dead-daemon (proto/get-daemon store "dead-d")]
         (is (not (contains? (or (:emacs-daemon/lings dead-daemon) #{})
                             "working-orphan"))))
       ;; Verify claim was released
-      (is (nil? (queries/get-claims-for-file "/src/foo.clj"))))))
+      (is (nil? (get-in @world [:claims "/src/foo.clj"]))))))
 
 (deftest heal-orphan-terminate-no-tasks-test
   (testing "heal-orphan! terminates orphan with no active tasks"
@@ -274,7 +268,7 @@
     (setup-ling! "idle-ling" "dead-d" :status :idle)
     ;; Working ling — should be terminated
     (setup-ling! "working-ling" "dead-d" :status :working)
-    (lings/add-task! "work-task" "working-ling" {:status :dispatched})
+    (support/add-task! world "work-task" "working-ling" :dispatched)
     ;; Already-terminated ling — should be skipped
     (setup-ling! "dead-ling" "dead-d" :status :terminated)
     (let [result (autoheal/heal-all-orphans! store)]

@@ -1,0 +1,96 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clojure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout hive-emacs
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Clojure
+        uses: DeLaGuardo/setup-clojure@12.5
+        with:
+          cli: latest
+          clj-kondo: latest
+
+      - name: Run static analysis
+        run: clj-kondo --lint src test src-typed test-ansatz
+
+      - name: Run Clojure and Malli verification
+        run: clojure -M:test
+
+      - name: Run Typed Clojure verification
+        run: >-
+          clojure -M:typed -e
+          "(require 'typed.clojure 'hive-emacs.typed-scoring)
+          (typed.clojure/check-ns-clj 'hive-emacs.typed-scoring)"
+
+      - name: Run Ansatz kernel proofs
+        run: clojure -M:ansatz-test
+
+  cljel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout hive-emacs
+        uses: actions/checkout@v4
+
+      - name: Checkout clojure-elisp
+        uses: actions/checkout@v4
+        with:
+          repository: BuddhiLW/clojure-elisp
+          ref: 0518f0324623868facaa7ce8795f56fe540c90f0
+          path: .cache/clojure-elisp
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Clojure
+        uses: DeLaGuardo/setup-clojure@12.5
+        with:
+          cli: latest
+
+      - name: Install Emacs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y emacs-nox
+
+      - name: Verify generated Elisp
+        env:
+          CLEL_HOME: ${{ github.workspace }}/.cache/clojure-elisp
+        run: bash scripts/check-cljel-parity.sh
+
+      - name: Run CIDER eval ERT tests
+        run: >-
+          emacs -Q --batch
+          -L elisp
+          -L src/cljel/hive_mcp/addons/cider
+          -l ert
+          -l hive-mcp-cider-eval-test.el
+          -f ert-run-tests-batch-and-exit
+
+      - name: Run CIDER session ERT tests
+        run: >-
+          emacs -Q --batch
+          -L elisp
+          -L src/cljel/hive_mcp/addons/cider
+          -l ert
+          -l hive-mcp-cider-sessions-test.el
+          -f ert-run-tests-batch-and-exit

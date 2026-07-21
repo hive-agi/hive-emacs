@@ -77,8 +77,8 @@
   "Check if memory system is available."
   (and (require 'hive-mcp-memory nil t) (fboundp 'hive-mcp-memory-query)))
 
-(defun hive-mcp-ai-bridge-ai-get-conventions (&rest args)
-  (let ((limit (nthcdr 0 args)))
+(defun hive-mcp-ai-bridge-ai-get-conventions (&rest clel--args)
+  (let ((limit (nthcdr 0 clel--args)))
     "Get conventions from memory, formatted for AI context.\nLIMIT overrides `hive-mcp-ai-context-conventions-limit'."
   (when (hive-mcp-ai-bridge--memory-available-p)
     (let* ((n (or limit hive-mcp-ai-context-conventions-limit))
@@ -87,8 +87,8 @@
     (mapconcat (lambda (e)
     (format "- %s" (plist-get e :content))) entries "\n"))))))
 
-(defun hive-mcp-ai-bridge-ai-get-decisions (&rest args)
-  (let ((limit (nthcdr 0 args)))
+(defun hive-mcp-ai-bridge-ai-get-decisions (&rest clel--args)
+  (let ((limit (nthcdr 0 clel--args)))
     "Get recent decisions from memory, formatted for AI context.\nLIMIT overrides `hive-mcp-ai-context-decisions-limit'."
   (when (hive-mcp-ai-bridge--memory-available-p)
     (let* ((n (or limit hive-mcp-ai-context-decisions-limit))
@@ -98,8 +98,8 @@
     (let* ((created (plist-get e :created)))
     (format "- [%s] %s" (if created (substring created 0 10) "?") (plist-get e :content)))) entries "\n"))))))
 
-(defun hive-mcp-ai-bridge-ai-semantic-search (&rest args)
-  (let ((query (nth 0 args)) (limit (nthcdr 1 args)))
+(defun hive-mcp-ai-bridge-ai-semantic-search (&rest clel--args)
+  (let ((query (nth 0 clel--args)) (limit (nthcdr 1 clel--args)))
     "Search memory semantically for QUERY.\nLIMIT overrides `hive-mcp-ai-context-semantic-limit'.\nReturns formatted context string or nil."
   (when (and (hive-mcp-ai-bridge--memory-available-p) (fboundp 'hive-mcp-memory-search-semantic))
     (let* ((n (or limit hive-mcp-ai-context-semantic-limit))
@@ -108,8 +108,8 @@
     (mapconcat (lambda (r)
     (format "- [%s] %s" (plist-get r :type) (plist-get r :content))) results "\n"))))))
 
-(defun hive-mcp-ai-bridge-ai-build-context (&rest args)
-  (let ((prompt (nthcdr 0 args)))
+(defun hive-mcp-ai-bridge-ai-build-context (&rest clel--args)
+  (let ((prompt (nthcdr 0 clel--args)))
     "Build AI context from memory.\nIf PROMPT is provided, includes semantic search results.\nReturns formatted context string suitable for injection."
   (let* ((sections nil))
     (when-let ((convs (hive-mcp-ai-bridge-ai-get-conventions)))
@@ -122,8 +122,8 @@
     (when sections
     (concat "# Project Knowledge\n\n" (mapconcat #'identity (nreverse sections) "\n\n"))))))
 
-(defun hive-mcp-ai-bridge-ai-inject-context (&rest args)
-  (let ((prompt (nth 0 args)) (include-semantic (nthcdr 1 args)))
+(defun hive-mcp-ai-bridge-ai-inject-context (&rest clel--args)
+  (let ((prompt (nth 0 clel--args)) (include-semantic (nthcdr 1 clel--args)))
     "Inject memory context into PROMPT.\nIf INCLUDE-SEMANTIC is non-nil, includes semantic search results.\nReturns the augmented prompt string."
   (let* ((context (hive-mcp-ai-bridge-ai-build-context (when include-semantic
     prompt))))
@@ -133,8 +133,8 @@
   "Check if RESPONSE is notable enough to store.\nReturns non-nil if response should be stored."
   (and response (stringp response) (>= (length response) hive-mcp-ai-notable-min-length) (or (string-match-p "```" response) (string-match-p "^[-*] " response) (string-match-p "^[0-9]+\\. " response))))
 
-(defun hive-mcp-ai-bridge-ai-store-response (&rest args)
-  (let ((response (nth 0 args)) (source (nth 1 args)) (tags (nthcdr 2 args)))
+(defun hive-mcp-ai-bridge-ai-store-response (&rest clel--args)
+  (let ((response (nth 0 clel--args)) (source (nth 1 clel--args)) (tags (nthcdr 2 clel--args)))
     "Store RESPONSE to memory if notable.\nSOURCE is the AI package name (e.g., \"gptel\").\nTAGS is optional list of additional tags.\nRate-limited: only stores if not throttled for SOURCE."
   (when (and hive-mcp-ai-store-notable-responses (hive-mcp-ai-bridge--memory-available-p) (hive-mcp-ai-bridge-ai-response-notable-p response) (hive-mcp-ai-bridge--rate-limit-check (concat "store:" source)))
     (let* ((truncated (if (> (length response) 2000) (concat (substring response 0 1997) "...") response))
@@ -145,16 +145,16 @@
 (defvar hive-mcp-ai--interaction-log nil
   "Log of recent AI interactions for audit.")
 
-(defun hive-mcp-ai-bridge-ai-log-interaction (&rest args)
-  (let ((source (nth 0 args)) (action (nth 1 args)) (details (nthcdr 2 args)))
+(defun hive-mcp-ai-bridge-ai-log-interaction (&rest clel--args)
+  (let ((source (nth 0 clel--args)) (action (nth 1 clel--args)) (details (nthcdr 2 clel--args)))
     "Log an AI interaction.\nSOURCE is the AI package, ACTION is what happened.\nDETAILS is optional plist of additional info."
   (when hive-mcp-ai-log-interactions
     (push (list :timestamp (format-time-string "%FT%T%z") :source source :action action :details details) hive-mcp-ai--interaction-log)
     (when (> (length hive-mcp-ai--interaction-log) 100)
     (setq hive-mcp-ai--interaction-log (seq-take hive-mcp-ai--interaction-log 100))))))
 
-(defun hive-mcp-ai-bridge-ai-get-interaction-log (&rest args)
-  (let ((limit (nthcdr 0 args)))
+(defun hive-mcp-ai-bridge-ai-get-interaction-log (&rest clel--args)
+  (let ((limit (nthcdr 0 clel--args)))
     "Get recent interaction log entries.\nLIMIT defaults to 20."
   (seq-take hive-mcp-ai--interaction-log (or limit 20))))
 
@@ -162,8 +162,8 @@
   "Check if swarm system is available."
   (and (require 'hive-mcp-swarm nil t) (fboundp 'hive-mcp-swarm-dispatch)))
 
-(defun hive-mcp-ai-bridge-ai-dispatch-to-swarm (&rest args)
-  (let ((task (nth 0 args)) (rest (nthcdr 1 args)))
+(defun hive-mcp-ai-bridge-ai-dispatch-to-swarm (&rest clel--args)
+  (let ((task (nth 0 clel--args)) (rest (nthcdr 1 clel--args)))
     "Dispatch TASK to swarm agent.\nKeyword args:\n  :preset   - agent preset (e.g., \"code-review\")\n  :slave-id - optionally target a specific slave\n  :callback - reserved for future async result handling\n  :source   - identifies the calling AI package\n\nRate-limited per source. Returns task-id on success, nil on failure."
   (let* ((preset (plist-get kwargs :preset))
         (slave-id (plist-get kwargs :slave-id))

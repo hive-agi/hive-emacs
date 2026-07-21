@@ -217,7 +217,7 @@ All operations are NON-BLOCKING to prevent freezing single-threaded Emacs.")
   "Detect terminal backend used in BUFFER."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (cond
+      (elisp-cond
        ;; claude-code-ide uses vterm internally - check BEFORE generic vterm
        ((and (derived-mode-p 'vterm-mode)
              (bound-and-true-p claude-code-ide-session-id))
@@ -446,7 +446,7 @@ CALLBACK receives (buffer success-p) arguments."
            0 check-interval
            (lambda ()
              (condition-case err
-                 (cond
+                 (elisp-cond
                   ;; Buffer died
                   ((not (buffer-live-p buffer))
                    (cancel-timer timer)

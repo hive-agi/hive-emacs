@@ -5,11 +5,8 @@
    stale detection so that different storage backends (DataScript,
    Datalevin) can be used interchangeably.
 
-   daemon domain logic and storage implementation.
-
-   Mirrors the coordinator pattern in:
-   - hive-mcp.swarm.datascript.coordination (coordinator lifecycle)
-   - hive-mcp.knowledge-graph.protocol (IGraphStore)")
+   This namespace owns only daemon domain contracts."
+  )
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -76,6 +73,10 @@
 
      Returns:
        Transaction report or nil if daemon not found")
+
+  (update-daemon! [this daemon-id attrs]
+    "Merge host-neutral daemon attributes into an existing daemon entity.
+     Unknown daemon IDs return nil.")
 
   ;; --- Ling Binding ---
 

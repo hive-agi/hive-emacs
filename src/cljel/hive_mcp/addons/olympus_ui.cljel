@@ -58,7 +58,7 @@ sorted by slave-id for stable ordering."
 (defn -calculate-grid [n]
   "Calculate rows and cols for N buffers.
 Returns (ROWS . COLS)."
-  (cond
+  (elisp-cond
    ((<= n 0) '(0 . 0))
    ((= n 1) '(1 . 1))
    ((= n 2) '(1 . 2))
@@ -224,7 +224,7 @@ Map with :lings, :layout, :positions, :active-tab, :layout-mode.")
 (defn -normalize-status [status]
   "Normalize STATUS to a symbol.
 Handles keywords (:idle), symbols (idle), and strings (\"idle\")."
-  (cond
+  (elisp-cond
    ((symbolp status)
     (if (keywordp status)
       (intern (substring (symbol-name status) 1))

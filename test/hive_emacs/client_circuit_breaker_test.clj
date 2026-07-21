@@ -13,7 +13,8 @@
    5. :open    -> :open       exponential backoff doubling
    6. :closed  stays :closed  on successful calls
    7. Calls blocked when :open and backoff hasn't elapsed"
-  (:require [clojure.test :refer [deftest testing is use-fixtures]]
+  (:require [clojure.java.shell :as shell]
+            [clojure.test :refer [deftest testing is use-fixtures]]
             [hive-emacs.client :as client]))
 
 ;;; =============================================================================
@@ -24,8 +25,11 @@
   "Reset circuit breaker to :closed before each test."
   [f]
   (client/reset-circuit-breaker!)
-  (f)
-  (client/reset-circuit-breaker!))
+  (try
+    (f)
+    (finally
+      (client/shutdown-executor!)
+      (client/reset-circuit-breaker!))))
 
 (use-fixtures :each reset-breaker-fixture)
 
@@ -194,6 +198,18 @@
       (is (= 0 (:duration-ms result))
           "Duration should be 0 — no process was spawned")
       (is (re-find #"Circuit breaker open" (:error result))))))
+
+(deftest eval-runs-on-bounded-weave-pool
+  (testing "successful emacsclient effects use the owned bounded executor"
+    (with-redefs [shell/sh
+                  (fn [& _]
+                    {:exit 0 :out "\"ready\"\n" :err ""})]
+      (let [result (client/eval-elisp-with-timeout "t" 1000)
+            stats (client/executor-stats)]
+        (is (:success result))
+        (is (= "ready" (:result result)))
+        (is (= 2 (:max-pool-size stats)))
+        (is (<= (:queued stats) 16))))))
 
 (deftest eval-elisp!-returns-circuit-open-map
   (testing "eval-elisp! returns {:error :circuit-open ...} when breaker is open"

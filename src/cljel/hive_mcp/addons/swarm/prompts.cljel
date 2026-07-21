@@ -287,7 +287,7 @@ SLAVES-HASH is hash table of slave-id -> slave plist."
   "Send RESPONSE to slave BUFFER."
   (when (buffer-live-p buffer)
     (let [term-type (with-current-buffer buffer
-                      (cond ((derived-mode-p 'vterm-mode) 'vterm)
+                      (elisp-cond ((derived-mode-p 'vterm-mode) 'vterm)
                             ((derived-mode-p 'eat-mode) 'eat)))]
       (pcase term-type
         ('vterm

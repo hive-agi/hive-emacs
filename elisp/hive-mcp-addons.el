@@ -218,8 +218,8 @@
   (hive-mcp-addons-addons-load-always)
   (hive-mcp-addons-addons-auto-load))
 
-(defun hive-mcp-addons-addon-register (&rest args)
-  (let ((addon (nth 0 args)) (props (nthcdr 1 args)))
+(defun hive-mcp-addons-addon-register (&rest clel--args)
+  (let ((addon (nth 0 clel--args)) (props (nthcdr 1 clel--args)))
     "Register ADDON with PROPS.\nPROPS is a plist that may contain:\n\nMetadata:\n  :version     - Version string\n  :description - One-line description\n  :requires    - List of required features\n  :provides    - List of provided features/commands\n\nLifecycle hooks:\n  :init        - Function to run synchronously after loading.\n                 Use for lightweight setup that must complete before use.\n\n  :async-init  - Function to run asynchronously after loading.\n                 Should return a process object if starting a subprocess.\n                 Use for long-running startup (e.g., starting nREPL, npx).\n                 Non-blocking - does not delay Emacs startup.\n\n  :shutdown    - Function to run when unloading the addon.\n                 Use for cleanup (stopping servers, saving state).\n\nExample:\n  (hive-mcp-addon-register\n   'my-addon\n   :version \"1.0.0\"\n   :description \"My cool addon\"\n   :init #'my-addon-setup-keybindings\n   :async-init #'my-addon-start-server\n   :shutdown #'my-addon-stop-server)"
   (puthash addon props hive-mcp-addon--registry)))
 

@@ -1,14 +1,26 @@
 {:paths ["src" "resources" "elisp"]
 
  :deps {org.clojure/clojure {:mvn/version "1.12.1"}
+        org.clojure/data.json {:mvn/version "2.5.1"}
         com.taoensso/timbre {:mvn/version "6.8.0"}
 
         ;; DataScript for daemon store (DaemonDS)
         datascript/datascript {:mvn/version "1.7.8"}
-        org.replikativ/persistent-sorted-set {:mvn/version "0.4.122"}
+        org.replikativ/persistent-sorted-set {:mvn/version "0.4.126"}
 
         ;; hive-dsl — Result monad, rescue/guard DSL
         io.github.hive-agi/hive-dsl {:mvn/version "0.5.2"}
+
+        ;; Malli schemas are the contract/type/proof source of truth.
+        metosin/malli {:mvn/version "0.20.1"}
+        io.github.hive-agi/hive-schemas {:mvn/version "0.1.5"}
+
+        ;; Bounded execution for emacsclient effects.
+        io.github.hive-agi/hive-weave {:mvn/version "0.2.5"}
+
+        ;; Host-neutral IAddon contract. hive-mcp consumes the same protocol;
+        ;; hive-emacs never needs to compile against the host registry.
+        io.github.hive-agi/hive-addon {:mvn/version "0.3.1"}
 
         ;; hive-di — typed env var resolution with ADT backing (defconfig)
         io.github.hive-agi/hive-di {:mvn/version "0.3.1"}
@@ -21,8 +33,21 @@
   {:extra-paths ["test"]
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
-                org.clojure/test.check {:mvn/version "1.1.1"}}
+                org.clojure/test.check {:mvn/version "1.1.1"}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.6"}}
    :main-opts ["-m" "cognitect.test-runner"]}
+
+  :typed
+  {:extra-paths ["src-typed"]
+   :extra-deps {org.typedclojure/typed.clj.checker {:mvn/version "1.4.0"}}}
+
+  :ansatz-test
+  {:extra-paths ["test-ansatz"]
+   :extra-deps {io.github.cognitect-labs/test-runner
+                {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                org.replikativ/ansatz {:mvn/version "0.2.75"}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.6"}}
+   :main-opts ["-m" "cognitect.test-runner" "-d" "test-ansatz"]}
 
   :build
   {:deps {io.github.clojure/tools.build {:mvn/version "0.10.9"}
