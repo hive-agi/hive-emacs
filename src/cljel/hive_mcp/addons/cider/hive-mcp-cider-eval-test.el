@@ -50,6 +50,24 @@
     (hive-mcp-cider-eval-apply-response st (list (cons "err" "boom") (cons "status" (list "eval-error" "done"))))
     (should (eq (aref st 4) 'error))))
 
+(ert-deftest hive-mcp-cider-eval-test-apply-ex-is-error nil "An ex field marks the state 'error even without eval-error status." (let* ((st (hive-mcp-cider-eval-make-eval-state)))
+    (hive-mcp-cider-eval-apply-response st (list (cons "ex" "CompilerException") (cons "status" (list "done"))))
+    (should (eq (aref st 4) 'error))))
+
+(ert-deftest hive-mcp-cider-eval-test-apply-root-ex-is-error nil "A root-ex field marks the state 'error and supplies fallback error text." (let* ((st (hive-mcp-cider-eval-make-eval-state)))
+    (hive-mcp-cider-eval-apply-response st (list (cons "root-ex" "ArithmeticException") (cons "status" (list "done"))))
+    (should (eq (aref st 4) 'error))
+    (should (equal "ArithmeticException" (hive-mcp-cider-eval-finalize-eval-state st)))))
+
+(ert-deftest hive-mcp-cider-eval-test-apply-stderr-value-order-independent nil "Successful stderr and value chunks preserve the value in either order." (let* ((err-first (hive-mcp-cider-eval-make-eval-state))
+        (value-first (hive-mcp-cider-eval-make-eval-state)))
+    (hive-mcp-cider-eval-apply-response err-first (list (cons "err" "warning")))
+    (hive-mcp-cider-eval-apply-response err-first (list (cons "value" "42") (cons "status" (list "done"))))
+    (hive-mcp-cider-eval-apply-response value-first (list (cons "value" "42")))
+    (hive-mcp-cider-eval-apply-response value-first (list (cons "err" "warning") (cons "status" (list "done"))))
+    (should (equal "42" (hive-mcp-cider-eval-finalize-eval-state err-first)))
+    (should (equal "42" (hive-mcp-cider-eval-finalize-eval-state value-first)))))
+
 (ert-deftest hive-mcp-cider-eval-test-apply-captures-compiled nil "A cljel-active session returns its result under cljel-compiled-elisp (slot 3)." (let* ((st (hive-mcp-cider-eval-make-eval-state)))
     (hive-mcp-cider-eval-apply-response st (list (cons "cljel-compiled-elisp" "(+ 1 2)") (cons "status" (list "done"))))
     (should (equal "(+ 1 2)" (aref st 3)))
@@ -76,14 +94,58 @@
     (hive-mcp-cider-eval-apply-response st (list (cons "status" (list "done"))))
     (should (equal "nil" (hive-mcp-cider-eval-finalize-eval-state st)))))
 
-(ert-deftest hive-mcp-cider-eval-test-finalize-compiled-executes-locally nil "cljel-compiled-elisp is executed in Emacs and its result returned.\nGuards the P0 bug where a cljel-active eval silently returned \"nil\".\nThis branch runs when the cider-cljel client helper is absent (batch harness)." (let* ((st (hive-mcp-cider-eval-make-eval-state)))
+(ert-deftest hive-mcp-cider-eval-test-finalize-compiled-executes-locally nil "cljel-compiled-elisp is executed in Emacs and its result returned." (let* ((st (hive-mcp-cider-eval-make-eval-state)))
     (hive-mcp-cider-eval-apply-response st (list (cons "cljel-compiled-elisp" "(+ 1 2)") (cons "status" (list "done"))))
     (should (equal "3" (hive-mcp-cider-eval-finalize-eval-state st)))))
+
+(ert-deftest hive-mcp-cider-eval-test-finalize-compiled-side-effect nil "Compiled Elisp executes side effects and returns the resulting value." (let* ((st (hive-mcp-cider-eval-make-eval-state)))
+    (setq hive-mcp-cider-eval-test--probe nil)
+    (hive-mcp-cider-eval-apply-response st (list (cons "cljel-compiled-elisp" "(setq hive-mcp-cider-eval-test--probe 42)") (cons "status" (list "done"))))
+    (should (equal "42" (hive-mcp-cider-eval-finalize-eval-state st)))
+    (should (equal 42 hive-mcp-cider-eval-test--probe))))
+
+(ert-deftest hive-mcp-cider-eval-test-finalize-rejects-trailing-form nil "The fallback executor rejects content after the first compiled form." (let* ((st (hive-mcp-cider-eval-make-eval-state)))
+    (setq hive-mcp-cider-eval-test--probe nil)
+    (hive-mcp-cider-eval-apply-response st (list (cons "cljel-compiled-elisp" "(+ 1 2) (setq hive-mcp-cider-eval-test--probe 99)") (cons "status" (list "done"))))
+    (should (string-match-p "trailing forms" (hive-mcp-cider-eval-finalize-eval-state st)))
+    (should-not hive-mcp-cider-eval-test--probe)))
+
+(ert-deftest hive-mcp-cider-eval-test-finalize-rejects-non-string nil "The compiled payload must be a string." (let* ((st (hive-mcp-cider-eval-make-eval-state)))
+    (aset st 3 42)
+    (aset st 4 t)
+    (should (string-match-p "Invalid compiled Elisp payload" (hive-mcp-cider-eval-finalize-eval-state st)))))
+
+(ert-deftest hive-mcp-cider-eval-test-finalize-compile-error-wins nil "An eval error returns stderr without executing a compiled payload." (let* ((st (hive-mcp-cider-eval-make-eval-state)))
+    (setq hive-mcp-cider-eval-test--probe nil)
+    (hive-mcp-cider-eval-apply-response st (list (cons "cljel-compiled-elisp" "(setq hive-mcp-cider-eval-test--probe 99)") (cons "err" "Compilation error") (cons "status" (list "eval-error" "done"))))
+    (should (equal "Compilation error" (hive-mcp-cider-eval-finalize-eval-state st)))
+    (should-not hive-mcp-cider-eval-test--probe)))
+
+(ert-deftest hive-mcp-cider-eval-test-finalize-multi-chunk-stdout nil "Multiple stdout chunks precede the final value without truncation." (let* ((st (hive-mcp-cider-eval-make-eval-state)))
+    (hive-mcp-cider-eval-apply-response st (list (cons "out" "a")))
+    (hive-mcp-cider-eval-apply-response st (list (cons "out" "b")))
+    (hive-mcp-cider-eval-apply-response st (list (cons "value" "nil") (cons "status" (list "done"))))
+    (should (equal "abnil" (hive-mcp-cider-eval-finalize-eval-state st)))))
 
 (ert-deftest hive-mcp-cider-eval-test-finalize-compiled-delegates-to-helper nil "When the cider-cljel client helper is bound, finalize delegates to it." (let* ((st (hive-mcp-cider-eval-make-eval-state)))
     (hive-mcp-cider-eval-apply-response st (list (cons "cljel-compiled-elisp" "(ignored)") (cons "status" (list "done"))))
     (cl-letf (((symbol-function 'cider-cljel--eval-elisp-string) (lambda (s)
     (format "DELEGATED:%s" s)))) (should (equal "DELEGATED:(ignored)" (hive-mcp-cider-eval-finalize-eval-state st))))))
+
+(ert-deftest hive-mcp-cider-eval-test-session-dead-buffer-demotes nil "A connected session with no live REPL buffer becomes stale and errors clearly." (let* ((demoted nil)
+        (message nil))
+    (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup) (lambda (_name)
+    (list :status 'connected :cider-buffer " *gone-repl*"))) ((symbol-function 'hive-mcp-cider-sessions-update-prop) (lambda (name key value)
+    (setq demoted (list name key value))))) (condition-case e
+    (hive-mcp-cider-eval-eval-in-session "dead" "(+ 1 2)")
+  (error (setq message (error-message-string e)))) (should (string-match-p "Session .*dead.* REPL buffer is gone" message)) (should (equal (list "dead" :status 'stale) demoted)))))
+
+(ert-deftest hive-mcp-cider-eval-test-session-live-buffer-evaluates nil "A live session evaluates inside its registered REPL buffer." (let* ((buf (generate-new-buffer " *live-repl*")))
+    (unwind-protect
+    (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup) (lambda (_name)
+    (list :status 'connected :cider-buffer buf))) ((symbol-function 'hive-mcp-cider-eval-eval-with-heartbeat) (lambda (code timeout)
+    (list code timeout (eq (current-buffer) buf))))) (should (equal (list "(+ 1 2)" 7 t) (hive-mcp-cider-eval-eval-in-session "live" "(+ 1 2)" 7))))
+  (kill-buffer buf))))
 
 (defun hive-mcp-cider-eval-test-run-tests ()
   "Run all hive-mcp-cider-eval ERT tests in batch."

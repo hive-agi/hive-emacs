@@ -6,7 +6,11 @@
    structured data for observability."
   (:require [clojure.java.shell :refer [sh]]
             [clojure.string :as str]
+            [hive-dsl.result :as result]
             [hive-emacs.config :as config]
+            [hive-emacs.runtime-ports :as ports]
+            [hive-weave.guarded :as guarded]
+            [hive-weave.pool :as weave-pool]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -30,6 +34,36 @@
   "Hard ceiling for any emacsclient call. The client layer is the last line of
    defense — no call may exceed this regardless of what callers request."
   30000)
+
+(defonce ^:private emacsclient-executor-state (atom nil))
+
+(defn- ensure-emacsclient-executor!
+  []
+  (or @emacsclient-executor-state
+      (let [candidate (weave-pool/make-pool
+                       {:name "hive-emacsclient"
+                        :size 2
+                        :queue-capacity 16})]
+        (if (compare-and-set! emacsclient-executor-state nil candidate)
+          candidate
+          (do
+            (weave-pool/shutdown! candidate)
+            @emacsclient-executor-state)))))
+
+(defn executor-stats
+  "Return bounded emacsclient pool stats, or nil before first use."
+  []
+  (some-> @emacsclient-executor-state weave-pool/pool-stats))
+
+(defn shutdown-executor!
+  "Stop and forget the bounded emacsclient pool. Idempotent."
+  []
+  (loop []
+    (when-let [executor @emacsclient-executor-state]
+      (if (compare-and-set! emacsclient-executor-state executor nil)
+        (weave-pool/shutdown! executor)
+        (recur))))
+  nil)
 
 (def ^:private daemon-dead-patterns
   "Stderr patterns from emacsclient that indicate daemon death.
@@ -211,24 +245,14 @@
           daemon-dead-patterns)))
 
 (defn- report-daemon-error!
-  "Report a daemon error to the daemon store.
-   Uses requiring-resolve for lazy loading to avoid cyclic dependencies.
-
-   This is the integration point between emacsclient circuit breaker
-   and the IEmacsDaemon lifecycle tracking system."
+  "Report daemon death through the injected runtime port."
   [error-message death-tag]
-  (try
-    ;; Use requiring-resolve for lazy loading
-    (when-let [mark-error! (requiring-resolve 'hive-emacs.daemon-store/mark-error!)]
-      (when-let [default-daemon-id (requiring-resolve 'hive-emacs.daemon-store/default-daemon-id)]
-        (let [daemon-id (default-daemon-id)]
-          (mark-error! daemon-id (str "[" (name death-tag) "] " error-message))
-          (log/info :daemon-error-reported {:daemon-id daemon-id
-                                            :death-tag death-tag
-                                            :message error-message}))))
-    (catch Exception e
-      ;; Don't fail the operation if reporting fails
-      (log/debug "Could not report daemon error to store:" (.getMessage e)))))
+  (->> (result/rescue {}
+         (or (ports/report-daemon-error! error-message death-tag) {}))
+       (result/on-error
+        (fn [{:keys [message]}]
+          (log/debug "Could not report daemon error:" message))))
+  nil)
 
 (defn- unwrap-emacs-string
   "Unwrap emacsclient print format quoting.
@@ -244,6 +268,23 @@
       (read-string s)
       (catch Exception _ s))
     s))
+
+(defn- execute-emacsclient
+  [code timeout-ms]
+  (guarded/guarded-await!
+   (ensure-emacsclient-executor!)
+   (fn []
+     (let [{:keys [exit out err]}
+           (apply sh (cond-> [*emacsclient-path*]
+                       *emacs-socket-name* (conj "-s" *emacs-socket-name*)
+                       true (conj "--eval" code)))]
+       (if (zero? exit)
+         {:success true
+          :result (unwrap-emacs-string (str/trim out))}
+         {:success false :error (str/trim err)})))
+   {:timeout-ms timeout-ms
+    :name "emacsclient-eval"
+    :alert! #(ports/emit! :emacs/execution %)}))
 
 (defn eval-elisp-with-timeout
   "Execute elisp code with a timeout. Returns immediately if the operation
@@ -291,55 +332,53 @@
              _          (log/debug "Executing elisp with timeout:" timeout-ms "ms -" code
                                    (when half-open? "(half-open probe)"))
              start      (System/currentTimeMillis)
-             f          (future
-                          (try
-                            (let [{:keys [exit out err]} (apply sh (cond-> [*emacsclient-path*]
-                                                                     *emacs-socket-name* (conj "-s" *emacs-socket-name*)
-                                                                     true (conj "--eval" code)))]
-                              (if (zero? exit)
-                                {:success true :result (unwrap-emacs-string (str/trim out))}
-                                {:success false :error (str/trim err)}))
-                            (catch Exception e
-                              {:success false :error (str "Failed to execute emacsclient: " (.getMessage e))})))]
-         (try
-           (let [result (deref f timeout-ms ::timeout)
-                 duration (- (System/currentTimeMillis) start)]
-             (if (= result ::timeout)
+             execution  (execute-emacsclient code timeout-ms)
+             duration   (- (System/currentTimeMillis) start)
+             response   (cond
+                          (result/ok? execution) (:ok execution)
+                          (= :weave/timeout (:error execution))
+                          {:success false
+                           :error (format "Emacsclient call timed out after %dms"
+                                          timeout-ms)
+                           :timed-out true}
+                          :else
+                          {:success false
+                           :error (str "Emacsclient execution failed: "
+                                       (or (:message execution)
+                                           (:error execution)))
+                           :execution-error true})
+             response   (assoc response :duration-ms duration)]
+         (cond
+           (:success response)
+           (do
+             (log/debug :emacsclient-success {:duration-ms duration})
+             (when (not= :closed (:state @circuit-breaker))
+               (recover-breaker!))
+             response)
+
+           (:timed-out response)
+           (do
+             (log/warn :emacsclient-timeout
+                       {:timeout-ms timeout-ms
+                        :code-preview (subs code 0 (min 100 (count code)))})
+             (when half-open?
+               (trip-breaker! (:error response) :timeout))
+             response)
+
+           :else
+           (do
+             (log/warn :emacsclient-failure
+                       {:duration-ms duration :error (:error response)})
+             (if-let [[_ death-tag]
+                      (detect-daemon-death (:error response))]
                (do
-                 (future-cancel f)
-                 (log/warn :emacsclient-timeout {:timeout-ms timeout-ms
-                                                  :code-preview (subs code 0 (min 100 (count code)))})
-                 ;; Timeout counts as failure for circuit breaker
-                 (when half-open?
-                   (trip-breaker! (format "Timeout after %dms" timeout-ms) :timeout))
-                 {:success false
-                  :error (format "Emacsclient call timed out after %dms" timeout-ms)
-                  :timed-out true
-                  :duration-ms duration})
-               (do
-                 (if (:success result)
-                   (do
-                     (log/debug :emacsclient-success {:duration-ms duration})
-                     ;; SUCCESS: recover the circuit breaker if it was half-open
-                     (when (not= :closed (:state @circuit-breaker))
-                       (recover-breaker!)))
-                   (do
-                     (log/warn :emacsclient-failure {:duration-ms duration :error (:error result)})
-                     ;; IEmacsDaemon integration: detect and report daemon death
-                     (when-let [[_ death-tag] (detect-daemon-death (:error result))]
-                       (log/warn :daemon-death-detected {:tag death-tag :error (:error result)})
-                       (report-daemon-error! (:error result) death-tag)
-                       (trip-breaker! (:error result) death-tag))))
-                 (assoc result :duration-ms duration))))
-           (catch Exception e
-             (let [duration (- (System/currentTimeMillis) start)]
-               (log/error :emacsclient-exception {:duration-ms duration :exception (.getMessage e)} e)
-               ;; Exception during deref — trip breaker if in half-open
+                 (log/warn :daemon-death-detected
+                           {:tag death-tag :error (:error response)})
+                 (report-daemon-error! (:error response) death-tag)
+                 (trip-breaker! (:error response) death-tag))
                (when half-open?
-                 (trip-breaker! (.getMessage e) :exception))
-               {:success false
-                :error (str "Exception during emacsclient call: " (.getMessage e))
-                :duration-ms duration}))))))))
+                 (trip-breaker! (:error response) :probe-failure)))
+             response)))))))
 
 (defn eval-elisp
   "Execute elisp code in running Emacs and return the result.

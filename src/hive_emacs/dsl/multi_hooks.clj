@@ -1,12 +1,9 @@
 (ns hive-emacs.dsl.multi-hooks
   "`:multi/*` IAddon hook entries owned by `hive.emacs`.
 
-   Routed by hive-mcp `addons/core.clj` namespace dispatch into
-   `hive-mcp.multi.registry` under owner `\"hive.emacs\"`. Adds compact
-   verb codes for the consolidated `emacs` tool. The handler currently
-   lives at `hive-mcp.tools.consolidated.emacs` (extraction boundary
-   per `hive-emacs.addon` docstring); when it moves the verbs travel
-   with the addon.
+   Adds compact verb codes for the consolidated `emacs` tool. A host may
+   adapt these declarative entries into its own registry; this namespace has
+   no host API dependency.
 
    Param aliases are owned by `hive.knowledge` to avoid first-write-wins
    conflicts at registration time.
@@ -37,6 +34,5 @@
 (def contributions
   "Map returned by the addon's `(hooks [this])` method.
 
-   Vector values per `:multi/*` key match the
-   `hive-mcp.multi.types/RegistryEntry` ADT shape."
+   Vector values are stable, host-neutral registry-entry data."
   {:multi/verb emacs-verbs})

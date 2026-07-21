@@ -7,20 +7,22 @@
    DDD: Infrastructure layer - singleton access to repository."
   (:require [hive-emacs.config :as config]
             [hive-emacs.daemon :as daemon]
+            [hive-emacs.daemon-heartbeat :as daemon-heartbeat]
             [hive-emacs.daemon-ds :as daemon-ds]
-            [hive-emacs.daemon-selection :as selection]
             [hive-emacs.daemon-autoheal :as autoheal]
+            [hive-emacs.daemon-ranking :as ranking]
+            [hive-emacs.daemon-redistribution :as redistribution]
+            [hive-emacs.daemon-scoring :as scoring]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
 
 
-(defonce ^{:doc "Singleton daemon store instance. Lazily initialized on first access."}
-  daemon-store
-  (delay
-    (log/info "Initializing singleton daemon store")
-    (daemon-ds/create-store)))
+(defonce ^{:private true
+           :doc "Lazily initialized, replaceable daemon repository."}
+  daemon-store-state
+  (atom nil))
 
 (defn get-store
   "Get the shared daemon store instance.
@@ -29,7 +31,20 @@
    Returns:
      IEmacsDaemon implementation (DataScriptDaemonStore)"
   []
-  @daemon-store)
+  (or @daemon-store-state
+      (let [candidate (daemon-ds/create-store)]
+        (if (compare-and-set! daemon-store-state nil candidate)
+          (do
+            (log/info "Initialized singleton daemon store")
+            candidate)
+          @daemon-store-state))))
+
+(defn reset-store!
+  "Replace the singleton repository. Intended for lifecycle reset and tests."
+  ([] (reset-store! (daemon-ds/create-store)))
+  ([store]
+   (reset! daemon-store-state store)
+   store))
 
 
 (defn register!
@@ -125,8 +140,8 @@
   ([]
    (select-daemon-for-ling {}))
   ([opts]
-   (selection/select-daemon (get-store)
-                            (merge opts {:default-id (default-daemon-id)}))))
+   (ranking/select-daemon (get-store)
+                          (merge opts {:default-id (default-daemon-id)}))))
 
 (defn update-daemon-health!
   "Update a daemon's health score. Delegates to daemon-selection.
@@ -135,7 +150,7 @@
      daemon-id - Daemon to update
      score     - New health score (0-100)"
   [daemon-id score]
-  (selection/update-health-score! daemon-id score))
+  (ranking/update-health-score! (get-store) daemon-id score))
 
 
 (def ^:private heartbeat-interval-ms
@@ -185,7 +200,7 @@
                                (when (get-daemon daemon-id) [{:emacs-daemon/id daemon-id}]))]
           (doseq [d active-daemons]
             (let [did (:emacs-daemon/id d)
-                  result (selection/heartbeat! did)]
+                  result (daemon-heartbeat/heartbeat! (get-store) did)]
               (when result
                 (swap! heartbeat-state assoc
                        :last-heartbeat (java.util.Date.)
@@ -210,7 +225,7 @@
                      :last-autoheal-result (select-keys heal-result
                                                         [:orphans-found :healed :failed])))
             ;; Step 3 (W4): Redistribute lings from degraded/overloaded daemons
-            (when-let [redist-result (selection/redistribute-lings! (get-store))]
+            (when-let [redist-result (redistribution/redistribute-lings! (get-store))]
               (log/info "Heartbeat: redistributed" (:migrations-executed redist-result)
                         "of" (:migrations-planned redist-result) "planned migrations"
                         (when (pos? (:migrations-failed redist-result))
@@ -227,8 +242,12 @@
         (catch Exception e
           (log/error "Heartbeat loop error:" (.getMessage e))))
 
-      ;; Sleep until next heartbeat
-      (Thread/sleep heartbeat-interval-ms)))
+      ;; Interrupt is the normal shutdown signal, not an uncaught daemon error.
+      (when (:running? @heartbeat-state)
+        (try
+          (Thread/sleep heartbeat-interval-ms)
+          (catch InterruptedException _
+            nil)))))
   (log/info "Daemon heartbeat loop stopped"))
 
 (defn start-heartbeat-loop!
@@ -287,7 +306,7 @@
             :daemon-error-count (:emacs-daemon/error-count daemon)
             :daemon-health-score (:emacs-daemon/health-score daemon)
             :daemon-health-level (when-let [s (:emacs-daemon/health-score daemon)]
-                                   (selection/health-level s))})))
+                                   (scoring/health-level s))})))
 
 
 (defn heal-orphans!
@@ -318,7 +337,7 @@
      Map with :migrations-planned, :migrations-executed, :migrations-failed, :results
      or nil if no redistribution needed."
   []
-  (selection/redistribute-lings! (get-store)))
+  (redistribution/redistribute-lings! (get-store)))
 
 (defn redistribution-status
   "Get current redistribution status without executing. Monitoring endpoint.
@@ -327,4 +346,4 @@
      Map with :overloaded-count, :overloaded-daemons, :planned-migrations
      or nil if system is balanced."
   []
-  (selection/redistribution-status (get-store)))
+  (redistribution/redistribution-status (get-store)))

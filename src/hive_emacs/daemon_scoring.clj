@@ -10,7 +10,9 @@
    - Latency, error, and load penalty calculations
    - Pure heartbeat helpers (metrics, tx-data, report)
 
-   DDD: Value Object / Domain Service (pure, no I/O).")
+   DDD: Value Object / Domain Service (pure, no I/O)."
+  (:require [hive-emacs.schema :as schema]
+            [malli.core :as m]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -49,6 +51,16 @@
   "Is the daemon healthy enough for new ling spawns?"
   [score]
   (not= :unhealthy (health-level score)))
+
+(defn clamp-health-score
+  "Clamp numeric SCORE to the closed health interval 0..100."
+  [score]
+  (int (max 0 (min 100 score))))
+
+(defn capacity-left
+  "Saturating subtraction for bounded daemon capacity."
+  [capacity used]
+  (max 0 (- capacity used)))
 
 
 ;; =============================================================================
@@ -126,8 +138,13 @@
    Returns:
      Negative number (penalty) capped at error-penalty-max."
   [consecutive-errors]
-  (- (min error-penalty-max
-          (* (or consecutive-errors 0) error-penalty))))
+  (let [errors (or consecutive-errors 0)
+        saturation-at (quot (+ error-penalty-max
+                               (dec error-penalty))
+                            error-penalty)]
+    (- (if (>= errors saturation-at)
+         error-penalty-max
+         (* errors error-penalty)))))
 
 (defn ling-load-delta
   "Compute health score delta from ling count (load pressure).
@@ -138,7 +155,12 @@
    Returns:
      Negative number (penalty). First ling is free."
   [ling-count]
-  (- (* (max 0 (dec (or ling-count 0))) ling-load-penalty-per)))
+  (let [excess (max 0 (dec (or ling-count 0)))
+        ;; Penalties beyond 100 cannot affect the already-clamped raw score.
+        saturation-at (quot 100 ling-load-penalty-per)]
+    (- (if (>= excess saturation-at)
+         100
+         (* excess ling-load-penalty-per)))))
 
 (defn compute-health-score
   "Compute a new health score using EWMA blending of current and previous scores.
@@ -173,7 +195,10 @@
 (defn ping-metrics
   "Pure: derive (success?, latency-ms, new-errors) from a ping-result + prev-errors."
   [ping-result prev-errors]
-  (let [success? (:success ping-result)]
+  (let [success? (boolean
+                  (if (contains? ping-result :success)
+                    (:success ping-result)
+                    (:success? ping-result)))]
     {:success?   success?
      :latency-ms (when success? (:duration-ms ping-result))
      :new-errors (if success? 0 (inc prev-errors))}))
@@ -210,3 +235,38 @@
      :consecutive-errors new-errors
      :ling-count         ling-count
      :success?           success?}))
+
+(defn score-snapshot
+  "Schema-shaped pure score projection used by generative/proof facets."
+  [{:keys [previous latency-ms errors lings]}]
+  (let [score (compute-health-score previous latency-ms errors lings)]
+    {:health-score score
+     :health-level (health-level score)}))
+
+(m/=> health-level
+      [:=> [:cat [:maybe schema/HealthScore]] schema/HealthLevel])
+(m/=> healthy?
+      [:=> [:cat [:maybe schema/HealthScore]] :boolean])
+(m/=> clamp-health-score
+      [:=> [:cat number?] schema/HealthScore])
+(m/=> capacity-left
+      [:=> [:cat nat-int? nat-int?] nat-int?])
+(m/=> latency-score-delta
+      [:=> [:cat [:maybe nat-int?]] [:int {:min -40 :max 0}]])
+(m/=> error-score-delta
+      [:=> [:cat [:maybe nat-int?]] [:int {:min -50 :max 0}]])
+(m/=> ling-load-delta
+      [:=> [:cat [:maybe nat-int?]] [:int {:max 0}]])
+(m/=> compute-health-score
+      [:=> [:cat [:maybe schema/HealthScore]
+             [:maybe nat-int?]
+             nat-int?
+             nat-int?]
+       schema/HealthScore])
+(m/=> ping-metrics
+      [:=> [:cat schema/PingResult nat-int?] :map])
+(m/=> heartbeat-report
+      [:=> [:cat :map schema/HealthScore nat-int?]
+       schema/HeartbeatReport])
+(m/=> score-snapshot
+      [:=> [:cat schema/ScoreInput] schema/ScoreSnapshot])

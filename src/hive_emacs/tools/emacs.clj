@@ -5,16 +5,13 @@
    consolidated tool. Docs are nested under a :docs subtree
    (e.g. emacs docs describe-function).
 
-   Owned by hive-emacs since 2026-04-30 — replaces
-   `hive-mcp.tools.consolidated.emacs` per the addon extraction
-   boundary documented in `hive-emacs.addon`."
-  (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
-            [hive-mcp.tools.result-bridge :as rb]
-            [hive-mcp.dns.result :as result]
+   Owned entirely by hive-emacs and exposed as declarative IAddon tool data."
+  (:require [hive-dsl.result :as result]
             [hive-emacs.client :as ec]
             [hive-emacs.elisp :as el]
-            [hive-mcp.tools.buffer :as buffer]
-            [hive-mcp.tools.docs :as docs]
+            [hive-emacs.tools.buffer :as buffer]
+            [hive-emacs.tools.docs :as docs]
+            [hive-emacs.tools.support :as tool]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -74,49 +71,57 @@
   "Evaluate Elisp code."
   [{:keys [code] :as params}]
   (log/info "emacs-eval" {:code-length (count code)})
-  (rb/result->mcp-text (rb/try-result :emacs/eval-failed #(eval* params))))
+  (tool/result->mcp-text
+   (tool/try-result :emacs/eval-failed #(eval* params))))
 
 (defn handle-buffers
   "List Emacs buffers."
   [params]
   (log/info "emacs-buffers")
-  (rb/result->mcp (rb/try-result :emacs/buffers-failed #(buffers* params))))
+  (tool/result->mcp
+   (tool/try-result :emacs/buffers-failed #(buffers* params))))
 
 (defn handle-notify
   "Send notification to Emacs."
   [{:keys [message level] :as params}]
   (log/info "emacs-notify" {:message message :level level})
-  (rb/result->mcp-text (rb/try-result :emacs/notify-failed #(notify* params))))
+  (tool/result->mcp-text
+   (tool/try-result :emacs/notify-failed #(notify* params))))
 
 (defn handle-status
   "Get Emacs connection status."
   [params]
   (log/info "emacs-status")
-  (rb/result->mcp (rb/try-result :emacs/status-failed #(status* params))))
+  (tool/result->mcp
+   (tool/try-result :emacs/status-failed #(status* params))))
 
 (defn handle-switch-buffer
   "Switch to a buffer."
   [{:keys [buffer] :as params}]
   (log/info "emacs-switch" {:buffer buffer})
-  (rb/result->mcp-text (rb/try-result :emacs/switch-failed #(switch-buffer* params))))
+  (tool/result->mcp-text
+   (tool/try-result :emacs/switch-failed #(switch-buffer* params))))
 
 (defn handle-find-file
   "Open a file in Emacs."
   [{:keys [file] :as params}]
   (log/info "emacs-find-file" {:file file})
-  (rb/result->mcp-text (rb/try-result :emacs/find-file-failed #(find-file* params))))
+  (tool/result->mcp-text
+   (tool/try-result :emacs/find-file-failed #(find-file* params))))
 
 (defn handle-save
   "Save current buffer or all buffers."
   [{:keys [all] :as params}]
   (log/info "emacs-save" {:all all})
-  (rb/result->mcp-text (rb/try-result :emacs/save-failed #(save* params))))
+  (tool/result->mcp-text
+   (tool/try-result :emacs/save-failed #(save* params))))
 
 (defn handle-current-buffer
   "Get current buffer info."
   [params]
   (log/info "emacs-current-buffer")
-  (rb/result->mcp (rb/try-result :emacs/current-buffer-failed #(current-buffer* params))))
+  (tool/result->mcp
+   (tool/try-result :emacs/current-buffer-failed #(current-buffer* params))))
 
 (def handlers
   {:eval            handle-eval
@@ -132,11 +137,11 @@
    :insert          buffer/handle-insert-text
    :project-root    buffer/handle-project-root
    :recent          buffer/handle-recent-files
-   :context         buffer/handle-mcp-get-context
-   :capabilities    buffer/handle-mcp-capabilities
-   :workflows       buffer/handle-mcp-list-workflows
-   :special-buffers buffer/handle-mcp-list-special-buffers
-   :buffer-info     buffer/handle-mcp-buffer-info
+   :context         buffer/handle-context
+   :capabilities    buffer/handle-capabilities
+   :workflows       buffer/handle-workflows
+   :special-buffers buffer/handle-special-buffers
+   :buffer-info     buffer/handle-buffer-info
    ;; Absorbed from docs.clj (nested subtree)
    :docs {:describe-function  docs/handle-describe-function
           :describe-variable  docs/handle-describe-variable
@@ -147,7 +152,7 @@
           :list-packages      docs/handle-list-packages}})
 
 (def handle-emacs
-  (make-cli-handler handlers))
+  (tool/make-cli-handler handlers))
 
 (def tool-def
   {:name "emacs"

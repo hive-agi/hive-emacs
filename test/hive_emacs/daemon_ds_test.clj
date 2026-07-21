@@ -12,7 +12,7 @@
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
             [hive-emacs.daemon :as proto]
             [hive-emacs.daemon-ds :as daemon-ds]
-            [hive-mcp.swarm.datascript.connection :as conn]
+            [hive-emacs.test-support :as support]
             [datascript.core :as d]))
 
 ;;; =============================================================================
@@ -24,7 +24,7 @@
 (defn reset-db-fixture
   "Reset DataScript database before each test."
   [f]
-  (conn/reset-conn!)
+  (support/reset-store! store)
   (f))
 
 (use-fixtures :each reset-db-fixture)
@@ -120,7 +120,7 @@
   (testing "heartbeat! reactivates stale daemon"
     (proto/register! store "stale-react" {})
     ;; Manually set status to stale
-    (let [c (conn/ensure-conn)
+    (let [c (daemon-ds/connection store)
           db @c
           eid (:db/id (d/entity db [:emacs-daemon/id "stale-react"]))]
       (d/transact! c [{:db/id eid :emacs-daemon/status :stale}]))
@@ -241,7 +241,7 @@
   (testing "cleanup-stale! marks old heartbeats as stale"
     (proto/register! store "old-daemon" {})
     ;; Manually set heartbeat to 5 minutes ago
-    (let [c (conn/ensure-conn)
+    (let [c (daemon-ds/connection store)
           db @c
           eid (:db/id (d/entity db [:emacs-daemon/id "old-daemon"]))
           old-time (java.util.Date. (- (System/currentTimeMillis) (* 5 60 1000)))]
@@ -260,7 +260,7 @@
   (testing "cleanup-stale! respects custom threshold"
     (proto/register! store "threshold-test" {})
     ;; Set heartbeat to 1 second ago
-    (let [c (conn/ensure-conn)
+    (let [c (daemon-ds/connection store)
           db @c
           eid (:db/id (d/entity db [:emacs-daemon/id "threshold-test"]))
           old-time (java.util.Date. (- (System/currentTimeMillis) 1000))]
@@ -276,7 +276,7 @@
     (proto/register! store "already-error" {})
 
     ;; Set old heartbeats and non-active statuses
-    (let [c (conn/ensure-conn)
+    (let [c (daemon-ds/connection store)
           db @c
           old-time (java.util.Date. (- (System/currentTimeMillis) (* 5 60 1000)))]
       (doseq [id ["already-stale" "already-terminated" "already-error"]]
@@ -287,7 +287,7 @@
     (proto/mark-terminated! store "already-terminated")
     (proto/mark-error! store "already-error" "some error")
     ;; Manually mark stale
-    (let [c (conn/ensure-conn)
+    (let [c (daemon-ds/connection store)
           db @c
           eid (:db/id (d/entity db [:emacs-daemon/id "already-stale"]))]
       (d/transact! c [{:db/id eid :emacs-daemon/status :stale}]))

@@ -1,9 +1,6 @@
 (ns hive-emacs.dsl.multi-hooks-test
-  "Shape + invariant tests for the `:multi/*` IAddon contributions owned by
-   `hive.emacs`. Guards the contribution data shape; addon → registry
-   integration is covered at the hive-mcp layer."
-  (:require [clojure.set :as set]
-            [clojure.test :refer [deftest is testing]]
+  "Shape + invariant tests for host-neutral `:multi/*` contributions."
+  (:require [clojure.test :refer [deftest is testing]]
             [hive-emacs.dsl.multi-hooks :as mh]))
 
 (deftest contributions-shape
@@ -19,15 +16,6 @@
 (deftest no-duplicate-codes
   (let [codes (map :code mh/emacs-verbs)]
     (is (= (count codes) (count (distinct codes))))))
-
-(deftest no-collision-with-core-verbs
-  (when-let [core-table (try (require 'hive-mcp.dsl.verbs)
-                             (some-> (find-var 'hive-mcp.dsl.verbs/verb-table) deref)
-                             (catch Throwable _ nil))]
-    (let [core-codes (set (keys core-table))
-          em-codes   (set (map :code mh/emacs-verbs))]
-      (is (empty? (set/intersection core-codes em-codes))
-          (str "collisions: " (set/intersection core-codes em-codes))))))
 
 (deftest em-prefix-discipline
   (testing "every emacs verb starts with the em- prefix"

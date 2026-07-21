@@ -1,7 +1,17 @@
 {:addon/id           "hive.emacs"
  :addon/kind         :addon
  :addon/type         :native
- :addon/init-ns      "hive-emacs.init"
+ :addon/init-ns      "hive-emacs.addon"
  :addon/init-fn      "addon-ctor"
- :addon/capabilities #{:tools :editor :health-reporting}
- :addon/description  "Emacs vessel — IEditor, daemon management, CIDER/Magit/Projectile tools"}
+ :addon/init-retry   {:max-attempts 4
+                      :initial-delay-ms 250
+                      :max-delay-ms 2000
+                      :backoff-factor 2}
+ :addon/capabilities #{:tools :mcp-bridge :health-reporting
+                       :editor :vessel :terminal}
+ :addon/doctor       {:emacs/features #{"hive-mcp"
+                                        "hive-mcp-api"
+                                        "hive-mcp-cider"
+                                        "hive-mcp-cider-eval"
+                                        "hive-mcp-cider-sessions"}}
+ :addon/description  "Host-neutral Emacs editor/vessel, daemon management, and tools"}

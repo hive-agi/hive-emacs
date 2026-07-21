@@ -1,39 +1,47 @@
 (ns hive-emacs.dsl.ext-hooks
-  "`:emacs/*` IAddon hook entries — extension-registry contributions.
+  "`:emacs/*` IAddon hook entries — declarative capability contributions.
 
-   Replaces direct `(:require [hive-mcp.emacs.client :as ec])` imports
-   across hive-mcp by registering each callable into the opaque ext
-   registry under stable `:emacs/*` keys. Consumers look up via
-   `((ext/get-extension :emacs/eval-elisp) ...)` instead of holding a
-   compile-time dependency on the hive-emacs namespaces.
-
-   Routed by the IAddon `(hooks [this])` walk in `hive-mcp.addons.core`
-   (key namespace ≠ \"multi\" → `hive-mcp.extensions.registry/register!`).
-   Lifecycle-bound: deregistered on addon shutdown.
+   Consumers adapt stable keys such as `:emacs/eval-elisp` through their own
+   extension mechanism instead of importing hive-emacs implementation
+   namespaces. The host owns registration and lifecycle binding.
 
    Decisions:
    - 20260429195812-0c5dfe8d (outphase free-form ext-keys via IAddon hooks)
    - 20260429230453-7e7627cc (extraction + Phase 2 plan)"
-  (:require [hive-emacs.client :as ec]
+  (:require [hive-emacs.bridge-loader :as bridge]
+            [hive-emacs.client :as ec]
             [hive-emacs.elisp :as el]
             [hive-emacs.notify :as en]
             [hive-emacs.daemon-store :as ds]
-            [hive-emacs.olympus :as ol]))
+            [hive-emacs.editor-adapter :as editor]
+            [hive-emacs.olympus :as ol]
+            [hive-emacs.vessel :as vessel]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
+
+(defn eval-elisp-with-timeout
+  "Ensure bridge entrypoints, then evaluate CODE with TIMEOUT-MS."
+  [code timeout-ms]
+  (bridge/eval-with-bridge ec/eval-elisp-with-timeout code timeout-ms))
+
+(defn eval-elisp
+  "Ensure bridge entrypoints, then evaluate CODE with the default timeout."
+  [code]
+  (eval-elisp-with-timeout code ec/*default-timeout-ms*))
 
 (def contributions
   "`:emacs/*` keymap merged into `(hooks [this])` alongside `:multi/*`.
 
    Each value is an IFn — vars deref to functions, so var refs preserve
    dynamic redefinition during REPL development. Surface limited to the
-   functions hive-mcp consumers actually call; add new keys here when
-   new consumers appear."
+   intentionally narrow; add keys only for supported public capabilities."
   {;; Eval primitives
-   :emacs/eval-elisp                  #'ec/eval-elisp
-   :emacs/eval-elisp-with-timeout     #'ec/eval-elisp-with-timeout
+   :emacs/eval-elisp                  #'eval-elisp
+   :emacs/eval-elisp-with-timeout     #'eval-elisp-with-timeout
    :emacs/running?                    #'ec/emacs-running?
+   :emacs/editor                      #'editor/->emacsclient-editor
+   :emacs/vessel                      #'vessel/create-emacs-vessel
 
    ;; Buffer / file navigation
    :emacs/buffer-list                 #'ec/buffer-list

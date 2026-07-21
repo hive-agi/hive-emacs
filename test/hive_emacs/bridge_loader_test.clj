@@ -80,3 +80,29 @@
         (is (true? @a))
         (is (true? @b))))
     (is (= 1 @entry-attempts))))
+
+(deftest eval-with-bridge-evaluates-after-readiness
+  (let [calls (atom [])
+        eval-fn (fn [code timeout]
+                  (swap! calls conj [code timeout])
+                  {:success true :result code})]
+    (with-redefs [loader/ensure-loaded! (constantly true)]
+      (is (= {:success true :result "(+ 1 2)"}
+             (loader/eval-with-bridge eval-fn "(+ 1 2)" 9000))))
+    (is (= [["(+ 1 2)" 9000]] @calls))))
+
+(deftest eval-with-bridge-remains-retryable
+  (let [ready? (atom false)
+        calls (atom [])
+        eval-fn (fn [code timeout]
+                  (swap! calls conj [code timeout])
+                  {:success true :result "ok"})]
+    (with-redefs [loader/ensure-loaded! (fn [_] @ready?)]
+      (is (= {:success false
+              :error "Emacs bridge entrypoints failed to load"
+              :bridge-unavailable true}
+             (loader/eval-with-bridge eval-fn "first" 1000)))
+      (reset! ready? true)
+      (is (= {:success true :result "ok"}
+             (loader/eval-with-bridge eval-fn "second" 2000))))
+    (is (= [["second" 2000]] @calls))))

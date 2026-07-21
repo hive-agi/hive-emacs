@@ -13,8 +13,8 @@
             [hive-emacs.daemon-selection :as selection]
             [hive-emacs.daemon :as proto]
             [hive-emacs.daemon-ds :as daemon-ds]
-            [hive-mcp.swarm.datascript.connection :as conn]
-            [hive-mcp.swarm.datascript.lings :as lings]
+            [hive-emacs.test-support :as support]
+            [hive-test.isolation :as isolation]
             [datascript.core :as d]))
 
 ;;; =============================================================================
@@ -22,14 +22,11 @@
 ;;; =============================================================================
 
 (def ^:private store (daemon-ds/create-store))
+(def ^:private world (atom (support/empty-world)))
 
-(defn reset-db-fixture
-  "Reset DataScript database before each test."
-  [f]
-  (conn/reset-conn!)
-  (f))
-
-(use-fixtures :each reset-db-fixture)
+(use-fixtures :each
+  (isolation/with-isolations
+   {:type :hive-emacs/runtime :store store :world world}))
 
 ;;; =============================================================================
 ;;; Helper Functions
@@ -40,7 +37,7 @@
   [daemon-id & {:keys [status health-score]
                 :or {status :active health-score 100}}]
   (proto/register! store daemon-id {})
-  (let [c (conn/ensure-conn)
+  (let [c (daemon-ds/connection store)
         db @c
         eid (:db/id (d/entity db [:emacs-daemon/id daemon-id]))]
     (d/transact! c [(cond-> {:db/id eid
@@ -52,7 +49,7 @@
   "Create a ling (slave) and bind it to a daemon."
   [ling-id daemon-id & {:keys [status project-id]
                         :or {status :idle project-id "test-project"}}]
-  (lings/add-slave! ling-id {:status status :project-id project-id})
+  (support/add-ling! world ling-id status project-id)
   (proto/bind-ling! store daemon-id ling-id))
 
 ;;; =============================================================================
@@ -312,8 +309,7 @@
       (is (pos? (:migrations-planned result)))
       (is (pos? (:migrations-executed result)))
       ;; Working lings should NOT have moved
-      (let [degraded (proto/get-daemon store "degraded")
-            healthy (proto/get-daemon store "healthy")]
+      (let [degraded (proto/get-daemon store "degraded")]
         (is (contains? (:emacs-daemon/lings degraded) "worker-1")
             "Working lings should stay on degraded daemon")
         (is (contains? (:emacs-daemon/lings degraded) "worker-2")

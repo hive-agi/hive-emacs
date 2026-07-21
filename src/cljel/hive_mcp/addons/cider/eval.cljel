@@ -1,19 +1,11 @@
 (ns hive-mcp-cider-eval
-  "Async evaluation engine for CIDER nREPL.
-
-Provides heartbeat-polled async evaluation that avoids blocking Emacs.
-Uses closure-local mutable cells instead of global defvars.
-
-Design principles (SOLID/CLARITY):
-- Single Responsibility: Only executes code and returns results
-- FP: No global mutable state — async state lives in closure-local cells
-- Dependency Inversion: Connection management delegated to connection module")
+  "CIDER nREPL evaluation with heartbeat polling and local CLJEL execution.")
 
 (require 'cl-lib)
 
 ;; Dependencies on sibling modules
 (declare-function hive-mcp-cider-sessions-lookup "hive-mcp-cider-sessions")
-(declare-function hive-mcp-cider-sessions-get-prop "hive-mcp-cider-sessions")
+(declare-function hive-mcp-cider-sessions-update-prop "hive-mcp-cider-sessions")
 (declare-function hive-mcp-cider-connection-ensure-connected "hive-mcp-cider-connection")
 
 ;; Dependencies on CIDER
@@ -40,29 +32,30 @@ Smaller values = more responsive, larger values = less CPU overhead."
 ;; Core Eval Engine
 ;; ============================================================================
 
-;; Eval state is a 5-slot vector [value err out compiled state] instead of an
-;; overloaded (result . done) cons. Distinct slots stop value/err/out from
-;; clobbering each other; STATE is the completion signal:
+;; Eval state layout: [value err out compiled state]. STATE values:
 ;;   nil     -- still waiting
 ;;   t       -- done, success
-;;   'error  -- done, evaluation error (from status, NOT mere stderr presence)
+;;   'error  -- done, evaluation error
 (defn make-eval-state []
   "Create a fresh eval-state vector: [value err out compiled state]."
   (make-vector 5 nil))
 
+(defn response-error-p [status ex root-ex]
+  "Return non-nil when nREPL response fields indicate evaluation failure."
+  (or ex root-ex (member "eval-error" status)))
+
 (defn apply-response [st response]
   "Fold one nREPL RESPONSE dict into eval-state vector ST; mutate and return ST.
 
-Pure with respect to everything but ST, so it is drivable from ERT without a
-live nREPL. `err' and `out' accumulate across chunks (str-concat). The error
-state is derived ONLY from an \"eval-error\" status — a plain stderr write
-during an otherwise-successful eval must NOT be treated as failure. A
-cljel-active session returns its result under `cljel-compiled-elisp' (never
-`value'), captured here for local execution in `finalize-eval-state'."
+`err' and `out' accumulate across chunks. A plain stderr write does not mark
+the response failed; `eval-error', `ex', or `root-ex' does. Compiled CLJEL is
+stored for local execution by `finalize-eval-state'."
   (let [value (nrepl-dict-get response "value")
         err (nrepl-dict-get response "err")
         out (nrepl-dict-get response "out")
         compiled (nrepl-dict-get response "cljel-compiled-elisp")
+        ex (nrepl-dict-get response "ex")
+        root-ex (nrepl-dict-get response "root-ex")
         status (nrepl-dict-get response "status")]
     (when value
       (aset st 0 value))
@@ -72,20 +65,37 @@ cljel-active session returns its result under `cljel-compiled-elisp' (never
       (aset st 2 (str (or (aref st 2) "") out)))
     (when compiled
       (aset st 3 compiled))
-    (when (member "eval-error" status)
+    (when (and (not err) (or root-ex ex))
+      (aset st 1 (str (or (aref st 1) "") (or root-ex ex))))
+    (when (response-error-p status ex root-ex)
       (aset st 4 'error))
     (when (member "done" status)
       (unless (aref st 4)
         (aset st 4 t)))
     st))
 
+(defn- execute-compiled-elisp [compiled]
+  "Execute one compiled Elisp form and return its printed result."
+  (condition-case e
+      (progn
+        (unless (stringp compiled)
+          (error "Invalid compiled Elisp payload: %S" compiled))
+        (ignore-errors (require 'clojure-elisp-runtime nil t))
+        (if (fboundp 'cider-cljel--eval-elisp-string)
+            (cider-cljel--eval-elisp-string compiled)
+          (let* [read-result (read-from-string compiled)
+                 form (car read-result)
+                 tail (substring compiled (cdr read-result))]
+            (when (string-match-p "[^[:space:]]" tail)
+              (error "Compiled Elisp contains trailing forms"))
+            (format "%S" (eval form t)))))
+    (error (format "cljel client eval error: %S" e))))
+
 (defn finalize-eval-state [st]
   "Compute the final result string from a completed eval-state ST.
 
-For a cljel-active session the response carries only compiled Elisp; the
-client must execute it locally in Emacs (the middleware only compiles). We
-delegate to the cider-cljel client helper when present, else eval the read
-form directly. On a plain clj eval, prepend accumulated stdout to the value."
+Compiled Elisp delegates to the cider-cljel client helper when present, else
+executes directly. Plain clj output precedes its value."
   (let [value (aref st 0)
         err (aref st 1)
         out (aref st 2)
@@ -95,13 +105,7 @@ form directly. On a plain clj eval, prepend accumulated stdout to the value."
      ((eq state 'error)
       (or err "Eval error"))
      (compiled
-      (progn
-        (ignore-errors (require 'clojure-elisp-runtime nil t))
-        (if (fboundp 'cider-cljel--eval-elisp-string)
-            (cider-cljel--eval-elisp-string compiled)
-          (condition-case e
-              (format "%S" (eval (car (read-from-string compiled)) t))
-            (error (format "cljel client eval error: %S" e))))))
+      (execute-compiled-elisp compiled))
      ((and value out (not (string= "" out)))
       (str out value))
      (value value)
@@ -150,6 +154,10 @@ Uses async evaluation with heartbeat polling."
     (unless (eq (plist-get session :status) 'connected)
       (error "Session '%s' not connected (status: %s)"
              name (plist-get session :status)))
+    (unless (and cider-buf (buffer-live-p (get-buffer cider-buf)))
+      (ignore-errors
+        (hive-mcp-cider-sessions-update-prop name :status 'stale))
+      (error "Session '%s' REPL buffer is gone" name))
     (with-current-buffer cider-buf
       (eval-with-heartbeat code timeout))))
 

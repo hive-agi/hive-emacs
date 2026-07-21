@@ -15,12 +15,10 @@
    DDD: Domain Service — stateless redistribution algorithm.
    Separated from daemon-selection (SRP: selection vs redistribution)."
   (:require [hive-emacs.daemon :as daemon]
+            [hive-emacs.daemon-ranking :as ranking]
             [hive-emacs.daemon-scoring :as scoring]
-            [hive-emacs.daemon-selection :as selection]
-            [hive-mcp.swarm.datascript.connection :as conn]
-            [datascript.core :as d]
-            [taoensso.timbre :as log]
-            [hive-dsl.result :refer [rescue]]))
+            [hive-emacs.runtime-ports :as ports]
+            [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -71,7 +69,7 @@
                     (fn [d]
                       (let [health (or (:emacs-daemon/health-score d) scoring/default-health-score)
                             level (scoring/health-level health)
-                            ling-count (selection/daemon-ling-count d)]
+                            ling-count (ranking/daemon-ling-count d)]
                         (and (pos? ling-count)
                              (or (= :degraded level)
                                  (>= ling-count overloaded-ling-threshold)))))
@@ -90,20 +88,19 @@
    Returns:
      Seq of maps with :ling-id, :project-id, :ling-status.
      Empty if no eligible lings."
-  [daemon]
-  (let [ling-ids (or (:emacs-daemon/lings daemon) #{})
-        daemon-id (:emacs-daemon/id daemon)
-        c (conn/ensure-conn)
-        db @c]
-    (->> ling-ids
-         (map (fn [ling-id]
-                (when-let [e (d/entity db [:slave/id ling-id])]
-                  {:ling-id    ling-id
-                   :daemon-id  daemon-id
-                   :project-id (:slave/project-id e)
-                   :ling-status (:slave/status e)})))
-         (filter some?)
-         (filter #(= :idle (:ling-status %))))))
+  ([daemon]
+   (find-migration-candidates daemon ports/lookup-ling))
+  ([daemon lookup-ling-fn]
+   (let [ling-ids (or (:emacs-daemon/lings daemon) #{})
+         daemon-id (:emacs-daemon/id daemon)]
+     (->> ling-ids
+          (keep (fn [ling-id]
+                  (when-let [ling (lookup-ling-fn ling-id)]
+                    {:ling-id ling-id
+                     :daemon-id daemon-id
+                     :project-id (:ling/project-id ling)
+                     :ling-status (:ling/status ling)})))
+          (filter #(= :idle (:ling-status %)))))))
 
 
 ;; =============================================================================
@@ -129,13 +126,13 @@
     (let [all-daemons (daemon/get-all-daemons store)
           plans (for [source-d overloaded
                       :let [source-id (:emacs-daemon/id source-d)
-                            source-score (:score (selection/score-daemon source-d nil))
+                            source-score (:score (ranking/score-daemon source-d nil))
                             candidates (find-migration-candidates source-d)]
                       candidate candidates
                       :let [project-id (:project-id candidate)
                             targets (->> all-daemons
                                          (remove #(= source-id (:emacs-daemon/id %)))
-                                         (map #(selection/score-daemon % project-id))
+                                         (map #(ranking/score-daemon % project-id))
                                          (remove :disqualified?)
                                          (sort-by :score #(compare %2 %1)))
                             best-target (first targets)]
@@ -175,11 +172,11 @@
 
    Returns:
      Map with :success?, :ling-id, :source-daemon, :target-daemon, :reason"
-  [store {:keys [ling-id source-daemon target-daemon]}]
-  (let [c (conn/ensure-conn)
-        db @c]
-    (if-let [e (d/entity db [:slave/id ling-id])]
-      (if (= :idle (:slave/status e))
+  ([store migration]
+   (migrate-ling! store migration ports/lookup-ling))
+  ([store {:keys [ling-id source-daemon target-daemon]} lookup-ling-fn]
+   (if-let [ling (lookup-ling-fn ling-id)]
+      (if (= :idle (:ling/status ling))
         (do
           (daemon/unbind-ling! store source-daemon ling-id)
           (daemon/bind-ling! store target-daemon ling-id)
@@ -191,7 +188,7 @@
            :target-daemon target-daemon})
         (do
           (log/debug "W4 redistribute: Skipping" ling-id
-                     "- status changed to" (:slave/status e))
+                     "- status changed to" (:ling/status ling))
           {:success?      false
            :ling-id       ling-id
            :source-daemon source-daemon
@@ -222,14 +219,13 @@
     (let [results (mapv #(migrate-ling! store %) plan)
           executed (count (filter :success? results))
           failed (- (count results) executed)]
-      (rescue nil
-              (when-let [emit-fn (requiring-resolve 'hive-mcp.transport.olympus/emit-agent-event!)]
-                (emit-fn :daemon/lings-redistributed
-                         {:planned (count plan)
-                          :executed executed
-                          :failed failed
-                          :details (mapv #(select-keys % [:ling-id :source-daemon :target-daemon :success?])
-                                         results)})))
+      (ports/emit! :daemon/lings-redistributed
+                   {:planned (count plan)
+                    :executed executed
+                    :failed failed
+                    :details (mapv #(select-keys % [:ling-id :source-daemon
+                                                    :target-daemon :success?])
+                                   results)})
       (when (pos? executed)
         (log/info "W4 redistribute: Executed" executed "of" (count plan) "migrations"
                   (when (pos? failed) (str "(" failed " failed)"))))
@@ -258,7 +254,7 @@
                                     :health-level (scoring/health-level
                                                    (or (:emacs-daemon/health-score d)
                                                        scoring/default-health-score))
-                                    :ling-count (selection/daemon-ling-count d)})
+                                    :ling-count (ranking/daemon-ling-count d)})
                                  overloaded)
        :planned-migrations (or plan [])
        :migrations-available (count (or plan []))})))

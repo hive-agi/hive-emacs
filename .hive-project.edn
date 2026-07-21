@@ -1,5 +1,5 @@
 {:project-id "hive-emacs"
  :parent "hive"
- :description "Emacs client for the hive ecosystem — the emacs<->hive-mcp bridge (nREPL/cider session management, tool routing), the agent/FleetView UI surface, and ling orchestration. Written in cljel (a Clojure dialect we author that compiles to elisp)."
+ :description "Host-neutral Emacs addon for the hive ecosystem: nREPL/CIDER sessions, tool routing, UI, and ling orchestration. Clojure core plus cljel-generated Elisp."
  :language :clojure-elisp
- :tags ["hive-emacs" "emacs" "cljel" "client" "bridge" "nrepl" "cider" "ui" "ling"]}
+ :tags ["hive-emacs" "emacs" "cljel" "client" "bridge" "nrepl" "cider" "ui" "ling"] :carto {:source-roots ["elisp" "resources" "src" "src-typed" "test" "test-ansatz"]}}

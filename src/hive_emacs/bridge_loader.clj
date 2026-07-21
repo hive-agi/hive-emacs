@@ -80,3 +80,13 @@
          (and (seq dirs)
               (eval-success? (eval-fn (load-path-elisp dirs) 5000))
               (eval-success? (eval-fn (load-entrypoints-elisp) 15000))))))))
+
+(defn eval-with-bridge
+  "Ensure bridge entrypoints are loaded, then evaluate CODE with TIMEOUT-MS.
+   Returns the evaluator result map."
+  [eval-fn code timeout-ms]
+  (if (ensure-loaded! eval-fn)
+    (eval-fn code timeout-ms)
+    {:success false
+     :error "Emacs bridge entrypoints failed to load"
+     :bridge-unavailable true}))

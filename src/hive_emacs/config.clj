@@ -30,6 +30,10 @@
                          :required false
                          :doc "Emacs daemon socket name. nil = default daemon (no -s flag)."))
 
+;; defconfig creates these Vars. Explicit declarations preserve their roots and
+;; expose the generated API to static source analyzers.
+(declare EmacsConfig-fields EmacsConfig-schema resolve-EmacsConfig)
+
 (def ^:const default-socket-fallback
   "Daemon ID used when EMACS_SOCKET_NAME is unset.
    Matches the conventional Emacs daemon name when started without --daemon=NAME."

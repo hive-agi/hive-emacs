@@ -1,93 +1,187 @@
 (ns hive-emacs.addon
-  "EmacsAddon — IAddon implementation for the Emacs editor integration.
+  "Canonical hive-addon boundary for hive-emacs.
 
-   Wraps the EmacsclientEditor adapter and all Emacs-specific tool namespaces
-   into a single composable addon unit. When initialized, sets the active
-   IEditor backend to EmacsclientEditor. When shut down, clears it (falls
-   back to NoopEditor).
+   Construction is pure. Initialization owns only hive-emacs state. Hosts
+   adapt declarative tools, hooks, editor, and vessel descriptors through
+   their own integration layer."
+  (:require [hive-addon.protocol :as addon]
+            [hive-emacs.bridge-loader :as bridge]
+            [hive-emacs.client :as ec]
+            [hive-emacs.daemon-store :as daemon-store]
+            [hive-emacs.dsl.ext-hooks :as ext-hooks]
+            [hive-emacs.dsl.multi-hooks :as multi-hooks]
+            [hive-emacs.runtime-ports :as runtime-ports]
+            [hive-emacs.tools.emacs :as emacs-tool]
+            [taoensso.timbre :as log]))
 
-   Extraction boundary: this addon + emacs/* + Emacs-specific tool files
-   will move to a separate hive-emacs library in the future."
-  (:require [hive-mcp.addons.protocol :as proto]
-            [hive-mcp.dns.result :as r]
-            [hive-mcp.protocols.editor :as ed]
-            [hive-emacs.editor-adapter :as ema]
-            [taoensso.timbre :as log]
-            [hive-emacs.dsl.multi-hooks :as mh]
-            [hive-emacs.dsl.ext-hooks :as eh]))
-;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
+;; Copyright (C) 2024-2026 hive-agi contributors
 ;;
-;; SPDX-License-Identifier: MIT
+;; SPDX-License-Identifier: MIT OR GPL-2.0-or-later WITH Classpath-exception-2.0
 
-(defn- collect-tools
-  "Lazily collect tool definitions from Emacs-specific consolidated tool namespace.
-   Flat tool namespaces removed — all functionality via consolidated tools."
+(def addon-id-value "hive.emacs")
+
+(def ^:private direct-port-keys
+  {:emacs/ping-fn :ping-fn
+   :emacs/event-emitter :emit-fn
+   :emacs/lookup-ling-fn :lookup-ling-fn
+   :emacs/tasks-for-ling-fn :tasks-for-ling-fn
+   :emacs/fail-task-fn :fail-task-fn
+   :emacs/release-claims-fn :release-claims-fn
+   :emacs/update-ling-fn :update-ling-fn
+   :emacs/report-daemon-error-fn :report-daemon-error-fn
+   :emacs/terminal-dispatch-fn :terminal-dispatch-fn
+   :emacs/resolve-agent-context-fn :resolve-agent-context-fn
+   :emacs/capability-fn :capability-fn})
+
+(defn- flatten-config
+  [seed runtime-config]
+  (let [seed (or seed {})
+        runtime-config (or runtime-config {})]
+    (merge (:addon/config seed)
+           seed
+           (:addon/config runtime-config)
+           runtime-config)))
+
+(defn- default-ping
+  [_daemon-id]
+  (ec/eval-elisp-with-timeout "t" 3000))
+
+(defn- default-daemon-error-reporter
+  [error-message death-tag]
+  (let [daemon-id (daemon-store/default-daemon-id)]
+    (daemon-store/mark-error!
+     daemon-id
+     (str "[" (name death-tag) "] " error-message))))
+
+(defn- port-config
+  [config]
+  (reduce-kv
+   (fn [ports config-key port-key]
+     (if (contains? config config-key)
+       (assoc ports port-key (get config config-key))
+       ports))
+   (merge {:ping-fn default-ping
+           :report-daemon-error-fn default-daemon-error-reporter}
+          (or (:emacs/ports config) {}))
+   direct-port-keys))
+
+(defn- ensure-elisp-loaded!
   []
-  (let [tool-nses '[hive-emacs.tools.emacs]]
-    (->> tool-nses
-         (mapcat (fn [ns-sym]
-                   (let [tools (r/guard Exception []
-                                        (require ns-sym)
-                                        (let [tools-var (ns-resolve ns-sym 'tools)]
-                                          (if tools-var @tools-var [])))]
-                     (when-let [err (:hive-dsl.result/error (meta tools))]
-                       (log/warn "Failed to load tools from" ns-sym ":" (:message err)))
-                     tools)))
-         vec)))
+  (try
+    (boolean (bridge/ensure-loaded! ec/eval-elisp-with-timeout))
+    (catch Exception e
+      (log/warn "hive-emacs bridge load failed" {:error (ex-message e)})
+      false)))
 
-(defrecord EmacsAddon [state-atom]
-  proto/IAddon
-
-  (addon-id [_] "hive.emacs")
-
-  (addon-type [_] :native)
-
-  (capabilities [_]
-    #{:tools :health-reporting :editor})
-
-  (initialize! [_ _config]
-    (if @state-atom
+(defn- initialize-addon!
+  [state seed runtime-config]
+  (locking state
+    (if (= :active (:lifecycle @state))
       {:success? true :already-initialized? true}
-      (let [result (r/try-effect* :addon/emacs-init-error
-                                  (ed/set-editor! (ema/->emacsclient-editor))
-                                  (reset! state-atom true)
-                                  (log/info "EmacsAddon initialized — EmacsclientEditor wired as active IEditor")
-                                  {:success? true
-                                   :metadata {:editor-id (ed/editor-id (ed/get-editor))}})]
-        (if (r/ok? result)
-          (:ok result)
-          (do (log/error "EmacsAddon initialization failed"
-                         {:error (:message result) :class (:class result)})
-              {:success? false
-               :errors [(:message result)]})))))
+      (let [config (flatten-config seed runtime-config)]
+        (reset! state {:lifecycle :initializing})
+        (try
+          (let [ports (port-config config)
+                _ (runtime-ports/configure! ports)
+                _ (daemon-store/ensure-default-daemon!)
+                heartbeat-started?
+                (boolean
+                 (when (:emacs/start-heartbeat? config)
+                   (daemon-store/start-heartbeat-loop!)
+                   true))
+                bridge-ready? (ensure-elisp-loaded!)
+                metadata {:bridge-ready? bridge-ready?
+                          :editor-id :emacsclient
+                          :heartbeat-started? heartbeat-started?
+                          :configured-ports
+                          (->> ports
+                               (keep (fn [[key value]] (when value key)))
+                               set)}]
+            (reset! state {:lifecycle :active
+                           :metadata metadata
+                           :heartbeat-started? heartbeat-started?})
+            (log/info "hive-emacs initialized" metadata)
+            {:success? true :errors [] :metadata metadata})
+          (catch Exception e
+            (runtime-ports/clear!)
+            (let [message (ex-message e)]
+              (reset! state {:lifecycle :error :errors [message]})
+              (log/error "hive-emacs initialization failed"
+                         {:error message})
+              {:success? false :errors [message]})))))))
+
+(defn- shutdown-addon!
+  [state]
+  (locking state
+    (when (:heartbeat-started? @state)
+      (daemon-store/stop-heartbeat-loop!))
+    (ec/shutdown-executor!)
+    (runtime-ports/clear!)
+    (reset! state {:lifecycle :stopped})
+    (log/info "hive-emacs shut down"))
+  nil)
+
+(defn- addon-health
+  [state]
+  (let [{:keys [lifecycle metadata errors]} @state]
+    (if (= :active lifecycle)
+      (try
+        (let [running? (boolean (ec/emacs-running?))]
+          {:status (if running? :ok :degraded)
+           :details (merge metadata {:emacs-running? running?})})
+        (catch Exception e
+          {:status :degraded
+           :details (merge metadata {:error (ex-message e)})}))
+      {:status :down
+       :details (cond-> {:lifecycle (or lifecycle :new)}
+                  (seq errors) (assoc :errors errors))})))
+
+(defrecord HiveEmacsAddon [state seed]
+  addon/IAddon
+
+  (addon-id [_] addon-id-value)
+  (addon-type [_] :native)
+  (capabilities [_]
+    #{:tools :mcp-bridge :health-reporting :editor :vessel :terminal})
+
+  (initialize! [_ runtime-config]
+    (initialize-addon! state seed runtime-config))
 
   (shutdown! [_]
-    (when @state-atom
-      (ed/clear-editor!)
-      (reset! state-atom false)
-      (log/info "EmacsAddon shut down — IEditor cleared to NoopEditor"))
-    {:success? true})
+    (shutdown-addon! state))
 
   (tools [_]
-    (if @state-atom
-      (collect-tools)
-      []))
+    (if (= :active (:lifecycle @state)) emacs-tool/tools []))
 
-  (schema-extensions [_] {})
+  (schema-extensions [_] [])
 
   (health [_]
-    (if @state-atom
-      (let [editor (ed/get-editor)
-            available (ed/available? editor)]
-        {:status (if available :ok :degraded)
-         :details {:editor-id (ed/editor-id editor)
-                   :emacs-running available}})
-      {:status :down
-       :details {:message "EmacsAddon not initialized"}}))
+    (addon-health state))
 
-  (hooks [_] (merge mh/contributions eh/contributions)))
+  (excluded-tools [_] #{})
+
+  (hooks [_]
+    (if (= :active (:lifecycle @state))
+      (merge multi-hooks/contributions ext-hooks/contributions)
+      {})))
+
+(defn make-addon
+  "Create an uninitialized IAddon. No host or Emacs mutation occurs."
+  ([] (make-addon {}))
+  ([seed]
+   (->HiveEmacsAddon (atom {:lifecycle :new}) (or seed {}))))
+
+(defn addon-ctor
+  "Pure hive-addon.mount constructor: config -> uninitialized IAddon."
+  [config]
+  (make-addon config))
+
+(defn init-as-addon!
+  "Compatibility constructor for namespace-scanning mounters."
+  ([] (make-addon))
+  ([config] (make-addon config)))
 
 (defn ->emacs-addon
-  "Create a new EmacsAddon instance."
+  "Compatibility zero-argument constructor."
   []
-  (->EmacsAddon (atom false)))
+  (make-addon))

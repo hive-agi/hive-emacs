@@ -1,133 +1,113 @@
 (ns hive-emacs.daemon-ds
-  "DataScript implementation of IEmacsDaemon protocol.
+  "Private DataScript repository for Emacs daemon lifecycle state.
 
-   Manages Emacs daemon lifecycle state in the swarm DataScript database.
-   Mirrors the coordinator pattern in hive-mcp.swarm.datascript.coordination.
-
-   Uses the shared swarm connection via ensure-conn to colocate daemon
-   entities with slave, task, and coordinator entities.
-
-   DDD: Repository pattern for daemon entity persistence."
+   Daemon entities no longer share a host database. Cross-domain ling data is
+   queried through runtime ports, preserving a strict dependency boundary."
   (:require [datascript.core :as d]
-            [taoensso.timbre :as log]
-            [hive-emacs.daemon :as proto]
-            [hive-mcp.swarm.datascript.schema :as schema]
-            [hive-mcp.swarm.datascript.connection :as conn]))
+            [hive-emacs.daemon :as daemon]
+            [taoensso.timbre :as log]))
+
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
 
+(def daemon-schema
+  {:emacs-daemon/id {:db/unique :db.unique/identity}
+   :emacs-daemon/lings {:db/cardinality :db.cardinality/many}})
 
-(def ^:private stale-threshold-ms
-  "Daemon is considered stale after this many milliseconds without heartbeat.
-   Default: 2 minutes (coordinated with heartbeat interval of ~30s)"
-  (* 2 60 1000))
-
+(def ^:private stale-threshold-ms (* 2 60 1000))
 
 (defn- daemon-entity->map
-  "Convert a DataScript entity to a plain map, stripping :db/id."
   [db eid]
-  (when eid
-    (let [e (d/entity db eid)]
-      (when e
-        (-> (into {} e)
-            (dissoc :db/id)
-            ;; Materialize :db.cardinality/many into a plain set
-            (update :emacs-daemon/lings #(when % (set %))))))))
+  (when-let [entity (and eid (d/entity db eid))]
+    (-> (into {} entity)
+        (dissoc :db/id)
+        (update :emacs-daemon/lings #(when % (set %))))))
 
 (defn- find-daemon-eid
-  "Find the entity ID for a daemon by its string ID. Returns nil if not found."
   [db daemon-id]
   (:db/id (d/entity db [:emacs-daemon/id daemon-id])))
 
+(defn- daemon-attrs
+  [attrs]
+  (into {}
+        (filter (fn [[key _]] (= "emacs-daemon" (namespace key))))
+        attrs))
 
-(defrecord DataScriptDaemonStore []
-  proto/IEmacsDaemon
+(defrecord DataScriptDaemonStore [connection now-fn]
+  daemon/IEmacsDaemon
 
-  ;; --- Lifecycle ---
-
-  (register! [_this daemon-id opts]
+  (register! [_ daemon-id opts]
     {:pre [(string? daemon-id) (seq daemon-id)]}
     (let [{:keys [socket-name pid emacsclient]} opts
-          c (conn/ensure-conn)
-          tx-data {:emacs-daemon/id daemon-id
-                   :emacs-daemon/socket-name (or socket-name daemon-id)
-                   :emacs-daemon/status :active
-                   :emacs-daemon/error-count 0
-                   :emacs-daemon/started-at (conn/now)
-                   :emacs-daemon/heartbeat-at (conn/now)}
-          tx-data (cond-> tx-data
+          now (now-fn)
+          tx-data (cond-> {:emacs-daemon/id daemon-id
+                           :emacs-daemon/socket-name (or socket-name daemon-id)
+                           :emacs-daemon/status :active
+                           :emacs-daemon/error-count 0
+                           :emacs-daemon/started-at now
+                           :emacs-daemon/heartbeat-at now}
                     pid (assoc :emacs-daemon/pid pid)
                     emacsclient (assoc :emacs-daemon/emacsclient emacsclient))]
-      (log/info "Registering Emacs daemon:" daemon-id
-                "socket:" (or socket-name daemon-id)
-                "pid:" pid)
-      (d/transact! c [tx-data])))
+      (log/info "Registering Emacs daemon" {:daemon-id daemon-id})
+      (d/transact! connection [tx-data])))
 
-  (heartbeat! [_this daemon-id]
-    (let [c (conn/ensure-conn)
-          db @c]
+  (heartbeat! [_ daemon-id]
+    (let [db @connection]
       (when-let [eid (find-daemon-eid db daemon-id)]
-        (log/trace "Heartbeat for daemon:" daemon-id)
-        (d/transact! c [{:db/id eid
-                         :emacs-daemon/heartbeat-at (conn/now)
-                         :emacs-daemon/status :active}]))))
+        (d/transact! connection
+                     [{:db/id eid
+                       :emacs-daemon/heartbeat-at (now-fn)
+                       :emacs-daemon/status :active}]))))
 
-  (mark-error! [_this daemon-id error-message]
-    (let [c (conn/ensure-conn)
-          db @c]
+  (mark-error! [_ daemon-id error-message]
+    (let [db @connection]
       (when-let [eid (find-daemon-eid db daemon-id)]
-        (let [current (d/entity db eid)
-              prev-count (or (:emacs-daemon/error-count current) 0)]
-          (log/warn "Marking daemon error:" daemon-id "-" error-message)
-          (d/transact! c [{:db/id eid
-                           :emacs-daemon/status :error
-                           :emacs-daemon/error-message error-message
-                           :emacs-daemon/error-count (inc prev-count)}])))))
+        (let [previous (or (:emacs-daemon/error-count (d/entity db eid)) 0)]
+          (d/transact! connection
+                       [{:db/id eid
+                         :emacs-daemon/status :error
+                         :emacs-daemon/error-message error-message
+                         :emacs-daemon/error-count (inc previous)}])))))
 
-  (mark-terminated! [_this daemon-id]
-    (let [c (conn/ensure-conn)
-          db @c]
+  (mark-terminated! [_ daemon-id]
+    (let [db @connection]
       (when-let [eid (find-daemon-eid db daemon-id)]
-        (log/info "Marking daemon terminated:" daemon-id)
-        (d/transact! c [{:db/id eid
-                         :emacs-daemon/status :terminated}]))))
+        (d/transact! connection
+                     [{:db/id eid :emacs-daemon/status :terminated}]))))
 
-  ;; --- Ling Binding ---
-
-  (bind-ling! [_this daemon-id ling-id]
-    (let [c (conn/ensure-conn)
-          db @c]
+  (update-daemon! [_ daemon-id attrs]
+    (let [db @connection]
       (when-let [eid (find-daemon-eid db daemon-id)]
-        (log/debug "Binding ling" ling-id "to daemon" daemon-id)
-        (d/transact! c [[:db/add eid :emacs-daemon/lings ling-id]]))))
+        (d/transact! connection
+                     [(assoc (daemon-attrs attrs) :db/id eid)]))))
 
-  (unbind-ling! [_this daemon-id ling-id]
-    (let [c (conn/ensure-conn)
-          db @c]
+  (bind-ling! [_ daemon-id ling-id]
+    (let [db @connection]
       (when-let [eid (find-daemon-eid db daemon-id)]
-        (log/debug "Unbinding ling" ling-id "from daemon" daemon-id)
-        (d/transact! c [[:db/retract eid :emacs-daemon/lings ling-id]]))))
+        (d/transact! connection
+                     [[:db/add eid :emacs-daemon/lings ling-id]]))))
 
-  ;; --- Queries ---
+  (unbind-ling! [_ daemon-id ling-id]
+    (let [db @connection]
+      (when-let [eid (find-daemon-eid db daemon-id)]
+        (d/transact! connection
+                     [[:db/retract eid :emacs-daemon/lings ling-id]]))))
 
-  (get-daemon [_this daemon-id]
-    (let [c (conn/ensure-conn)
-          db @c]
+  (get-daemon [_ daemon-id]
+    (let [db @connection]
       (daemon-entity->map db (find-daemon-eid db daemon-id))))
 
-  (get-all-daemons [_this]
-    (let [c (conn/ensure-conn)
-          db @c
+  (get-all-daemons [_]
+    (let [db @connection
           eids (d/q '[:find [?e ...]
                       :where [?e :emacs-daemon/id _]]
                     db)]
       (mapv #(daemon-entity->map db %) eids)))
 
-  (get-daemons-by-status [_this status]
-    {:pre [(contains? schema/daemon-statuses status)]}
-    (let [c (conn/ensure-conn)
-          db @c
+  (get-daemons-by-status [_ status]
+    {:pre [(contains? daemon/daemon-statuses status)]}
+    (let [db @connection
           eids (d/q '[:find [?e ...]
                       :in $ ?status
                       :where
@@ -136,46 +116,50 @@
                     db status)]
       (mapv #(daemon-entity->map db %) eids)))
 
-  (get-daemon-for-ling [_this ling-id]
-    (let [c (conn/ensure-conn)
-          db @c
+  (get-daemon-for-ling [_ ling-id]
+    (let [db @connection
           eid (d/q '[:find ?e .
                      :in $ ?ling-id
-                     :where
-                     [?e :emacs-daemon/lings ?ling-id]]
+                     :where [?e :emacs-daemon/lings ?ling-id]]
                    db ling-id)]
       (daemon-entity->map db eid)))
 
-  ;; --- Cleanup ---
-
   (cleanup-stale! [this]
-    (proto/cleanup-stale! this {}))
+    (daemon/cleanup-stale! this {}))
 
-  (cleanup-stale! [_this opts]
+  (cleanup-stale! [_ opts]
     (let [threshold (or (:threshold-ms opts) stale-threshold-ms)
-          c (conn/ensure-conn)
-          db @c
-          cutoff-ms (- (System/currentTimeMillis) threshold)
-          active-daemons (d/q '[:find ?e ?id ?hb
-                                :where
-                                [?e :emacs-daemon/id ?id]
-                                [?e :emacs-daemon/status :active]
-                                [?e :emacs-daemon/heartbeat-at ?hb]]
-                              db)
-          stale-pairs (->> active-daemons
-                           (filter (fn [[_eid _id hb]]
-                                     (< (.getTime hb) cutoff-ms)))
-                           (map (fn [[eid id _]] [eid id])))]
+          db @connection
+          cutoff-ms (- (.getTime ^java.util.Date (now-fn)) threshold)
+          active-daemons
+          (d/q '[:find ?e ?id ?heartbeat
+                 :where
+                 [?e :emacs-daemon/id ?id]
+                 [?e :emacs-daemon/status :active]
+                 [?e :emacs-daemon/heartbeat-at ?heartbeat]]
+               db)
+          stale-pairs
+          (->> active-daemons
+               (filter (fn [[_ _ heartbeat]]
+                         (< (.getTime ^java.util.Date heartbeat) cutoff-ms)))
+               (mapv (fn [[eid id _]] [eid id])))]
       (when (seq stale-pairs)
-        (log/warn "Found" (count stale-pairs) "stale Emacs daemons")
-        (doseq [[eid daemon-id] stale-pairs]
-          (log/warn "Marking daemon stale:" daemon-id)
-          (d/transact! c [{:db/id eid :emacs-daemon/status :stale}]))
+        (d/transact! connection
+                     (mapv (fn [[eid _]]
+                             {:db/id eid :emacs-daemon/status :stale})
+                           stale-pairs))
         (mapv second stale-pairs)))))
 
-
 (defn create-store
-  "Create a new DataScriptDaemonStore instance.
-   Uses the shared swarm DataScript connection."
-  []
-  (->DataScriptDaemonStore))
+  "Create an isolated daemon repository.
+   Options: :connection DataScript conn, :now-fn (() -> java.util.Date)."
+  ([] (create-store {}))
+  ([{:keys [connection now-fn]}]
+   (->DataScriptDaemonStore
+    (or connection (d/create-conn daemon-schema))
+    (or now-fn #(java.util.Date.)))))
+
+(defn connection
+  "Expose a store's private connection for diagnostics and isolated tests."
+  [store]
+  (:connection store))
