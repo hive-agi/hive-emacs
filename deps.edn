@@ -9,7 +9,7 @@
         org.replikativ/persistent-sorted-set {:mvn/version "0.4.126"}
 
         ;; hive-dsl — Result monad, rescue/guard DSL
-        io.github.hive-agi/hive-dsl {:mvn/version "0.5.7"}
+        io.github.hive-agi/hive-dsl {:mvn/version "0.5.8"}
 
         ;; Malli schemas are the contract/type/proof source of truth.
         metosin/malli {:mvn/version "0.20.1"}
