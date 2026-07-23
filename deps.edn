@@ -9,14 +9,14 @@
         org.replikativ/persistent-sorted-set {:mvn/version "0.4.126"}
 
         ;; hive-dsl — Result monad, rescue/guard DSL
-        io.github.hive-agi/hive-dsl {:mvn/version "0.5.6"}
+        io.github.hive-agi/hive-dsl {:mvn/version "0.5.7"}
 
         ;; Malli schemas are the contract/type/proof source of truth.
         metosin/malli {:mvn/version "0.20.1"}
-        io.github.hive-agi/hive-schemas {:mvn/version "0.1.9"}
+        io.github.hive-agi/hive-schemas {:mvn/version "0.1.10"}
 
         ;; Bounded execution for emacsclient effects.
-        io.github.hive-agi/hive-weave {:mvn/version "0.2.8"}
+        io.github.hive-agi/hive-weave {:mvn/version "0.2.9"}
 
         ;; Host-neutral IAddon contract. hive-mcp consumes the same protocol;
         ;; hive-emacs never needs to compile against the host registry.
@@ -34,7 +34,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.1"}
-                io.github.hive-agi/hive-test {:mvn/version "0.3.9"}}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.10"}}
    :main-opts ["-m" "cognitect.test-runner"]}
 
   :typed
@@ -46,7 +46,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.replikativ/ansatz {:mvn/version "0.2.75"}
-                io.github.hive-agi/hive-test {:mvn/version "0.3.9"}}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.10"}}
    :main-opts ["-m" "cognitect.test-runner" "-d" "test-ansatz"]}
 
   :build
