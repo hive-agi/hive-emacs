@@ -1,8 +1,10 @@
 name: release
 
-# Patch-bump and publish only when the push actually changes the library.
-# README / CI / test-only commits do not mint a version, because a published
-# pom is immutable on both Clojars and the private registry.
+# Publishes the exact VERSION reviewed in the merged PR — release CI does not
+# bump. Deploy runs BEFORE tagging, so a tag records a publish that happened.
+# CI never pushes a branch: main is protected, and `git push --follow-tags`
+# sends branch and tag together, landing the tag even when the branch is
+# rejected.
 on:
   push:
     branches: [main]
@@ -10,6 +12,8 @@ on:
       - 'src/**'
       - 'resources/**'
       - 'deps.edn'
+      - 'VERSION'
+      - '.github/workflows/release.yml'
   workflow_dispatch:
 
 concurrency:
@@ -26,28 +30,53 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: DeLaGuardo/setup-clojure@13.0
+      - uses: DeLaGuardo/setup-clojure@13.2
         with:
-          cli: latest
+          cli: '1.12.5.1664'
 
-      - name: Bump patch version
-        run: clojure -T:build bump :level :patch
-
-      - name: Commit and tag
+      - name: Resolve VERSION and skip if already tagged
+        id: ver
         run: |
-          VER=$(cat VERSION)
-          git config user.name  "hive-ci"
-          git config user.email "ci@hive-agi.local"
-          git add VERSION
-          # [skip ci] stops this push from retriggering the workflow.
-          git commit -m "chore(release): $VER [skip ci]"
-          # Annotated: `git push --follow-tags` ignores lightweight tags,
-          # which would publish the artifact and silently drop the tag.
-          git tag -a "v$VER" -m "release $VER"
-          git push --follow-tags
+          VER=$(tr -d '[:space:]' < VERSION)
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v$VER" >/dev/null; then
+            echo "Tag v$VER already exists - nothing to publish."
+            echo "fresh=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "fresh=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A published artifact may depend only on published artifacts. Resolve
+      # with ONLY the public registries and cold caches. All three isolations
+      # are required: CLJ_CONFIG relocates the user-level ~/.clojure/deps.edn
+      # that declares the private registry, and :mvn/local-repo forces a real
+      # fetch — a warm ~/.m2 already holds privately-sourced jars and would
+      # satisfy the resolve without ever hitting the network.
+      - name: Guard - tree must resolve from public registries only
+        if: steps.ver.outputs.fresh == 'true'
+        run: |
+          CLJ_CONFIG=$(mktemp -d); export CLJ_CONFIG
+          GITLIBS=$(mktemp -d);    export GITLIBS
+          M2=$(mktemp -d)
+          {
+            echo "{:mvn/local-repo \"$M2\""
+            echo ' :mvn/repos {"central" {:url "https://repo1.maven.org/maven2/"}'
+            echo '             "clojars" {:url "https://repo.clojars.org/"}}}'
+          } > "$CLJ_CONFIG/deps.edn"
+          clojure -Sforce -P
 
       - name: Deploy
+        if: steps.ver.outputs.fresh == 'true'
         env:
           CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
           CLOJARS_PASSWORD: ${{ secrets.CLOJARS_DEPLOY_TOKEN }}
         run: clojure -T:build deploy
+
+      - name: Tag the published version
+        if: steps.ver.outputs.fresh == 'true'
+        run: |
+          VER=${{ steps.ver.outputs.ver }}
+          git config user.name  "hive-ci"
+          git config user.email "ci@hive-agi.local"
+          git tag -a "v$VER" -m "release $VER"
+          git push origin "refs/tags/v$VER"
