@@ -310,6 +310,67 @@ its trailing provide; the result is the last form's value."
       (kill-buffer buf))))
 
 ;; ============================================================================
+;; Session readiness — status, :reason and the cljel upgrade assertion
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-eval-test-not-connected-message-carries-reason nil
+  "A registry :reason is surfaced with the status instead of being dropped."
+  (should (equal "Session 'a' not connected (status: connecting)"
+                 (hive-mcp-cider-eval-not-connected-message
+                  "a" (list :status 'connecting))))
+  (should (string-match-p
+           "status: error).*port 7910: handshake never completed"
+           (hive-mcp-cider-eval-not-connected-message
+            "a" (list :status 'error
+                      :reason "port 7910: handshake never completed")))))
+
+(ert-deftest hive-mcp-cider-eval-test-cljel-upgrade-failed-p nil
+  "Only a cljel-typed session with a failed upgrade is broken."
+  (should (hive-mcp-cider-eval-cljel-upgrade-failed-p
+           (list :repl-type 'cljel :cljel-upgrade 'failed)))
+  (should-not (hive-mcp-cider-eval-cljel-upgrade-failed-p
+               (list :repl-type 'cljel :cljel-upgrade 'confirmed)))
+  (should-not (hive-mcp-cider-eval-cljel-upgrade-failed-p
+               (list :repl-type 'clj :cljel-upgrade 'failed)))
+  (should-not (hive-mcp-cider-eval-cljel-upgrade-failed-p (list :repl-type 'cljel))))
+
+(ert-deftest hive-mcp-cider-eval-test-session-connecting-reports-reason nil
+  "eval-in-session refuses a handshake-in-flight session and says why."
+  (let [message nil]
+    (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup)
+               (lambda (_name)
+                 (list :status 'connecting :reason "port 7922: handshake in flight"))))
+      (condition-case e
+          (hive-mcp-cider-eval-eval-in-session "pending" "(+ 1 2)")
+        (error (setq message (error-message-string e)))))
+    (should (string-match-p "status: connecting" message))
+    (should (string-match-p "handshake in flight" message))))
+
+(ert-deftest hive-mcp-cider-eval-test-session-failed-cljel-upgrade-refused nil
+  "A cljel session whose upgrade failed is refused before any eval is sent."
+  (let [message nil]
+    (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup)
+               (lambda (_name)
+                 (list :status 'connected :repl-type 'cljel
+                       :cljel-upgrade 'failed :cider-buffer " *repl*"))))
+      (condition-case e
+          (hive-mcp-cider-eval-eval-in-session "half-cljel" "(message \"hi\")")
+        (error (setq message (error-message-string e)))))
+    (should (string-match-p "never upgraded to cljel" message))))
+
+(ert-deftest hive-mcp-cider-eval-test-connect-failure-reports-diagnosis nil
+  "eval-silent surfaces the connectivity diagnosis, not a generic message."
+  (let [message nil]
+    (cl-letf (((symbol-function 'hive-mcp-cider-connection-ensure-connected)
+               (lambda () nil))
+              ((symbol-function 'hive-mcp-cider-connection-describe-connectivity)
+               (lambda () "port 7910: nREPL never completed the CIDER handshake")))
+      (condition-case e
+          (hive-mcp-cider-eval-eval-silent "(+ 1 2)")
+        (error (setq message (error-message-string e)))))
+    (should (string-match-p "never completed the CIDER handshake" message))))
+
+;; ============================================================================
 ;; wrap-compiled-callback — the shared compiled-elisp routing helper
 ;; ============================================================================
 

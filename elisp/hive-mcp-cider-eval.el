@@ -15,6 +15,8 @@
 
 (declare-function hive-mcp-cider-connection-ensure-connected "hive-mcp-cider-connection")
 
+(declare-function hive-mcp-cider-connection-describe-connectivity "hive-mcp-cider-connection")
+
 (declare-function cider-nrepl-request:eval "cider-client")
 
 (declare-function cider-interactive-eval "cider-eval")
@@ -174,14 +176,25 @@
     (if (not (aref st 4)) (let* ((interrupted (hive-mcp-cider-eval-interrupt-eval (aref id-cell 0) connection)))
     (error "Eval timed out after %s seconds (synchronous heartbeat poll); server interrupt %s" timeout (if interrupted "sent" "NOT sent"))) (hive-mcp-cider-eval-finalize-eval-state st)))))
 
+(defun hive-mcp-cider-eval-not-connected-message (name session)
+  "Return the error text for SESSION named NAME whose status is not 'connected.\nThe registry's :reason is appended when one was recorded, so a handshake\ntimeout or a connect error is reported instead of a bare status symbol."
+  (let* ((reason (plist-get session :reason)))
+    (format "Session '%s' not connected (status: %s)%s" name (plist-get session :status) (if reason (format " — %s" reason) ""))))
+
+(defun hive-mcp-cider-eval-cljel-upgrade-failed-p (session)
+  "Return non-nil when SESSION claims repl-type 'cljel but its upgrade failed.\nAsserts the recorded :cljel-upgrade instead of trusting :repl-type alone."
+  (and (eq (plist-get session :repl-type) 'cljel) (eq (plist-get session :cljel-upgrade) 'failed) t))
+
 (defun hive-mcp-cider-eval-eval-in-session (name code &optional timeout)
-  "Evaluate CODE in the CIDER session NAME.\nOptional TIMEOUT in seconds (default: `hive-mcp-cider-eval-timeout').\nUses async evaluation with heartbeat polling."
+  "Evaluate CODE in the CIDER session NAME.\nOptional TIMEOUT in seconds (default: `hive-mcp-cider-eval-timeout').\nUses the synchronous heartbeat poll of `eval-with-heartbeat'.\nRefuses any session that is not 'connected (surfacing its registry :reason)\nand any cljel session whose upgrade did not confirm."
   (let* ((session (hive-mcp-cider-sessions-lookup name))
         (cider-buf (plist-get session :cider-buffer)))
     (unless session
     (error "Session '%s' not found" name))
     (unless (eq (plist-get session :status) 'connected)
-    (error "Session '%s' not connected (status: %s)" name (plist-get session :status)))
+    (error "%s" (hive-mcp-cider-eval-not-connected-message name session)))
+    (when (hive-mcp-cider-eval-cljel-upgrade-failed-p session)
+    (error "Session '%s' never upgraded to cljel (cljel-upgrade: failed) — reconnect it or evaluate as clj" name))
     (unless (and cider-buf (buffer-live-p (get-buffer cider-buf)))
     (ignore-errors (hive-mcp-cider-sessions-update-prop name :status 'stale))
     (error "Session '%s' REPL buffer is gone" name))
@@ -189,9 +202,9 @@
     (hive-mcp-cider-eval-eval-with-heartbeat code timeout))))
 
 (defun hive-mcp-cider-eval-eval-silent (code &optional timeout)
-  "Evaluate CODE via CIDER silently, return result.\nOptional TIMEOUT in seconds.\nAuto-connects if not connected, reusing existing session if available."
+  "Evaluate CODE via CIDER silently, return result.\nOptional TIMEOUT in seconds.\nAuto-connects if not connected, reusing existing session if available; when the\nconnection cannot be established the error carries the connectivity diagnosis\n(closed socket vs. an nREPL that never completed the CIDER handshake)."
   (unless (hive-mcp-cider-connection-ensure-connected)
-    (error "CIDER could not connect - no nREPL available"))
+    (error "%s" (hive-mcp-cider-connection-describe-connectivity)))
   (hive-mcp-cider-eval-eval-with-heartbeat code timeout))
 
 (defun hive-mcp-cider-eval--interactive-handler ()
@@ -200,9 +213,9 @@
     (cider-interactive-eval-handler)))
 
 (defun hive-mcp-cider-eval-eval-explicit (code)
-  "Evaluate CODE via CIDER interactively.\nShows output in REPL buffer for collaborative debugging.\nA cljel session's compiled Elisp is executed in Emacs by\n`wrap-compiled-callback' before CIDER's handler sees the response, so an\nexplicit eval is never a silent no-op.\nAuto-connects if not connected."
+  "Evaluate CODE via CIDER interactively.\nShows output in REPL buffer for collaborative debugging.\nA cljel session's compiled Elisp is executed in Emacs by\n`wrap-compiled-callback' before CIDER's handler sees the response, so an\nexplicit eval is never a silent no-op.\nAuto-connects if not connected, and reports the connectivity diagnosis when\nthat fails."
   (unless (hive-mcp-cider-connection-ensure-connected)
-    (error "CIDER could not connect - no nREPL available"))
+    (error "%s" (hive-mcp-cider-connection-describe-connectivity)))
   (cider-interactive-eval code (hive-mcp-cider-eval-wrap-compiled-callback (hive-mcp-cider-eval--interactive-handler)))
   (format "Sent to REPL: %s" (truncate-string-to-width code 50 nil nil "...")))
 
