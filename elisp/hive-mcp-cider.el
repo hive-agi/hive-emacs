@@ -22,8 +22,6 @@
   :group 'cider
   :prefix "hive-mcp-cider-")
 
-(defalias 'hive-mcp-cider-list-sessions 'hive-mcp-cider-sessions-list-all)
-
 (defalias 'hive-mcp-cider-get-session 'hive-mcp-cider-sessions-lookup)
 
 (defalias 'hive-mcp-cider-start-nrepl 'hive-mcp-cider-nrepl-start-default)
@@ -60,6 +58,11 @@
 
 (defalias 'hive-mcp-cider-transient 'hive-mcp-cider-ui-transient)
 
+(defun hive-mcp-cider-list-sessions ()
+  "List CIDER sessions, reconciled against real REPL liveness first.\nSessions claiming 'connected whose CIDER buffer is dead are reaped to 'stale\nbefore the projection is built, so a dead session is never reported connected.\nReturns the vector `hive-mcp-cider-sessions-list-all' produces."
+  (ignore-errors (hive-mcp-cider-connection-reconcile-sessions))
+  (hive-mcp-cider-sessions-list-all))
+
 (defun hive-mcp-cider-spawn-session-from-plist (params)
   "Spawn a new CIDER session from a structured request plist.\nMCP entry point — named params prevent positional arg ordering bugs.\nPARAMS is a plist with keys :name, :repl-type, :port, :project-dir, :agent-id.\nDelegates to spawn-session after destructuring."
   (hive-mcp-cider-spawn-session (plist-get params :name) (plist-get params :repl-type) (plist-get params :port) (plist-get params :project-dir) (plist-get params :agent-id)))
@@ -71,7 +74,7 @@
         (the-port (or port (hive-mcp-cider-sessions-find-available-port #'hive-mcp-cider-nrepl-port-open-p)))
         (dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype)))
         (process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir))
-        (timer (run-with-timer 2 1 (lambda ()
+        (timer (run-with-timer hive-mcp-cider-connection-spawn-initial-delay hive-mcp-cider-connection-retry-interval (lambda ()
     (condition-case err
     (hive-mcp-cider-connection-try-connect-session name)
   (error (message "[cider] Timer error connecting session %s: %s" name (error-message-string err))))))))
@@ -80,7 +83,7 @@
     (list :name name :port the-port :repl-type (symbol-name rtype) :status "starting")))
 
 (defun hive-mcp-cider-connect-session (name host port &optional repl-type agent-id project-dir)
-  "Connect to an existing nREPL server as a named session.\nNAME is the session identifier.\nHOST is the nREPL host (default \"localhost\").\nPORT is the nREPL port number.\nREPL-TYPE is one of \"clj\" (default), \"cljs\", or \"cljel\".\nAGENT-ID optionally links this session to a swarm agent.\nPROJECT-DIR (optional) labels the REPL buffer with the target project\nso cross-project sessions don't all collide under the current buffer's\nproject root.\n\nConnection is deferred to Emacs event loop to avoid blocking emacsclient."
+  "Connect to an existing nREPL server as a named session.\nNAME is the session identifier.\nHOST is the nREPL host (default \"localhost\").\nPORT is the nREPL port number.\nREPL-TYPE is one of \"clj\" (default), \"cljs\", or \"cljel\".\nAGENT-ID optionally links this session to a swarm agent.\nPROJECT-DIR (optional) labels the REPL buffer with the target project\nso cross-project sessions don't all collide under the current buffer's\nproject root.\n\nThe connect itself is deferred to the Emacs event loop (emacsclient is never\nblocked by CIDER's own prompts), but this call polls until the connection\nsettles — handshake complete and, for cljs/cljel, the REPL upgrade confirmed\nor ruled out. The returned :status and :repl-type are the settled ones, so a\ncljel target whose upgrade never confirmed reports clj rather than lying."
   (interactive "sSession name: \nsHost (localhost): \nnPort: ")
   (let* ((host (or host "localhost"))
         (rtype (or (and repl-type (intern repl-type)) 'clj))
@@ -88,12 +91,17 @@
     (hive-mcp-cider-sessions-register name (hive-mcp-cider-sessions-make-session port :agent-id agent-id :repl-type rtype :project-dir expanded-dir :status 'connecting))
     (condition-case err
     (let* ((default-directory (or expanded-dir default-directory))
-        (conn (hive-mcp-cider-connection-connect-deferred rtype port expanded-dir))
-        (cider-buf (buffer-name conn)))
-    (hive-mcp-cider-sessions-update-props name :status 'connected :cider-buffer cider-buf)
-    (message "hive-mcp-cider: Session '%s' (%s) connected to %s:%d" name (symbol-name rtype) host port)
-    (list :name name :port port :repl-type (symbol-name rtype) :status "connected"))
-  (error (hive-mcp-cider-sessions-update-prop name :status 'error)
+        (outcome (hive-mcp-cider-connection-connect-deferred rtype port expanded-dir))
+        (props (plist-get outcome :props))
+        (settled-status (or (plist-get props :status) 'error))
+        (settled-type (or (plist-get props :repl-type) rtype))
+        (reason (plist-get props :reason)))
+    (apply #'hive-mcp-cider-sessions-update-props name props)
+    (when (eq settled-status 'error)
+    (error "Session '%s' never settled: %s" name (or reason "unknown cause")))
+    (message "hive-mcp-cider: Session '%s' (%s) connected to %s:%d" name (symbol-name settled-type) host port)
+    (list :name name :port port :repl-type (symbol-name settled-type) :status (symbol-name settled-status)))
+  (error (ignore-errors (hive-mcp-cider-sessions-update-props name :status 'error :reason (error-message-string err)))
       (error "Session '%s' connect failed: %s" name (error-message-string err))))))
 
 (defun hive-mcp-cider-kill-session (name)

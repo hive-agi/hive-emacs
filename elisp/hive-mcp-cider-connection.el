@@ -19,6 +19,12 @@
 
 (declare-function hive-mcp-cider-sessions-find-by-status "hive-mcp-cider-sessions")
 
+(declare-function hive-mcp-cider-sessions-find-by-buffer "hive-mcp-cider-sessions")
+
+(declare-function hive-mcp-cider-sessions-exists-p "hive-mcp-cider-sessions")
+
+(declare-function hive-mcp-cider-sessions-reconcile "hive-mcp-cider-sessions")
+
 (declare-function hive-mcp-cider-sessions-register "hive-mcp-cider-sessions")
 
 (declare-function hive-mcp-cider-sessions-make-session "hive-mcp-cider-sessions")
@@ -47,6 +53,8 @@
 
 (defvar hive-mcp-cider-nrepl-shadow-build)
 
+(defvar cider-cljel-active)
+
 (defcustom hive-mcp-cider-connection-auto-connect t
   "When non-nil, automatically connect CIDER when nREPL is available."
   :group 'hive-mcp-cider
@@ -72,11 +80,88 @@
   :group 'hive-mcp-cider
   :type 'integer)
 
+(defcustom hive-mcp-cider-connection-handshake-timeout 20
+  "Seconds to wait for the nREPL handshake after a socket connect.\nA connection counts as ready only when `cider-connected-p' holds in its\nREPL buffer — an open TCP port is not readiness."
+  :group 'hive-mcp-cider
+  :type 'number)
+
+(defcustom hive-mcp-cider-connection-readiness-interval 0.3
+  "Seconds between readiness polls while waiting for a handshake or upgrade."
+  :group 'hive-mcp-cider
+  :type 'number)
+
+(defcustom hive-mcp-cider-connection-upgrade-timeout 15
+  "Seconds to wait for a cljs/cljel REPL upgrade to confirm itself."
+  :group 'hive-mcp-cider
+  :type 'number)
+
+(defcustom hive-mcp-cider-connection-spawn-initial-delay 2.0
+  "Seconds before the first connect attempt against a freshly spawned session."
+  :group 'hive-mcp-cider
+  :type 'number)
+
 (defvar hive-mcp-cider-connection--auto-timer nil
   "Timer for auto-connect retry attempts.")
 
 (defvar hive-mcp-cider-connection--auto-attempts 0
   "Number of auto-connect attempts made.")
+
+(defun hive-mcp-cider-connection-retry-exhausted-p (attempts max-retries)
+  "Return non-nil when ATTEMPTS has reached the MAX-RETRIES cap.\nA MAX-RETRIES of 0 (or a non-integer) means unlimited, matching\n`hive-mcp-cider-connection-max-retries' semantics on the auto-connect path."
+  (and (integerp max-retries) (> max-retries 0) (>= attempts max-retries)))
+
+(defun hive-mcp-cider-connection-settled-props (buffer-name repl-type)
+  "Registry props for a connection of REPL-TYPE that completed its handshake\nin BUFFER-NAME."
+  (list :status 'connected :repl-type repl-type :cider-buffer buffer-name))
+
+(defun hive-mcp-cider-connection-handshake-failed-props (port reason)
+  "Registry props for a connection whose nREPL handshake never completed on PORT.\nREASON is the surfaced human-readable failure cause."
+  (list :status 'error :reason (format "port %d: %s" port reason)))
+
+(defun hive-mcp-cider-connection-cljel-upgrade-props (buffer-name upgraded-p)
+  "Registry props for a cljel target in BUFFER-NAME once its upgrade settled.\nA confirmed upgrade keeps :repl-type 'cljel; an unconfirmed one is recorded as\nthe plain clj connection it actually is, so no caller routes cljel code at it."
+  (if upgraded-p (list :status 'connected :repl-type 'cljel :cider-buffer buffer-name :cljel-upgrade 'confirmed) (list :status 'connected :repl-type 'clj :cider-buffer buffer-name :cljel-upgrade 'failed)))
+
+(defun hive-mcp-cider-connection-settle-budget (repl-type)
+  "Total seconds a REPL-TYPE connection is allowed to take to settle.\nDeferred dispatch plus the handshake, plus the upgrade budget when REPL-TYPE\nneeds one."
+  (+ hive-mcp-cider-connection-deferred-timeout hive-mcp-cider-connection-handshake-timeout (if (memq repl-type '(cljs cljel)) hive-mcp-cider-connection-upgrade-timeout 0)))
+
+(defun hive-mcp-cider-connection-connectivity-failure-reason (port port-open-p)
+  "Explain why no usable CIDER connection exists on PORT.\nPORT-OPEN-P is whether the nREPL socket accepted a connection."
+  (if port-open-p (format "nREPL on port %d never completed the CIDER handshake" port) (format "no live REPL on port %d" port)))
+
+(defun hive-mcp-cider-connection--connection-ready-p (conn)
+  "Return non-nil when CONN is a live buffer whose nREPL handshake completed."
+  (and (buffer-live-p conn) (with-current-buffer conn
+    (and (fboundp 'cider-connected-p) (cider-connected-p)))))
+
+(defun hive-mcp-cider-connection--cljel-ready-p (conn)
+  "Return non-nil when CONN's CLJEL compilation session is confirmed active."
+  (and (buffer-live-p conn) (with-current-buffer conn
+    (and (bound-and-true-p cider-cljel-active) t))))
+
+(defun hive-mcp-cider-connection--poll-async (pred timeout interval on-done)
+  "Call ON-DONE with t as soon as PRED holds, or with nil after TIMEOUT seconds.\nRe-arms itself every INTERVAL seconds via `run-at-time' and returns immediately,\nso timer callbacks never block the Emacs event loop."
+  (let* ((deadline (+ (float-time) timeout))
+        (cell (list nil)))
+    (setcar cell (lambda ()
+    (cond
+  ((funcall pred) (funcall on-done t))
+  ((> (float-time) deadline) (funcall on-done nil))
+  (t (run-at-time interval nil (car cell))))))
+    (funcall (car cell))))
+
+(defun hive-mcp-cider-connection--wait-for (pred timeout)
+  "Block until PRED holds or TIMEOUT seconds elapse; return t or nil.\nPumps the event loop with `accept-process-output' so async CIDER callbacks\nstill run. For synchronous callers only — timers must use `-poll-async'."
+  (let* ((deadline (+ (float-time) timeout)))
+    (while (and (not (funcall pred)) (< (float-time) deadline))
+    (accept-process-output nil hive-mcp-cider-connection-readiness-interval))
+    (and (funcall pred) t)))
+
+(defun hive-mcp-cider-connection--settle (on-settled props)
+  "Deliver PROPS to the optional ON-SETTLED callback."
+  (when on-settled
+    (funcall on-settled props)))
 
 (defun hive-mcp-cider-connection--connect-clj-no-prompt (port &optional project-dir)
   "Connect CIDER CLJ to PORT, suppressing the duplicate session prompt.\nCIDER's y-or-n-p blocks forever in non-interactive (emacsclient) contexts.\nPROJECT-DIR (optional) is passed to cider-connect-clj so the resulting\nREPL buffer is labeled with the target project. Without it, CIDER infers\nthe project from the calling buffer's default-directory, which defaults\nto whatever Emacs buffer happens to be current when the timer fires —\ntypically wrong when the spawn was triggered by an MCP tool call."
@@ -84,56 +169,80 @@
     t))) (let* ((args (list :host "localhost" :port port)))
     (cider-connect-clj (if project-dir (append args (list :project-dir project-dir)) args)))))
 
-(defun hive-mcp-cider-connection-connect-by-repl-type (repl-type port &optional project-dir)
-  "Connect CIDER to nREPL on PORT using the appropriate method for REPL-TYPE.\nReturns the connection buffer.\nFor cljs and cljel, connects as CLJ first, then upgrades asynchronously.\nPROJECT-DIR (optional) is threaded to cider-connect-clj so the REPL\nbuffer is labeled with the target project rather than whatever buffer\nis current at connect time."
-  (pcase repl-type
-  ((quote cljs) (let* ((conn (hive-mcp-cider-connection--connect-clj-no-prompt port project-dir))
+(defun hive-mcp-cider-connection--settle-once (cell on-settled props)
+  "Deliver PROPS to ON-SETTLED only the first time CELL is claimed."
+  (unless (car cell)
+    (setcar cell t)
+    (hive-mcp-cider-connection--settle on-settled props)))
+
+(defun hive-mcp-cider-connection--upgrade-cljs (conn old-name port on-settled)
+  "Select the shadow-cljs build on the ready connection CONN, then settle.\nOLD-NAME is CONN's buffer name at connect time, used to repoint exactly the\nsession that owns it once CIDER renames the buffer. PORT only labels failures."
+  (let* ((done (list nil))
         (select-form (format "(do (require '[shadow.cljs.devtools.api :as shadow]) (shadow/nrepl-select %s))" hive-mcp-cider-nrepl-shadow-build)))
-    (run-at-time 3.0 nil (lambda ()
-    (when (buffer-live-p conn)
     (with-current-buffer conn
     (cider-nrepl-request:eval select-form (lambda (response)
     (when (member "done" (nrepl-dict-get response "status"))
-    (run-at-time 0.5 nil (lambda ()
-    (hive-mcp-cider-connection--update-session-buffer-name conn))))))))))
+    (run-at-time hive-mcp-cider-connection-readiness-interval nil (lambda ()
+    (hive-mcp-cider-connection--update-session-buffer-name conn old-name)
+    (hive-mcp-cider-connection--settle-once done on-settled (hive-mcp-cider-connection-settled-props (buffer-name conn) 'cljs))))))))
+    (run-at-time hive-mcp-cider-connection-upgrade-timeout nil (lambda ()
+    (hive-mcp-cider-connection--settle-once done on-settled (hive-mcp-cider-connection-handshake-failed-props port "shadow-cljs build never selected"))))))
+
+(defun hive-mcp-cider-connection--upgrade-cljel (conn port on-settled)
+  "Start the CLJEL compilation session on the ready connection CONN and verify it.\nSettles with 'cljel only once `cider-cljel-active' is confirmed in CONN;\nan unconfirmed upgrade settles as the plain clj connection it really is.\nPORT only labels failures."
+  (if (not (fboundp 'cider-cljel-start)) (progn
+  (message "hive-mcp-cider: cider-cljel-start unavailable on port %d — staying clj" port)
+  (hive-mcp-cider-connection--settle on-settled (hive-mcp-cider-connection-cljel-upgrade-props (buffer-name conn) nil))) (progn
+  (with-current-buffer conn
+    (cider-cljel-start))
+  (hive-mcp-cider-connection--poll-async (lambda ()
+    (hive-mcp-cider-connection--cljel-ready-p conn)) hive-mcp-cider-connection-upgrade-timeout hive-mcp-cider-connection-readiness-interval (lambda (upgraded)
+    (unless upgraded
+    (message "hive-mcp-cider: cljel upgrade unconfirmed on port %d — recording session as clj" port))
+    (hive-mcp-cider-connection--settle on-settled (hive-mcp-cider-connection-cljel-upgrade-props (buffer-name conn) upgraded)))))))
+
+(defun hive-mcp-cider-connection-connect-by-repl-type (repl-type port &optional project-dir on-settled)
+  "Connect CIDER to nREPL on PORT using the appropriate method for REPL-TYPE.\nReturns the connection buffer immediately.\n\nON-SETTLED (optional) is called exactly once with a registry props plist\ndescribing how the connection actually settled — never at socket-open time.\nIt fires only after the nREPL handshake completes (`cider-connected-p' in the\nREPL buffer) and, for cljs/cljel, after the REPL upgrade has been confirmed or\ntimed out. Failure props carry :status 'error and a :reason string.\n\nFor cljs and cljel, connects as CLJ first and upgrades once ready.\nPROJECT-DIR (optional) is threaded to cider-connect-clj so the REPL\nbuffer is labeled with the target project rather than whatever buffer\nis current at connect time."
+  (let* ((conn (hive-mcp-cider-connection--connect-clj-no-prompt port project-dir))
+        (old-name (buffer-name conn))
+        (ready-p (lambda ()
+    (hive-mcp-cider-connection--connection-ready-p conn)))
+        (on-handshake (lambda (ready)
+    (if (not ready) (hive-mcp-cider-connection--settle on-settled (hive-mcp-cider-connection-handshake-failed-props port "nREPL handshake did not complete")) (pcase repl-type
+  ((quote cljs) (hive-mcp-cider-connection--upgrade-cljs conn old-name port on-settled))
+  ((quote cljel) (hive-mcp-cider-connection--upgrade-cljel conn port on-settled))
+  (_ (hive-mcp-cider-connection--settle on-settled (hive-mcp-cider-connection-settled-props (buffer-name conn) 'clj))))))))
+    (hive-mcp-cider-connection--poll-async ready-p hive-mcp-cider-connection-handshake-timeout hive-mcp-cider-connection-readiness-interval on-handshake)
     conn))
-  ((quote cljel) (let* ((conn (hive-mcp-cider-connection--connect-clj-no-prompt port project-dir)))
-    (run-at-time 1.0 nil (lambda ()
-    (when (and (buffer-live-p conn) (fboundp 'cider-cljel-start))
-    (with-current-buffer conn
-    (cider-cljel-start)))))
-    conn))
-  (_ (hive-mcp-cider-connection--connect-clj-no-prompt port project-dir))))
 
 (defun hive-mcp-cider-connection-connect-deferred (repl-type port &optional project-dir)
-  "Connect CIDER to nREPL on PORT without blocking emacsclient.\nDefers cider-connect-clj to Emacs event loop via run-at-time,\npolls with accept-process-output until connected or timeout.\nReturns the connection buffer or signals error.\nPROJECT-DIR (optional) labels the REPL buffer with the target project.\n\nUses closure-local mutable cell instead of global defvars."
-  (let* ((cell (cons nil nil)))
+  "Connect CIDER to nREPL on PORT without blocking emacsclient, and wait for\nthe connection to SETTLE — handshake complete, upgrade confirmed or ruled out.\n\nReturns a plist (:buffer CONN :props SETTLED-PROPS); SETTLED-PROPS is the\nregistry props `connect-by-repl-type' produced, so a caller can never report\n\"connected\" ahead of the real connection. Signals an error when the connect\ncall itself fails or nothing settles within `settle-budget'.\nPROJECT-DIR (optional) labels the REPL buffer with the target project.\n\nUses closure-local mutable cells instead of global defvars."
+  (let* ((cell (cons nil nil))
+        (settled (list nil)))
     (run-at-time 0 nil (lambda ()
     (condition-case err
     (progn
-  (setcar cell (hive-mcp-cider-connection-connect-by-repl-type repl-type port project-dir))
+  (setcar cell (hive-mcp-cider-connection-connect-by-repl-type repl-type port project-dir (lambda (props)
+    (setcar settled props))))
   (setcdr cell t))
   (error (setcar cell err)
       (setcdr cell 'error)))))
-    (let* ((start-time (float-time))
-        (timeout hive-mcp-cider-connection-deferred-timeout))
-    (while (and (not (cdr cell)) (< (- (float-time) start-time) timeout))
-    (accept-process-output nil 0.2))
+    (let* ((timeout (hive-mcp-cider-connection-settle-budget repl-type)))
+    (hive-mcp-cider-connection--wait-for (lambda ()
+    (or (eq (cdr cell) 'error) (car settled))) timeout)
     (cond
   ((eq (cdr cell) 'error) (error "Connect failed: %s" (error-message-string (car cell))))
-  ((not (cdr cell)) (error "Connect timed out after %d seconds" timeout))
-  (t (car cell))))))
+  ((not (car settled)) (error "Connect did not settle within %s seconds on port %d" timeout port))
+  (t (list :buffer (car cell) :props (car settled)))))))
 
-(defun hive-mcp-cider-connection--update-session-buffer-name (conn)
-  "Update session registry when CIDER renames a buffer (e.g., clj -> cljs).\nCONN is the original connection buffer object."
+(defun hive-mcp-cider-connection--update-session-buffer-name (conn old-name)
+  "Repoint the one session that owns OLD-NAME at CONN's current buffer name.\nCONN is the original connection buffer object; OLD-NAME is the buffer name it\ncarried at connect time. Only the owning session is touched — a coexisting\nsession whose own :cider-buffer happens to be dead is left alone."
   (let* ((new-name (when (buffer-live-p conn)
     (buffer-name conn))))
-    (when new-name
-    (maphash (lambda (name session)
-    (let* ((old-buf (plist-get session :cider-buffer)))
-    (when (and old-buf (not (string= old-buf new-name)) (not (get-buffer old-buf)) (buffer-live-p conn))
-    (hive-mcp-cider-sessions-update-prop name :cider-buffer new-name)
-    (message "hive-mcp-cider: Session '%s' buffer updated to %s" name new-name)))) hive-mcp-cider-sessions--registry))))
+    (when (and new-name old-name (not (string= old-name new-name)))
+    (when-let* ((target (hive-mcp-cider-sessions-find-by-buffer old-name)))
+    (hive-mcp-cider-sessions-update-prop target :cider-buffer new-name)
+    (message "hive-mcp-cider: Session '%s' buffer updated to %s" target new-name)))))
 
 (defun hive-mcp-cider-connection--cancel-session-timer (name)
   "Cancel the auto-connect timer for session NAME."
@@ -143,8 +252,15 @@
     (cancel-timer timer))
     (hive-mcp-cider-sessions-update-prop name :timer nil)))
 
+(defun hive-mcp-cider-connection--apply-settled-props (name props)
+  "Write settled connection PROPS onto session NAME, if it still exists.\nSurfaces the settled status (and any :reason) so a failed handshake or an\nunconfirmed REPL upgrade is visible instead of silent."
+  (when (hive-mcp-cider-sessions-exists-p name)
+    (apply #'hive-mcp-cider-sessions-update-props name props)
+    (let* ((reason (plist-get props :reason)))
+    (message "hive-mcp-cider: Session '%s' settled as %s (%s)%s" name (symbol-name (or (plist-get props :status) 'unknown)) (symbol-name (or (plist-get props :repl-type) 'clj)) (if reason (format " — %s" reason) "")))))
+
 (defun hive-mcp-cider-connection-try-connect-session (name)
-  "Try to connect CIDER to session NAME.\nCalled by timer for spawned sessions. Dispatches based on :repl-type.\nBinds default-directory to the session's :project-dir so CIDER labels\nthe REPL buffer with the correct project root (not the current buffer's dir).\n\nSwitches to *scratch* before invoking cider-connect — timer callbacks\nfire with unpredictable current-buffer (could be *Messages* — read-only,\nor a killed buffer). CIDER's `cider--gather-connect-params` inspects\ncurrent-buffer for `nrepl-endpoint`; firing from a non-REPL/non-server\nbuffer that the gather call walks into raises 'not a REPL or SERVER\nbuffer'. *scratch* is always alive, fundamental-mode, and\nwrite-friendly — a stable evaluation context for the connect."
+  "Try to connect CIDER to session NAME.\nCalled by timer for spawned sessions. Dispatches based on :repl-type.\nBinds default-directory to the session's :project-dir so CIDER labels\nthe REPL buffer with the correct project root (not the current buffer's dir).\n\nSwitches to *scratch* before invoking cider-connect — timer callbacks\nfire with unpredictable current-buffer (could be *Messages* — read-only,\nor a killed buffer). CIDER's `cider--gather-connect-params` inspects\ncurrent-buffer for `nrepl-endpoint`; firing from a non-REPL/non-server\nbuffer that the gather call walks into raises 'not a REPL or SERVER\nbuffer'. *scratch* is always alive, fundamental-mode, and\nwrite-friendly — a stable evaluation context for the connect.\n\nAn open socket only moves the session to 'connecting; the settle callback\nfrom `connect-by-repl-type' is what writes 'connected (or 'error, with a\n:reason) once the nREPL handshake and any REPL upgrade have resolved.\nThe no-socket-yet branch is capped by `hive-mcp-cider-connection-max-retries'\n(0 = unlimited)."
   (let* ((session (hive-mcp-cider-sessions-lookup name))
         (port (plist-get session :port))
         (status (plist-get session :status))
@@ -154,26 +270,27 @@
     (if (hive-mcp-cider-nrepl-port-open-p port) (condition-case err
     (let* ((expanded-dir (and proj-dir (file-name-as-directory (expand-file-name proj-dir))))
         (scratch (or (get-buffer "*scratch*") (get-buffer-create "*scratch*")))
+        (settle (lambda (props)
+    (hive-mcp-cider-connection--apply-settled-props name props)))
         (conn (with-current-buffer scratch
     (let* ((default-directory (or expanded-dir default-directory)))
-    (hive-mcp-cider-connection-connect-by-repl-type repl-type port expanded-dir)))))
+    (hive-mcp-cider-connection-connect-by-repl-type repl-type port expanded-dir settle)))))
     (hive-mcp-cider-connection--cancel-session-timer name)
-    (hive-mcp-cider-sessions-update-props name :status 'connected :cider-buffer (buffer-name conn))
-    (message "hive-mcp-cider: Session '%s' (%s) connected on port %d" name (symbol-name repl-type) port))
+    (hive-mcp-cider-sessions-update-props name :status 'connecting :cider-buffer (buffer-name conn))
+    (message "hive-mcp-cider: Session '%s' (%s) socket open on port %d, awaiting nREPL handshake" name (symbol-name repl-type) port))
   (error (hive-mcp-cider-connection--cancel-session-timer name)
-      (hive-mcp-cider-sessions-update-prop name :status 'error)
-      (message "hive-mcp-cider: Session '%s' connection failed: %s" name (error-message-string err)))) (let* ((attempts (or (plist-get session :attempts) 0)))
-    (if (< attempts 30) (hive-mcp-cider-sessions-update-prop name :attempts (1+ attempts)) (progn
+      (hive-mcp-cider-sessions-update-props name :status 'error :reason (error-message-string err))
+      (message "hive-mcp-cider: Session '%s' connection failed: %s" name (error-message-string err)))) (let* ((attempts (1+ (or (plist-get session :attempts) 0))))
+    (if (not (hive-mcp-cider-connection-retry-exhausted-p attempts hive-mcp-cider-connection-max-retries)) (hive-mcp-cider-sessions-update-prop name :attempts attempts) (progn
   (hive-mcp-cider-connection--cancel-session-timer name)
-  (hive-mcp-cider-sessions-update-prop name :status 'timeout)
-  (message "hive-mcp-cider: Session '%s' timed out waiting for nREPL" name))))))))
+  (hive-mcp-cider-sessions-update-props name :attempts attempts :status 'timeout :reason (hive-mcp-cider-connection-connectivity-failure-reason port nil))
+  (message "hive-mcp-cider: Session '%s' timed out after %d attempts waiting for nREPL" name attempts))))))))
 
 (defun hive-mcp-cider-connection--session-buffer-alive-p (name)
   "Return non-nil if session NAME's :cider-buffer is a live buffer\nwith an active CIDER connection. Stale registry entries (buffer killed,\nnREPL died, or CIDER detached) return nil so callers can evict them."
   (let* ((cider-buf (hive-mcp-cider-sessions-get-prop name :cider-buffer))
         (buf (and cider-buf (get-buffer cider-buf))))
-    (and buf (buffer-live-p buf) (with-current-buffer buf
-    (and (featurep 'cider) (cider-connected-p))))))
+    (and buf (hive-mcp-cider-connection--connection-ready-p buf) t)))
 
 (defun hive-mcp-cider-connection--evict-stale-session (name)
   "Demote session NAME to :status 'stale so it stops being returned by\nfind-by-status lookups. Caller is the one that detected the dead buffer."
@@ -205,8 +322,16 @@
     (cider-make-connection-default (current-buffer)))
   t)))))
 
+(defun hive-mcp-cider-connection-reconcile-sessions ()
+  "Reconcile every registered session's :status against real REPL liveness.\nAny session claiming 'connected whose CIDER buffer is dead is reaped down to\n'stale, so a dead session can never be reported as connected.\nReturns the list of demoted session names."
+  (hive-mcp-cider-sessions-reconcile #'hive-mcp-cider-connection--session-buffer-alive-p))
+
+(defun hive-mcp-cider-connection-describe-connectivity ()
+  "Return a one-line diagnosis of why no CIDER connection is available.\nDistinguishes a closed nREPL socket from one that never handshook."
+  (hive-mcp-cider-connection-connectivity-failure-reason hive-mcp-cider-nrepl-port (hive-mcp-cider-nrepl-port-open-p hive-mcp-cider-nrepl-port)))
+
 (defun hive-mcp-cider-connection-ensure-connected ()
-  "Ensure CIDER is connected, reusing existing session or auto-connecting.\nReturns t if connected, nil otherwise.\nPriority: 1) Already connected 2) Reuse live registry session 3) Connect to default port.\nStale registry sessions (status 'connected but buffer dead) are demoted\nto 'stale so they stop short-circuiting the cascade with a lie."
+  "Ensure CIDER is connected, reusing existing session or auto-connecting.\nReturns t only once CIDER is actually connected, nil otherwise.\nPriority: 1) Already connected 2) Reuse live registry session 3) Connect to default port.\nStale registry sessions (status 'connected but buffer dead) are demoted\nto 'stale so they stop short-circuiting the cascade with a lie.\nBranch 3 waits for the nREPL handshake up to\n`hive-mcp-cider-connection-handshake-timeout' — the connect call is async and\nreturns its buffer long before the connection is usable."
   (cond
   ((and (featurep 'cider) (cider-connected-p)) t)
   ((when-let* ((session-name (hive-mcp-cider-connection--find-live-connected-session)))
@@ -217,11 +342,15 @@
   ((hive-mcp-cider-nrepl-port-open-p hive-mcp-cider-nrepl-port) (progn
   (message "hive-mcp-cider: Auto-connecting to port %d" hive-mcp-cider-nrepl-port)
   (condition-case nil
-    (progn
-  (hive-mcp-cider-connection--connect-clj-no-prompt hive-mcp-cider-nrepl-port)
-  t)
+    (let* ((conn (hive-mcp-cider-connection--connect-clj-no-prompt hive-mcp-cider-nrepl-port)))
+    (or (hive-mcp-cider-connection--wait-for (lambda ()
+    (hive-mcp-cider-connection--connection-ready-p conn)) hive-mcp-cider-connection-handshake-timeout) (progn
+  (message "hive-mcp-cider: %s" (hive-mcp-cider-connection-describe-connectivity))
+  nil)))
   (error nil))))
-  (t nil)))
+  (t (progn
+  (message "hive-mcp-cider: %s" (hive-mcp-cider-connection-describe-connectivity))
+  nil))))
 
 (defun hive-mcp-cider-connection--try-connect-default ()
   "Try to connect CIDER to the default nREPL port. Returns t if successful."

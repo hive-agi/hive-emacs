@@ -68,6 +68,44 @@
           (should (equal "real" (plist-get (aref listed 0) :name)))))
     (hive-mcp-cider-sessions-clear-all)))
 
+(ert-deftest hive-mcp-cider-sessions-test-find-by-buffer nil
+  "A REPL buffer name resolves to exactly the session that claims it."
+  (hive-mcp-cider-sessions-clear-all)
+  (unwind-protect
+      (progn
+        (hive-mcp-cider-sessions-register
+         "a" (list :port 7920 :cider-buffer "*repl-a*"))
+        (hive-mcp-cider-sessions-register
+         "b" (list :port 7921 :cider-buffer "*repl-b*"))
+        (should (equal "a" (hive-mcp-cider-sessions-find-by-buffer "*repl-a*")))
+        (should (equal "b" (hive-mcp-cider-sessions-find-by-buffer "*repl-b*")))
+        (should-not (hive-mcp-cider-sessions-find-by-buffer "*repl-none*"))
+        (should-not (hive-mcp-cider-sessions-find-by-buffer nil)))
+    (hive-mcp-cider-sessions-clear-all)))
+
+(ert-deftest hive-mcp-cider-sessions-test-stale-p nil
+  "Only a 'connected claim contradicted by a dead REPL counts as stale."
+  (should (hive-mcp-cider-sessions-stale-p 'connected nil))
+  (should-not (hive-mcp-cider-sessions-stale-p 'connected t))
+  (should-not (hive-mcp-cider-sessions-stale-p 'starting nil))
+  (should-not (hive-mcp-cider-sessions-stale-p 'stale nil)))
+
+(ert-deftest hive-mcp-cider-sessions-test-reconcile-demotes-only-liars nil
+  "Reconciliation demotes dead 'connected sessions and leaves everything else."
+  (hive-mcp-cider-sessions-clear-all)
+  (unwind-protect
+      (progn
+        (hive-mcp-cider-sessions-register "live" (list :status 'connected))
+        (hive-mcp-cider-sessions-register "dead" (list :status 'connected))
+        (hive-mcp-cider-sessions-register "booting" (list :status 'starting))
+        (let [demoted (hive-mcp-cider-sessions-reconcile
+                        (lambda (name) (equal name "live")))]
+          (should (equal '("dead") demoted)))
+        (should (eq 'connected (hive-mcp-cider-sessions-get-prop "live" :status)))
+        (should (eq 'stale (hive-mcp-cider-sessions-get-prop "dead" :status)))
+        (should (eq 'starting (hive-mcp-cider-sessions-get-prop "booting" :status))))
+    (hive-mcp-cider-sessions-clear-all)))
+
 (defn run-tests []
   "Run all named-session registry ERT tests in batch."
   (interactive)

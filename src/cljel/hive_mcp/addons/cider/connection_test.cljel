@@ -1,0 +1,327 @@
+(ns hive-mcp-cider-connection-test
+  "ERT tests for CIDER connection readiness, retry caps and liveness reconciliation.
+
+Authored in cljel and run against the SHIPPED module
+elisp/hive-mcp-cider-connection.el.
+
+No live nREPL, no CIDER, no Emacs daemon: `cider-connect-clj' is replaced by a
+stub returning a plain temp buffer, `cider-connected-p' / `cider-cljel-start'
+are stubbed with `cl-letf', and every timeout defcustom is let-bound down to
+fractions of a second so the async settle paths finish inside the suite."
+  (:require [cl-lib]))
+
+(require 'ert)
+(require 'hive-mcp-cider-sessions)
+(require 'hive-mcp-cider-nrepl)
+(require 'hive-mcp-cider-connection)
+
+;; The buffer-local flag cider-clojure-elisp sets when a CLJEL session comes up.
+(defvar-local cider-cljel-active nil
+  "Test stand-in for the cider-clojure-elisp buffer-local upgrade flag.")
+
+;; ============================================================================
+;; Helpers
+;; ============================================================================
+
+(defn- drive [pred limit]
+  "Pump the Emacs event loop until PRED holds or LIMIT seconds elapse.
+Returns PRED's final value. Timer callbacks (`run-at-time') fire during
+`sit-for', which is how the async settle paths make progress in batch."
+  (let [deadline (+ (float-time) limit)]
+    (while (and (not (funcall pred)) (< (float-time) deadline))
+      (sit-for 0.01))
+    (funcall pred)))
+
+;; ============================================================================
+;; Pure decisions
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-connection-test-retry-exhausted-honors-max nil
+  "The retry cap is the configured max-retries, and 0 means unlimited."
+  (should-not (hive-mcp-cider-connection-retry-exhausted-p 1 2))
+  (should (hive-mcp-cider-connection-retry-exhausted-p 2 2))
+  (should (hive-mcp-cider-connection-retry-exhausted-p 3 2))
+  (should-not (hive-mcp-cider-connection-retry-exhausted-p 1000 0)))
+
+(ert-deftest hive-mcp-cider-connection-test-cljel-upgrade-props nil
+  "A confirmed upgrade stays cljel; an unconfirmed one is recorded as clj."
+  (let [ok (hive-mcp-cider-connection-cljel-upgrade-props "*repl*" t)
+        bad (hive-mcp-cider-connection-cljel-upgrade-props "*repl*" nil)]
+    (should (eq 'cljel (plist-get ok :repl-type)))
+    (should (eq 'confirmed (plist-get ok :cljel-upgrade)))
+    (should (eq 'clj (plist-get bad :repl-type)))
+    (should (eq 'failed (plist-get bad :cljel-upgrade)))
+    (should-not (and (eq 'connected (plist-get bad :status))
+                     (eq 'cljel (plist-get bad :repl-type))))))
+
+(ert-deftest hive-mcp-cider-connection-test-connectivity-reason nil
+  "A closed socket and a socket that never handshook get different diagnoses."
+  (should (equal "no live REPL on port 7930"
+                 (hive-mcp-cider-connection-connectivity-failure-reason 7930 nil)))
+  (should (string-match-p
+           "never completed the CIDER handshake"
+           (hive-mcp-cider-connection-connectivity-failure-reason 7930 t))))
+
+(ert-deftest hive-mcp-cider-connection-test-handshake-failed-props nil
+  "Handshake failure props carry 'error plus a port-tagged reason."
+  (let [props (hive-mcp-cider-connection-handshake-failed-props 7931 "boom")]
+    (should (eq 'error (plist-get props :status)))
+    (should (string-match-p "7931" (plist-get props :reason)))
+    (should (string-match-p "boom" (plist-get props :reason)))))
+
+(ert-deftest hive-mcp-cider-connection-test-settle-budget-covers-upgrade nil
+  "An upgrading REPL type gets the upgrade budget on top of the handshake."
+  (let [hive-mcp-cider-connection-deferred-timeout 1
+        hive-mcp-cider-connection-handshake-timeout 2
+        hive-mcp-cider-connection-upgrade-timeout 4]
+    (should (= 3 (hive-mcp-cider-connection-settle-budget 'clj)))
+    (should (= 7 (hive-mcp-cider-connection-settle-budget 'cljel)))
+    (should (= 7 (hive-mcp-cider-connection-settle-budget 'cljs)))))
+
+;; ============================================================================
+;; Spawned-session poll — honors the retry defcustoms
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-connection-test-poll-times-out-at-max-retries nil
+  "With no socket, the session times out after max-retries attempts, not 30."
+  (hive-mcp-cider-sessions-clear-all)
+  (unwind-protect
+      (cl-letf (((symbol-function 'hive-mcp-cider-nrepl-port-open-p)
+                 (lambda (&rest _) nil)))
+        (let [hive-mcp-cider-connection-max-retries 2]
+          (hive-mcp-cider-sessions-register
+           "capped" (hive-mcp-cider-sessions-make-session 7930))
+          (hive-mcp-cider-connection-try-connect-session "capped")
+          (should (= 1 (hive-mcp-cider-sessions-get-prop "capped" :attempts)))
+          (should (eq 'starting (hive-mcp-cider-sessions-get-prop "capped" :status)))
+          (hive-mcp-cider-connection-try-connect-session "capped")
+          (should (= 2 (hive-mcp-cider-sessions-get-prop "capped" :attempts)))
+          (should (eq 'timeout (hive-mcp-cider-sessions-get-prop "capped" :status)))
+          (should (string-match-p
+                   "no live REPL on port 7930"
+                   (hive-mcp-cider-sessions-get-prop "capped" :reason)))))
+    (hive-mcp-cider-sessions-clear-all)))
+
+(ert-deftest hive-mcp-cider-connection-test-unlimited-retries-never-time-out nil
+  "max-retries 0 keeps counting attempts instead of giving up."
+  (hive-mcp-cider-sessions-clear-all)
+  (unwind-protect
+      (cl-letf (((symbol-function 'hive-mcp-cider-nrepl-port-open-p)
+                 (lambda (&rest _) nil)))
+        (let [hive-mcp-cider-connection-max-retries 0]
+          (hive-mcp-cider-sessions-register
+           "forever" (hive-mcp-cider-sessions-make-session 7930))
+          (dotimes (_ 40)
+            (hive-mcp-cider-connection-try-connect-session "forever"))
+          (should (= 40 (hive-mcp-cider-sessions-get-prop "forever" :attempts)))
+          (should (eq 'starting (hive-mcp-cider-sessions-get-prop "forever" :status)))))
+    (hive-mcp-cider-sessions-clear-all)))
+
+;; ============================================================================
+;; Spawn readiness — an open socket is not a connected session
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-connection-test-open-socket-is-not-connected nil
+  "An open port moves the session to 'connecting; only the handshake settles it."
+  (hive-mcp-cider-sessions-clear-all)
+  (let [buf (generate-new-buffer " *test-conn-handshake*")
+        handshook (list nil)]
+    (unwind-protect
+        (cl-letf (((symbol-function 'hive-mcp-cider-nrepl-port-open-p)
+                   (lambda (&rest _) t))
+                  ((symbol-function 'hive-mcp-cider-connection--connect-clj-no-prompt)
+                   (lambda (&rest _) buf))
+                  ((symbol-function 'cider-connected-p)
+                   (lambda (&rest _) (car handshook))))
+          (let [hive-mcp-cider-connection-readiness-interval 0.01
+                hive-mcp-cider-connection-handshake-timeout 3]
+            (hive-mcp-cider-sessions-register
+             "slow" (hive-mcp-cider-sessions-make-session 7930))
+            (hive-mcp-cider-connection-try-connect-session "slow")
+            (should (eq 'connecting (hive-mcp-cider-sessions-get-prop "slow" :status)))
+            (setcar handshook t)
+            (should (drive (lambda ()
+                             (eq 'connected
+                                 (hive-mcp-cider-sessions-get-prop "slow" :status)))
+                           5))))
+      (kill-buffer buf)
+      (hive-mcp-cider-sessions-clear-all))))
+
+(ert-deftest hive-mcp-cider-connection-test-failed-handshake-surfaces-reason nil
+  "A socket that never handshakes settles the session 'error with a reason."
+  (hive-mcp-cider-sessions-clear-all)
+  (let [buf (generate-new-buffer " *test-conn-nohandshake*")]
+    (unwind-protect
+        (cl-letf (((symbol-function 'hive-mcp-cider-nrepl-port-open-p)
+                   (lambda (&rest _) t))
+                  ((symbol-function 'hive-mcp-cider-connection--connect-clj-no-prompt)
+                   (lambda (&rest _) buf))
+                  ((symbol-function 'cider-connected-p)
+                   (lambda (&rest _) nil)))
+          (let [hive-mcp-cider-connection-readiness-interval 0.01
+                hive-mcp-cider-connection-handshake-timeout 0.2]
+            (hive-mcp-cider-sessions-register
+             "never" (hive-mcp-cider-sessions-make-session 7930))
+            (hive-mcp-cider-connection-try-connect-session "never")
+            (should (drive (lambda ()
+                             (eq 'error
+                                 (hive-mcp-cider-sessions-get-prop "never" :status)))
+                           5))
+            (should (string-match-p
+                     "handshake"
+                     (hive-mcp-cider-sessions-get-prop "never" :reason)))))
+      (kill-buffer buf)
+      (hive-mcp-cider-sessions-clear-all))))
+
+;; ============================================================================
+;; cljel upgrade readiness
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-connection-test-cljel-start-waits-for-handshake nil
+  "cider-cljel-start fires once, only after the handshake, and settles cljel."
+  (let [buf (generate-new-buffer " *test-conn-cljel*")
+        probes (list 0)          ;; cider-connected-p call count
+        starts (list 0)          ;; cider-cljel-start call count
+        start-probe (list nil)   ;; probe count when cljel-start fired
+        settled (list nil)]
+    (unwind-protect
+        (cl-letf (((symbol-function 'hive-mcp-cider-connection--connect-clj-no-prompt)
+                   (lambda (&rest _) buf))
+                  ((symbol-function 'cider-connected-p)
+                   (lambda (&rest _)
+                     (setcar probes (1+ (car probes)))
+                     (> (car probes) 2)))
+                  ((symbol-function 'cider-cljel-start)
+                   (lambda ()
+                     (setcar starts (1+ (car starts)))
+                     (setcar start-probe (car probes))
+                     (setq-local cider-cljel-active t))))
+          (let [hive-mcp-cider-connection-readiness-interval 0.01
+                hive-mcp-cider-connection-handshake-timeout 3
+                hive-mcp-cider-connection-upgrade-timeout 3]
+            (hive-mcp-cider-connection-connect-by-repl-type
+             'cljel 7930 nil (lambda (props) (setcar settled props)))
+            (should (drive (lambda () (car settled)) 5))
+            (should (= 1 (car starts)))
+            (should (> (car start-probe) 2))
+            (should (eq 'cljel (plist-get (car settled) :repl-type)))
+            (should (eq 'connected (plist-get (car settled) :status)))
+            (should (eq 'confirmed (plist-get (car settled) :cljel-upgrade)))))
+      (kill-buffer buf))))
+
+(ert-deftest hive-mcp-cider-connection-test-unconfirmed-cljel-settles-clj nil
+  "An upgrade that never activates settles as clj, never as connected+cljel."
+  (let [buf (generate-new-buffer " *test-conn-cljel-fail*")
+        settled (list nil)]
+    (unwind-protect
+        (cl-letf (((symbol-function 'hive-mcp-cider-connection--connect-clj-no-prompt)
+                   (lambda (&rest _) buf))
+                  ((symbol-function 'cider-connected-p)
+                   (lambda (&rest _) t))
+                  ((symbol-function 'cider-cljel-start) (lambda () nil)))
+          (let [hive-mcp-cider-connection-readiness-interval 0.01
+                hive-mcp-cider-connection-handshake-timeout 1
+                hive-mcp-cider-connection-upgrade-timeout 0.2]
+            (hive-mcp-cider-connection-connect-by-repl-type
+             'cljel 7930 nil (lambda (props) (setcar settled props)))
+            (should (drive (lambda () (car settled)) 5))
+            (should (eq 'clj (plist-get (car settled) :repl-type)))
+            (should (eq 'failed (plist-get (car settled) :cljel-upgrade)))))
+      (kill-buffer buf))))
+
+;; ============================================================================
+;; Buffer rename ownership
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-connection-test-rename-touches-owner-only nil
+  "A rename repoints only the owning session, not a bystander with a dead buffer."
+  (hive-mcp-cider-sessions-clear-all)
+  (let [buf (generate-new-buffer "test-conn-owner")]
+    (unwind-protect
+        (progn
+          (hive-mcp-cider-sessions-register
+           "owner" (hive-mcp-cider-sessions-make-session
+                     7930 :cider-buffer "test-conn-owner"))
+          (hive-mcp-cider-sessions-register
+           "bystander" (hive-mcp-cider-sessions-make-session
+                         7931 :cider-buffer "test-conn-dead-buffer"))
+          (with-current-buffer buf (rename-buffer "test-conn-owner-renamed"))
+          (hive-mcp-cider-connection--update-session-buffer-name
+           buf "test-conn-owner")
+          (should (equal "test-conn-owner-renamed"
+                         (hive-mcp-cider-sessions-get-prop "owner" :cider-buffer)))
+          (should (equal "test-conn-dead-buffer"
+                         (hive-mcp-cider-sessions-get-prop "bystander" :cider-buffer))))
+      (kill-buffer buf)
+      (hive-mcp-cider-sessions-clear-all))))
+
+;; ============================================================================
+;; ensure-connected contract
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-connection-test-ensure-connected-waits nil
+  "ensure-connected returns t only once cider-connected-p actually holds."
+  (hive-mcp-cider-sessions-clear-all)
+  (let [buf (generate-new-buffer " *test-ensure-live*")
+        probes (list 0)]
+    (unwind-protect
+        (cl-letf (((symbol-function 'hive-mcp-cider-nrepl-port-open-p)
+                   (lambda (&rest _) t))
+                  ((symbol-function 'hive-mcp-cider-connection--connect-clj-no-prompt)
+                   (lambda (&rest _) buf))
+                  ((symbol-function 'cider-connected-p)
+                   (lambda (&rest _)
+                     (setcar probes (1+ (car probes)))
+                     (> (car probes) 2))))
+          (let [hive-mcp-cider-connection-readiness-interval 0.01
+                hive-mcp-cider-connection-handshake-timeout 3]
+            (should (hive-mcp-cider-connection-ensure-connected))
+            (should (> (car probes) 2))))
+      (kill-buffer buf)
+      (hive-mcp-cider-sessions-clear-all))))
+
+(ert-deftest hive-mcp-cider-connection-test-ensure-connected-nil-on-timeout nil
+  "ensure-connected returns nil when the connection never comes up."
+  (hive-mcp-cider-sessions-clear-all)
+  (let [buf (generate-new-buffer " *test-ensure-dead*")]
+    (unwind-protect
+        (cl-letf (((symbol-function 'hive-mcp-cider-nrepl-port-open-p)
+                   (lambda (&rest _) t))
+                  ((symbol-function 'hive-mcp-cider-connection--connect-clj-no-prompt)
+                   (lambda (&rest _) buf))
+                  ((symbol-function 'cider-connected-p)
+                   (lambda (&rest _) nil)))
+          (let [hive-mcp-cider-connection-readiness-interval 0.01
+                hive-mcp-cider-connection-handshake-timeout 0.2]
+            (should-not (hive-mcp-cider-connection-ensure-connected))))
+      (kill-buffer buf)
+      (hive-mcp-cider-sessions-clear-all))))
+
+;; ============================================================================
+;; Liveness reconciliation — a dead session never reports connected
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-connection-test-reconcile-reaps-dead-sessions nil
+  "Reconciliation demotes a 'connected session whose REPL buffer is gone."
+  (hive-mcp-cider-sessions-clear-all)
+  (let [buf (generate-new-buffer "test-reconcile-live")]
+    (unwind-protect
+        (cl-letf (((symbol-function 'cider-connected-p) (lambda (&rest _) t)))
+          (hive-mcp-cider-sessions-register
+           "live" (hive-mcp-cider-sessions-make-session
+                    7930 :status 'connected :cider-buffer "test-reconcile-live"))
+          (hive-mcp-cider-sessions-register
+           "dead" (hive-mcp-cider-sessions-make-session
+                    7931 :status 'connected :cider-buffer "test-reconcile-gone"))
+          (let [demoted (hive-mcp-cider-connection-reconcile-sessions)]
+            (should (member "dead" demoted))
+            (should-not (member "live" demoted)))
+          (should (eq 'stale (hive-mcp-cider-sessions-get-prop "dead" :status)))
+          (should (eq 'connected (hive-mcp-cider-sessions-get-prop "live" :status))))
+      (kill-buffer buf)
+      (hive-mcp-cider-sessions-clear-all))))
+
+(defn run-tests []
+  "Run all CIDER connection ERT tests in batch."
+  (interactive)
+  (ert-run-tests-batch-and-exit "^hive-mcp-cider-connection-test-"))

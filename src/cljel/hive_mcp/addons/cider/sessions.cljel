@@ -126,6 +126,44 @@ Each entry contains :name, :port, :repl-type, :status, :agent-id, :cider-buffer.
              hive-mcp-cider-sessions--registry)
     result))
 
+(defn find-by-buffer [buffer-name]
+  "Find the session that owns BUFFER-NAME as its :cider-buffer.
+Returns the session name string, or nil when no session claims BUFFER-NAME."
+  (let [result nil]
+    (maphash (lambda (name props)
+               (when (and (stringp name)
+                          (not result)
+                          (equal (plist-get props :cider-buffer) buffer-name))
+                 (setq result name)))
+             hive-mcp-cider-sessions--registry)
+    result))
+
+;; ============================================================================
+;; Liveness Reconciliation
+;; ============================================================================
+
+(defn stale-p [status alive-p]
+  "Return non-nil when a session declaring STATUS with liveness ALIVE-P is lying.
+A session is stale exactly when it claims 'connected while its REPL is not live.
+Pure decision function — no registry or CIDER access."
+  (and (eq status 'connected) (not alive-p)))
+
+(defn reconcile [alive-fn]
+  "Demote every session whose 'connected claim is contradicted by reality.
+ALIVE-FN is a predicate (NAME) -> non-nil when that session's REPL is live;
+injecting it keeps this registry free of any CIDER dependency.
+Returns the list of names demoted to 'stale."
+  (let [demoted '()]
+    (maphash (lambda (name props)
+               (when (and (stringp name)
+                          (stale-p (plist-get props :status)
+                                   (funcall alive-fn name)))
+                 (push name demoted)))
+             hive-mcp-cider-sessions--registry)
+    (dolist (name demoted)
+      (update-prop name :status 'stale))
+    demoted))
+
 (defn clear-all []
   "Remove all sessions from registry."
   (clrhash hive-mcp-cider-sessions--registry))

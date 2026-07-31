@@ -41,7 +41,6 @@ Architecture: Facade pattern — delegates to sub-modules:
 ;; ============================================================================
 
 ;; Session management
-(defalias 'hive-mcp-cider-list-sessions 'hive-mcp-cider-sessions-list-all)
 (defalias 'hive-mcp-cider-get-session 'hive-mcp-cider-sessions-lookup)
 
 ;; nREPL process
@@ -77,6 +76,14 @@ Architecture: Facade pattern — delegates to sub-modules:
 ;; Orchestrated Operations (cross-module coordination)
 ;; ============================================================================
 
+(defn list-sessions []
+  "List CIDER sessions, reconciled against real REPL liveness first.
+Sessions claiming 'connected whose CIDER buffer is dead are reaped to 'stale
+before the projection is built, so a dead session is never reported connected.
+Returns the vector `hive-mcp-cider-sessions-list-all' produces."
+  (ignore-errors (hive-mcp-cider-connection-reconcile-sessions))
+  (hive-mcp-cider-sessions-list-all))
+
 (defn spawn-session-from-plist [params]
   "Spawn a new CIDER session from a structured request plist.
 MCP entry point — named params prevent positional arg ordering bugs.
@@ -102,7 +109,8 @@ AGENT-ID optionally links this session to a swarm agent."
                              #'hive-mcp-cider-nrepl-port-open-p))
          dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype))
          process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir)
-         timer (run-with-timer 2 1
+         timer (run-with-timer hive-mcp-cider-connection-spawn-initial-delay
+                               hive-mcp-cider-connection-retry-interval
                                 (lambda ()
                                   (condition-case err
                                       (hive-mcp-cider-connection-try-connect-session name)
@@ -135,7 +143,11 @@ PROJECT-DIR (optional) labels the REPL buffer with the target project
 so cross-project sessions don't all collide under the current buffer's
 project root.
 
-Connection is deferred to Emacs event loop to avoid blocking emacsclient."
+The connect itself is deferred to the Emacs event loop (emacsclient is never
+blocked by CIDER's own prompts), but this call polls until the connection
+settles — handshake complete and, for cljs/cljel, the REPL upgrade confirmed
+or ruled out. The returned :status and :repl-type are the settled ones, so a
+cljel target whose upgrade never confirmed reports clj rather than lying."
   (interactive "sSession name: \nsHost (localhost): \nnPort: ")
   (let* [host (or host "localhost")
          rtype (or (and repl-type (intern repl-type)) 'clj)
@@ -155,16 +167,24 @@ Connection is deferred to Emacs event loop to avoid blocking emacsclient."
     ;; explicitly to cider-connect-clj for buffer labeling.
     (condition-case err
         (let* [default-directory (or expanded-dir default-directory)
-               conn (hive-mcp-cider-connection-connect-deferred rtype port expanded-dir)
-               cider-buf (buffer-name conn)]
-          (hive-mcp-cider-sessions-update-props name
-            :status 'connected
-            :cider-buffer cider-buf)
+               outcome (hive-mcp-cider-connection-connect-deferred rtype port expanded-dir)
+               props (plist-get outcome :props)
+               settled-status (or (plist-get props :status) 'error)
+               settled-type (or (plist-get props :repl-type) rtype)
+               reason (plist-get props :reason)]
+          (apply #'hive-mcp-cider-sessions-update-props name props)
+          (when (eq settled-status 'error)
+            (error "Session '%s' never settled: %s" name (or reason "unknown cause")))
           (message "hive-mcp-cider: Session '%s' (%s) connected to %s:%d"
-                   name (symbol-name rtype) host port)
-          (list :name name :port port :repl-type (symbol-name rtype) :status "connected"))
+                   name (symbol-name settled-type) host port)
+          (list :name name :port port
+                :repl-type (symbol-name settled-type)
+                :status (symbol-name settled-status)))
       (error
-       (hive-mcp-cider-sessions-update-prop name :status 'error)
+       (ignore-errors
+         (hive-mcp-cider-sessions-update-props name
+           :status 'error
+           :reason (error-message-string err)))
        (error "Session '%s' connect failed: %s" name (error-message-string err))))))
 
 (defn kill-session [name]
