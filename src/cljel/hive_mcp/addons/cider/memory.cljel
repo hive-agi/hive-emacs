@@ -24,6 +24,7 @@ Design principles (SOLID/CLARITY):
 (declare-function cider-interactive-eval-handler "cider-eval")
 (declare-function cider-last-sexp "cider-eval")
 (declare-function cider-nrepl-request:eval "cider-client")
+(declare-function hive-mcp-cider-eval-wrap-compiled-callback "hive-mcp-cider-eval")
 (declare-function nrepl-dict-get "nrepl-dict")
 
 ;; ============================================================================
@@ -309,5 +310,6 @@ absent, so a result is recorded exactly once either way."
            ns (current-ns)]
       (setq hive-mcp-cider-memory--last-eval
             (list :expr expr :ns ns :result nil :context ctx))
-      (cider-interactive-eval expr (interactive-callback expr ns))
+      (cider-interactive-eval expr (hive-mcp-cider-eval-wrap-compiled-callback
+                                    (interactive-callback expr ns)))
       expr)))

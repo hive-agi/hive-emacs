@@ -27,6 +27,8 @@
 
 (declare-function cider-nrepl-request:eval "cider-client")
 
+(declare-function hive-mcp-cider-eval-wrap-compiled-callback "hive-mcp-cider-eval")
+
 (declare-function nrepl-dict-get "nrepl-dict")
 
 (defcustom hive-mcp-cider-memory-auto-log nil
@@ -215,7 +217,7 @@
     (cider-last-sexp)))
         (ns (hive-mcp-cider-memory--current-ns)))
     (setq hive-mcp-cider-memory--last-eval (list :expr expr :ns ns :result nil :context ctx))
-    (cider-interactive-eval expr (hive-mcp-cider-memory--interactive-callback expr ns))
+    (cider-interactive-eval expr (hive-mcp-cider-eval-wrap-compiled-callback (hive-mcp-cider-memory--interactive-callback expr ns)))
     expr)))
 
 (provide 'hive-mcp-cider-memory)
