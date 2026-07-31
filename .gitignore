@@ -9,3 +9,5 @@ local.deps.edn
 .clj-kondo/*
 !.clj-kondo/config.edn
 *.elc
+.build.lock
+.build-stage.*

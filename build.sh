@@ -12,19 +12,33 @@
 # script writes next to a source is that source's own ERT artifact. elisp/ is
 # replaced only after all sources compile, so a failed run leaves the tree untouched.
 # Re-runs are idempotent: unchanged sources produce byte-identical artifacts.
+#
+# Concurrency contract: the whole build holds an exclusive flock on .build.lock,
+# so concurrent invocations run one after the other rather than interleaving
+# their writes. The staging directory lives inside the repo (same filesystem as
+# elisp/), so publishing the result is two renames and never a recursive delete
+# of the live tree.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC_DIR="$SCRIPT_DIR/src/cljel"
 OUT_DIR="$SCRIPT_DIR/elisp"
 CLEL_HOME="${CLEL_HOME:-$HOME/PP/clojure-elisp}"
+LOCK_FILE="$SCRIPT_DIR/.build.lock"
+
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$LOCK_FILE"
+  flock 9
+else
+  echo "  WARN: flock unavailable; concurrent builds are not serialized" >&2
+fi
 
 if [[ ! -d "$CLEL_HOME" ]]; then
   echo "clojure-elisp checkout not found: $CLEL_HOME" >&2
   exit 2
 fi
 
-STAGE_DIR="$(mktemp -d)"
+STAGE_DIR="$(mktemp -d "$SCRIPT_DIR/.build-stage.XXXXXXXX")"
 cleanup() {
   rm -rf "$STAGE_DIR"
 }
@@ -104,8 +118,15 @@ if [[ -f "$RUNTIME" ]]; then
   echo "  clojure-elisp-runtime (copied)"
 fi
 
-rm -rf "$OUT_DIR"
+# Publish by rename, not by deleting the live tree first: elisp/ is either the
+# old build or the new one, never a partially-removed directory that a
+# concurrent reader (or `git status`) can observe.
+RETIRED_DIR="$STAGE_DIR/retired"
+if [[ -d "$OUT_DIR" ]]; then
+  mv "$OUT_DIR" "$RETIRED_DIR"
+fi
 mv "$STAGE_OUT" "$OUT_DIR"
+rm -rf "$RETIRED_DIR"
 
 total=$(find "$OUT_DIR" -name '*.el' | wc -l)
 echo ""
