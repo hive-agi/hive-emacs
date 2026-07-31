@@ -5,22 +5,60 @@
 
 (def ^:private addons-marker "hive-mcp-addons.el")
 
+(def ^:private runtime-marker "clojure-elisp/clojure-elisp-runtime.el")
+
+(defn- jar-cache-dir
+  "Cache directory for .el files extracted from JAR — keyed by jar name+mtime."
+  ^java.io.File [^java.util.jar.JarFile jar]
+  (let [f (io/file (.getName jar))]
+    (io/file (System/getProperty "user.home")
+             ".cache" "hive-emacs" "bridge"
+             (str (.getName f) "-" (.lastModified f)))))
+
+(defn- extract-jar-elisp!
+  "Extract the sibling .el entries of URL's jar entry into the per-jar cache.
+   Returns the cache directory's absolute path, or nil when nothing extracted."
+  [^java.net.URL url]
+  (let [conn ^java.net.JarURLConnection (.openConnection url)
+        jar (.getJarFile conn)
+        entry (.getEntryName conn)
+        slash (.lastIndexOf entry "/")
+        prefix (if (neg? slash) "" (subs entry 0 (inc slash)))
+        cache (jar-cache-dir jar)]
+    (doseq [^java.util.jar.JarEntry e (enumeration-seq (.entries jar))
+            :let [n (.getName e)
+                  rel (when (and (str/starts-with? n prefix)
+                                 (str/ends-with? n ".el"))
+                        (subs n (count prefix)))]
+            :when (and rel (seq rel) (not (str/includes? rel "/")))]
+      (let [out (io/file cache rel)]
+        (when-not (.exists out)
+          (io/make-parents out)
+          (with-open [in (.getInputStream jar e)]
+            (io/copy in out)))))
+    (when (.exists cache) (.getAbsolutePath cache))))
+
+(defn- resource->load-dir
+  "Directory Emacs can add to load-path for a classpath resource URL.
+   file: URLs resolve to the containing directory; jar: URLs extract their
+   sibling .el entries into a per-jar cache directory."
+  [^java.net.URL url]
+  (case (.getProtocol url)
+    "file" (.getParent (io/file (.getPath url)))
+    "jar" (extract-jar-elisp! url)
+    nil))
+
 (def ^:private load-lock
   (Object.))
 
 (defn resolve-elisp-dirs
-  "Return compiled bridge and runtime directories found on the classpath."
-  []
-  (cond-> []
-    (io/resource addons-marker)
-    (conj (-> (io/resource addons-marker)
-              .getPath
-              (str/replace (re-pattern (str "/" addons-marker "$")) "")))
-
-    (io/resource "clojure-elisp/clojure-elisp-runtime.el")
-    (conj (-> (io/resource "clojure-elisp/clojure-elisp-runtime.el")
-              .getPath
-              (str/replace #"/clojure-elisp-runtime\.el$" "")))))
+  "Return bridge and runtime load-path directories found on the classpath.
+   RESOURCE-FN maps a resource path to a URL; defaults to `io/resource`."
+  ([] (resolve-elisp-dirs io/resource))
+  ([resource-fn]
+   (into []
+         (keep #(some-> (resource-fn %) resource->load-dir))
+         [addons-marker runtime-marker])))
 
 (defn load-path-elisp
   "Build Elisp that adds directories to load-path."

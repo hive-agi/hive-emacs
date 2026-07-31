@@ -1,7 +1,45 @@
 (ns hive-emacs.bridge-loader-test
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [hive-emacs.bridge-loader :as loader]))
+
+(defn- temp-jar-with
+  "Write a throwaway jar containing ENTRIES (name -> content string)."
+  ^java.io.File [entries]
+  (let [f (java.io.File/createTempFile "bridge-loader-test" ".jar")]
+    (.deleteOnExit f)
+    (with-open [out (java.util.jar.JarOutputStream. (io/output-stream f))]
+      (doseq [[entry-name content] entries]
+        (.putNextEntry out (java.util.jar.JarEntry. ^String entry-name))
+        (.write out (.getBytes ^String content))
+        (.closeEntry out)))
+    f))
+
+(deftest resolve-elisp-dirs-file-urls-resolve-to-containing-dir
+  (let [urls {"hive-mcp-addons.el"
+              (io/as-url (io/file "/tmp/bridge-elisp/hive-mcp-addons.el"))
+              "clojure-elisp/clojure-elisp-runtime.el"
+              (io/as-url (io/file "/tmp/rt/clojure-elisp/clojure-elisp-runtime.el"))}]
+    (is (= ["/tmp/bridge-elisp" "/tmp/rt/clojure-elisp"]
+           (loader/resolve-elisp-dirs urls)))))
+
+(deftest resolve-elisp-dirs-skips-missing-resources
+  (is (= [] (loader/resolve-elisp-dirs (constantly nil)))))
+
+(deftest resolve-elisp-dirs-jar-urls-extract-sibling-elisp
+  (let [jar (temp-jar-with {"hive-mcp-addons.el" ";; marker"
+                            "hive-mcp-cider.el" ";; cider"
+                            "cljel/nested.el" ";; nested"
+                            "pom.xml" "<project/>"})
+        url (java.net.URL. (str "jar:" (.toURI jar) "!/hive-mcp-addons.el"))
+        [dir :as dirs] (loader/resolve-elisp-dirs {"hive-mcp-addons.el" url})]
+    (is (= 1 (count dirs)))
+    (is (.exists (io/file dir "hive-mcp-addons.el")))
+    (is (.exists (io/file dir "hive-mcp-cider.el")))
+    (is (not (.exists (io/file dir "nested.el"))))
+    (is (not (.exists (io/file dir "cljel"))))
+    (is (not (.exists (io/file dir "pom.xml"))))))
 
 (deftest load-path-form-quotes-directories
   (let [directory "/tmp/hive \"emacs\""
