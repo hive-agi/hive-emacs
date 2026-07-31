@@ -1,0 +1,223 @@
+(ns hive-mcp-cider-nrepl-test
+  "ERT tests for nREPL process management (hive-mcp-cider-nrepl).
+
+Authored in cljel (dogfoods the compiler) and run against the SHIPPED compiled
+module elisp/hive-mcp-cider-nrepl.el.
+
+Run:
+  emacs -batch -L elisp -L src/cljel/hive_mcp/addons/cider \\
+        -l ert -l hive-mcp-cider-nrepl-test.el -f ert-run-tests-batch-and-exit
+
+No process is ever spawned: `start-process' is replaced with `cl-letf' and the
+command builder is pure, so the argv and the working directory are asserted
+directly."
+  (:require [cl-lib]))
+
+(require 'ert)
+(require 'hive-mcp-cider-nrepl)
+
+;; ============================================================================
+;; launch-flag — the alias defcustom rendered as a clojure CLI main flag
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-nrepl-test-launch-flag-default nil
+  "No aliases means a plain -M, which needs no alias in the target project."
+  (should (equal "-M" (hive-mcp-cider-nrepl-launch-flag nil)))
+  (should (equal "-M" (hive-mcp-cider-nrepl-launch-flag '()))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-launch-flag-aliases nil
+  "Alias names are appended colon-separated; a leading colon is tolerated."
+  (should (equal "-M:dev" (hive-mcp-cider-nrepl-launch-flag '("dev"))))
+  (should (equal "-M:dev:test" (hive-mcp-cider-nrepl-launch-flag '(":dev" "test")))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-launch-flag-ignores-blanks nil
+  "Empty and nil alias entries are dropped rather than emitting a bare colon."
+  (should (equal "-M" (hive-mcp-cider-nrepl-launch-flag '("" nil))))
+  (should (equal "-M:dev" (hive-mcp-cider-nrepl-launch-flag '("" "dev")))))
+
+;; ============================================================================
+;; build-command — pure argv, no dead parameters
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-inline-deps nil
+  "The clj command spawns via inline -Sdeps and a plain -M, never -M:dev."
+  (let [cmd (let [hive-mcp-cider-nrepl-launch-aliases nil]
+              (hive-mcp-cider-nrepl-build-command 'clj 7999))]
+    (should (equal "clojure" (car cmd)))
+    (should (member "-Sdeps" cmd))
+    (should (member "-M" cmd))
+    (should-not (member "-M:dev" cmd))
+    (should (member "7999" cmd))
+    (should (member "nrepl.cmdline" cmd))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-honors-aliases nil
+  "`hive-mcp-cider-nrepl-launch-aliases' selects the -M flag."
+  (let [cmd (let [hive-mcp-cider-nrepl-launch-aliases '("dev")]
+              (hive-mcp-cider-nrepl-build-command 'clj 7999))]
+    (should (member "-M:dev" cmd))
+    (should-not (member "-M" cmd))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-has-no-dir-param nil
+  "The dead DIR parameter is gone — the caller owns the working directory."
+  (should-error (hive-mcp-cider-nrepl-build-command 'clj 7999 "/tmp")))
+
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-cljel-middleware nil
+  "The cljel command pins the canonical clojure-elisp checkout and its middleware."
+  (let [cmd (let [hive-mcp-cider-nrepl-cljel-project-dir "/tmp/clojure-elisp"]
+              (hive-mcp-cider-nrepl-build-command 'cljel 7922))
+        deps (car (cdr (cdr cmd)))]
+    (should (string-match-p "/tmp/clojure-elisp" deps))
+    (should (member "--middleware" cmd))
+    (should (car (delq nil (mapcar (lambda (a)
+                                     (and (stringp a)
+                                          (string-match-p "wrap-cljel" a)))
+                                   cmd))))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-cljs-watches-build nil
+  "The cljs branch shells out to shadow-cljs with the configured build id."
+  (let [cmd (let [hive-mcp-cider-nrepl-shadow-build ":app"]
+              (hive-mcp-cider-nrepl-build-command 'cljs 9630))]
+    (should (equal "npx" (car cmd)))
+    (should (member ":app" cmd))))
+
+;; ============================================================================
+;; default-project-dir — explicit argument wins, then the two defcustoms
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-nrepl-test-default-dir-explicit-wins nil
+  "An explicit DIR outranks both defcustoms."
+  (let [hive-mcp-cider-nrepl-project-dir "/tmp/configured"
+        hive-mcp-cider-nrepl-default-project-dir "/tmp/fallback"]
+    (should (equal (expand-file-name "/tmp/explicit")
+                   (hive-mcp-cider-nrepl-default-project-dir "/tmp/explicit")))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-default-dir-project-then-fallback nil
+  "Without DIR the project defcustom wins, and the fallback covers its nil."
+  (let [hive-mcp-cider-nrepl-default-project-dir "/tmp/fallback"]
+    (let [hive-mcp-cider-nrepl-project-dir "/tmp/configured"]
+      (should (equal (expand-file-name "/tmp/configured")
+                     (hive-mcp-cider-nrepl-default-project-dir nil))))
+    (let [hive-mcp-cider-nrepl-project-dir nil]
+      (should (equal (expand-file-name "/tmp/fallback")
+                     (hive-mcp-cider-nrepl-default-project-dir nil))))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-default-dir-nil-when-unset nil
+  "Nothing configured resolves to nil — never to an accidental default."
+  (let [hive-mcp-cider-nrepl-project-dir nil
+        hive-mcp-cider-nrepl-default-project-dir nil]
+    (should-not (hive-mcp-cider-nrepl-default-project-dir nil)))
+  (let [hive-mcp-cider-nrepl-project-dir ""
+        hive-mcp-cider-nrepl-default-project-dir nil]
+    (should-not (hive-mcp-cider-nrepl-default-project-dir nil))))
+
+;; ============================================================================
+;; start-default — the live repro: no buffer context, no configuration
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-nrepl-test-start-default-names-missing-setting nil
+  "With nothing configured start-default names the settings instead of
+signalling `stringp, nil' from start-process."
+  (let [hive-mcp-cider-nrepl-project-dir nil
+        hive-mcp-cider-nrepl-default-project-dir nil
+        message nil]
+    (cl-letf (((symbol-function 'start-process)
+               (lambda (&rest _) (error "start-process must not run"))))
+      (condition-case e
+          (hive-mcp-cider-nrepl-start-default)
+        (error (setq message (error-message-string e)))))
+    (should (string-match-p "no directory for the default nREPL server" message))
+    (should (string-match-p "hive-mcp-cider-nrepl-default-project-dir" message))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-start-default-rejects-missing-dir nil
+  "A configured directory that does not exist is reported by name."
+  (let [hive-mcp-cider-nrepl-project-dir "/tmp/hive-mcp-cider-nrepl-absent"
+        hive-mcp-cider-nrepl-default-project-dir nil
+        message nil]
+    (cl-letf (((symbol-function 'start-process)
+               (lambda (&rest _) (error "start-process must not run"))))
+      (condition-case e
+          (hive-mcp-cider-nrepl-start-default)
+        (error (setq message (error-message-string e)))))
+    (should (string-match-p "does not exist" message))
+    (should (string-match-p "hive-mcp-cider-nrepl-absent" message))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-start-default-spawns-in-resolved-dir nil
+  "start-default runs in the resolved directory with the inline -Sdeps command."
+  (let [dir (make-temp-file "hive-mcp-cider-nrepl-test" t)
+        captured nil]
+    (unwind-protect
+        (let [hive-mcp-cider-nrepl-project-dir nil
+              hive-mcp-cider-nrepl-default-project-dir dir
+              hive-mcp-cider-nrepl-launch-aliases nil]
+          (cl-letf (((symbol-function 'start-process)
+                     (lambda (name buffer &rest cmd)
+                       (setq captured (list default-directory name buffer cmd))
+                       'stub-process)))
+            (should (eq 'stub-process (hive-mcp-cider-nrepl-start-default))))
+          (should (equal (file-name-as-directory dir) (car captured)))
+          (should (equal "nrepl-server" (car (cdr captured))))
+          (let [cmd (car (cdr (cdr (cdr captured))))]
+            (should (equal "clojure" (car cmd)))
+            (should (member "-Sdeps" cmd))
+            (should (member "-M" cmd))
+            (should-not (member "-M:dev" cmd))
+            (should (member (number-to-string hive-mcp-cider-nrepl-port) cmd)))
+          (should (eq 'stub-process hive-mcp-cider-nrepl--default-process)))
+      (setq hive-mcp-cider-nrepl--default-process nil)
+      (delete-directory dir t))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-start-default-explicit-dir-wins nil
+  "An explicit DIR overrides the configured project directory."
+  (let [dir (make-temp-file "hive-mcp-cider-nrepl-test" t)
+        captured nil]
+    (unwind-protect
+        (let [hive-mcp-cider-nrepl-project-dir "/tmp/hive-mcp-cider-nrepl-absent"
+              hive-mcp-cider-nrepl-default-project-dir nil]
+          (cl-letf (((symbol-function 'start-process)
+                     (lambda (_name _buffer &rest _cmd)
+                       (setq captured default-directory)
+                       'stub-process)))
+            (hive-mcp-cider-nrepl-start-default dir))
+          (should (equal (file-name-as-directory dir) captured)))
+      (setq hive-mcp-cider-nrepl--default-process nil)
+      (delete-directory dir t))))
+
+;; ============================================================================
+;; launch-process — session spawns keep their explicit routing contract
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-nrepl-test-launch-process-requires-a-dir nil
+  "A clj session with no configured directory refuses to spawn."
+  (let [hive-mcp-cider-nrepl-project-dir nil
+        message nil]
+    (cl-letf (((symbol-function 'start-process)
+               (lambda (&rest _) (error "start-process must not run"))))
+      (condition-case e
+          (hive-mcp-cider-nrepl-launch-process "s" 7999 'clj)
+        (error (setq message (error-message-string e)))))
+    (should (string-match-p "no project-dir for session" message))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-launch-process-uses-dir-as-cwd nil
+  "The passed DIR becomes the process working directory, not a command argument."
+  (let [dir (make-temp-file "hive-mcp-cider-nrepl-test" t)
+        captured nil]
+    (unwind-protect
+        (cl-letf (((symbol-function 'start-process)
+                   (lambda (name buffer &rest cmd)
+                     (setq captured (list default-directory name buffer cmd))
+                     'stub-process)))
+          (should (eq 'stub-process
+                      (hive-mcp-cider-nrepl-launch-process "s" 7999 'clj dir)))
+          (should (equal (file-name-as-directory dir) (car captured)))
+          (should (equal "nrepl-s" (car (cdr captured))))
+          (should-not (member dir (car (cdr (cdr (cdr captured)))))))
+      (delete-directory dir t))))
+
+;; ============================================================================
+;; Runner
+;; ============================================================================
+
+(defn run-tests []
+  "Run all hive-mcp-cider-nrepl ERT tests in batch."
+  (interactive)
+  (ert-run-tests-batch-and-exit "^hive-mcp-cider-nrepl-test-"))

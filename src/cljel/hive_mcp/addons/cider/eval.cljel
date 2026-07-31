@@ -11,7 +11,12 @@
 ;; Dependencies on CIDER
 (declare-function cider-nrepl-request:eval "cider-client")
 (declare-function cider-interactive-eval "cider-eval")
+(declare-function cider-interactive-eval-handler "cider-eval")
+(declare-function cider-current-repl "cider-connection")
 (declare-function nrepl-dict-get "nrepl-dict")
+(declare-function nrepl-dict-put "nrepl-dict")
+(declare-function nrepl-dict-p "nrepl-dict")
+(declare-function nrepl-request:interrupt "nrepl-client")
 
 ;; ============================================================================
 ;; Configuration
@@ -102,6 +107,42 @@ stored for local execution by `finalize-eval-state'."
             (format "%S" result))))
     (error (format "cljel client eval error: %S" e))))
 
+(defn run-compiled [compiled]
+  "Execute COMPILED cljel Elisp in Emacs and return its result as a string.
+Single funnel for client-side execution: every eval entry point routes compiled
+payloads through this function. Never signals — an execution failure is
+returned as an error string."
+  (execute-compiled-elisp compiled))
+
+(defn compiled-payload [response]
+  "Return the compiled Elisp string carried by nREPL RESPONSE, or nil."
+  (nrepl-dict-get response "cljel-compiled-elisp"))
+
+(defn- response-with-value [response value]
+  "Return RESPONSE carrying VALUE under \"value\" for stock CIDER handlers.
+RESPONSE is returned unchanged when it is not an nREPL dict."
+  (if (and (fboundp 'nrepl-dict-p)
+           (fboundp 'nrepl-dict-put)
+           (nrepl-dict-p response))
+      (nrepl-dict-put response "value" value)
+    response))
+
+(defn wrap-compiled-callback [callback]
+  "Return an nREPL callback that runs cljel compiled Elisp, then calls CALLBACK.
+
+A response carrying \"cljel-compiled-elisp\" is executed locally through
+`run-compiled' and the result is attached to the response as \"value\", so a
+stock CIDER handler displays it and a capture callback records it. Responses
+without a compiled payload, and a nil CALLBACK, are passed through untouched."
+  (lambda (response)
+    (let [compiled (compiled-payload response)]
+      (if (not compiled)
+          (when callback (funcall callback response))
+        (let [result (run-compiled compiled)]
+          (if callback
+              (funcall callback (response-with-value response result))
+            (message "%s" result)))))))
+
 (defn finalize-eval-state [st]
   "Compute the final result string from a completed eval-state ST.
 
@@ -116,7 +157,7 @@ executes directly. Plain clj output precedes its value."
      ((eq state 'error)
       (or err "Eval error"))
      (compiled
-      (execute-compiled-elisp compiled))
+      (run-compiled compiled))
      ((and value out (not (string= "" out)))
       (str out value))
      (value value)
@@ -124,21 +165,55 @@ executes directly. Plain clj output precedes its value."
       out)
      (t "nil"))))
 
+(defn- current-connection []
+  "Return the CIDER REPL connection buffer for the current context, or nil."
+  (when (fboundp 'cider-current-repl)
+    (ignore-errors (cider-current-repl))))
+
+(defn- connection-request-id [connection]
+  "Return the id of the last request nREPL sent on CONNECTION, or nil.
+Read immediately after a send, that id is the sent request's id."
+  (when (and connection (bufferp connection) (buffer-live-p connection))
+    (with-current-buffer connection
+      (when (boundp 'nrepl-request-counter)
+        (number-to-string nrepl-request-counter)))))
+
+(defn interrupt-eval [request-id connection]
+  "Send an nREPL interrupt for REQUEST-ID over CONNECTION.
+Returns non-nil when an interrupt was dispatched, nil when it could not be."
+  (when (and request-id connection (fboundp 'nrepl-request:interrupt))
+    (ignore-errors
+      (nrepl-request:interrupt request-id (lambda (_response) nil) connection)
+      t)))
+
 (defn eval-with-heartbeat [code &optional timeout-override]
-  "Evaluate CODE asynchronously with heartbeat polling.
+  "Evaluate CODE and return its result string, or signal on timeout.
 Optional TIMEOUT-OVERRIDE in seconds (default: `hive-mcp-cider-eval-timeout').
-Returns result string when ready or signals error on timeout.
+
+Contract: the nREPL request is asynchronous but this call is SYNCHRONOUS — it
+polls `accept-process-output' every `hive-mcp-cider-eval-poll-interval' and
+blocks the Emacs command loop until the response is complete, which is what the
+headless MCP backend needs from a request/response tool call. Do not call it
+from inside another eval running in this same Emacs.
 
 Async state lives in a closure-local eval-state vector (see `make-eval-state');
 the callback folds each nREPL response into it via `apply-response', and
 `finalize-eval-state' turns the completed state into the result string —
-executing compiled cljel locally in Emacs when the session is cljel-active."
-  (let [st (make-eval-state)]
+executing compiled cljel locally in Emacs when the session is cljel-active.
+On timeout an nREPL interrupt is sent for the pending request so the server
+stops evaluating and the session is not left wedged."
+  (let [st (make-eval-state)
+        id-cell (make-vector 1 nil)
+        connection (current-connection)]
     ;; Send async request — callback folds responses into the local state
     (cider-nrepl-request:eval
      code
      (lambda (response)
+       (let [id (nrepl-dict-get response "id")]
+         (when id (aset id-cell 0 id)))
        (apply-response st response)))
+    (unless (aref id-cell 0)
+      (aset id-cell 0 (connection-request-id connection)))
     ;; Poll with heartbeat until done or timeout
     (let [start-time (float-time)
           timeout (or timeout-override hive-mcp-cider-eval-timeout)
@@ -147,7 +222,9 @@ executing compiled cljel locally in Emacs when the session is cljel-active."
                   (< (- (float-time) start-time) timeout))
         (accept-process-output nil interval))
       (if (not (aref st 4))
-          (error "Eval timed out after %d seconds (heartbeat polling)" timeout)
+          (let [interrupted (interrupt-eval (aref id-cell 0) connection)]
+            (error "Eval timed out after %s seconds (synchronous heartbeat poll); server interrupt %s"
+                   timeout (if interrupted "sent" "NOT sent")))
         (finalize-eval-state st)))))
 
 ;; ============================================================================
@@ -184,11 +261,19 @@ Auto-connects if not connected, reusing existing session if available."
     (error "CIDER could not connect - no nREPL available"))
   (eval-with-heartbeat code timeout))
 
+(defn- interactive-handler []
+  "Return CIDER's interactive eval handler for the current buffer, or nil."
+  (when (fboundp 'cider-interactive-eval-handler)
+    (cider-interactive-eval-handler)))
+
 (defn eval-explicit [code]
   "Evaluate CODE via CIDER interactively.
 Shows output in REPL buffer for collaborative debugging.
+A cljel session's compiled Elisp is executed in Emacs by
+`wrap-compiled-callback' before CIDER's handler sees the response, so an
+explicit eval is never a silent no-op.
 Auto-connects if not connected."
   (unless (hive-mcp-cider-connection-ensure-connected)
     (error "CIDER could not connect - no nREPL available"))
-  (cider-interactive-eval code)
+  (cider-interactive-eval code (wrap-compiled-callback (interactive-handler)))
   (format "Sent to REPL: %s" (truncate-string-to-width code 50 nil nil "...")))

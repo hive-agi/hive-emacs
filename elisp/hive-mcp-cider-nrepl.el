@@ -19,6 +19,11 @@
   :group 'hive-mcp-cider
   :type '(choice (const nil) directory))
 
+(defcustom hive-mcp-cider-nrepl-default-project-dir "~/PP/hive/hive-mcp"
+  "Fallback working directory for the default nREPL server.\nUsed by `hive-mcp-cider-nrepl-start-default' when neither an explicit DIR nor\n`hive-mcp-cider-nrepl-project-dir' is given. Nil disables the fallback, making\nstart-default error instead of guessing."
+  :group 'hive-mcp-cider
+  :type '(choice (const nil) directory))
+
 (defcustom hive-mcp-cider-nrepl-cljel-project-dir "~/PP/clojure-elisp"
   "Project directory for ClojureElisp nREPL sessions.\nShould point to the clojure-elisp project root with deps.edn\ncontaining the compiler and nREPL middleware."
   :group 'hive-mcp-cider
@@ -39,23 +44,44 @@
   :group 'hive-mcp-cider
   :type 'string)
 
+(defcustom hive-mcp-cider-nrepl-launch-aliases nil
+  "Clojure CLI aliases added to the spawn command, as bare names without colons.\nNil launches with plain -M and the inline -Sdeps, which works in any project.\nExample: '(\"dev\") launches clojure -Sdeps ... -M:dev -m nrepl.cmdline."
+  :group 'hive-mcp-cider
+  :type '(repeat string))
+
 (defvar hive-mcp-cider-nrepl--default-process nil
   "Process object for the auto-started default nREPL server.")
 
-(defun hive-mcp-cider-nrepl-build-command (repl-type port dir)
-  "Build the nREPL start command for REPL-TYPE on PORT in DIR.\nReturns a list of (program . args) for start-process.\nREPL-TYPE is one of 'clj, 'cljs, or 'cljel.\nUses inline -Sdeps so spawn works in any project without requiring a :nrepl alias.\nThis is a pure function — no side effects."
+(defun hive-mcp-cider-nrepl-launch-flag (aliases)
+  "Return the clojure CLI main flag for ALIASES, a list of bare alias names.\nNil or empty ALIASES yields \"-M\"; '(\"dev\" \"test\") yields \"-M:dev:test\".\nA leading colon on an alias name is tolerated. This is a pure function."
+  (let* ((names (delq nil (mapcar (lambda (a)
+    (let* ((s (format "%s" (or a ""))))
+    (unless (string= "" s)
+    (if (string-prefix-p ":" s) (substring s 1) s)))) aliases))))
+    (if names (concat "-M" (mapconcat (lambda (n)
+    (concat ":" n)) names "")) "-M")))
+
+(defun hive-mcp-cider-nrepl-build-command (repl-type port)
+  "Build the nREPL start command for REPL-TYPE on PORT.\nReturns a list of (program . args) for `start-process'; the caller owns the\nworking directory. REPL-TYPE is one of 'clj, 'cljs, or 'cljel.\nUses inline -Sdeps plus `hive-mcp-cider-nrepl-launch-aliases' so spawn works in\nany project without requiring a :nrepl or :dev alias.\nThis is a pure function — no side effects."
   (let* ((port-str (number-to-string port))
+        (main-flag (hive-mcp-cider-nrepl-launch-flag hive-mcp-cider-nrepl-launch-aliases))
         (clj-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"}}}" hive-mcp-cider-nrepl-version hive-mcp-cider-nrepl-cider-nrepl-version))
         (cljel-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"} io.github.BuddhiLW/clojure-elisp {:local/root \"%s\"}}}" hive-mcp-cider-nrepl-version hive-mcp-cider-nrepl-cider-nrepl-version (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir))))
     (pcase repl-type
   ((quote cljs) (list "npx" "shadow-cljs" "watch" hive-mcp-cider-nrepl-shadow-build))
-  ((quote cljel) (list "clojure" "-Sdeps" cljel-deps "-M" "-m" "nrepl.cmdline" "--port" port-str "--middleware" "[cider.nrepl/cider-middleware,clojure-elisp.nrepl/wrap-cljel]"))
-  (_ (list "clojure" "-Sdeps" clj-deps "-M" "-m" "nrepl.cmdline" "--port" port-str "--middleware" "[cider.nrepl/cider-middleware]")))))
+  ((quote cljel) (list "clojure" "-Sdeps" cljel-deps main-flag "-m" "nrepl.cmdline" "--port" port-str "--middleware" "[cider.nrepl/cider-middleware,clojure-elisp.nrepl/wrap-cljel]"))
+  (_ (list "clojure" "-Sdeps" clj-deps main-flag "-m" "nrepl.cmdline" "--port" port-str "--middleware" "[cider.nrepl/cider-middleware]")))))
 
 (defun hive-mcp-cider-nrepl-project-dir (repl-type)
   "Resolve the project directory for REPL-TYPE.\nReturns absolute path string, or nil if no explicit dir is configured.\n\nFor 'cljel — falls back to `hive-mcp-cider-nrepl-cljel-project-dir'\ndefcustom (the cljel toolchain has a single canonical project).\n\nFor 'clj/'cljs — returns nil if `hive-mcp-cider-nrepl-project-dir' is\nunset. Callers must supply project-dir explicitly. The Emacs daemon's\ncurrent buffer is NOT a reliable proxy when spawn is triggered from an\nMCP tool boundary — it leaks hive-mcp into every other project's REPL."
   (or hive-mcp-cider-nrepl-project-dir (when (eq repl-type 'cljel)
     (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir))))
+
+(defun hive-mcp-cider-nrepl-default-project-dir (dir)
+  "Resolve the working directory for the default nREPL server.\nDIR wins, then `hive-mcp-cider-nrepl-project-dir', then\n`hive-mcp-cider-nrepl-default-project-dir'. Returns an absolute path\nstring, or nil when none of the three is a non-empty string."
+  (let* ((candidate (or dir hive-mcp-cider-nrepl-project-dir hive-mcp-cider-nrepl-default-project-dir)))
+    (when (and (stringp candidate) (not (string= "" candidate)))
+    (expand-file-name candidate))))
 
 (defun hive-mcp-cider-nrepl-port-open-p (port)
   "Check if PORT is accepting connections on localhost.\nReturns t if port is open, nil otherwise."
@@ -70,9 +96,9 @@
   (let* ((resolved-dir (or dir (hive-mcp-cider-nrepl-project-dir repl-type))))
     (unless resolved-dir
     (error "hive-mcp-cider-nrepl: no project-dir for session '%s' (type=%s) — pass project-dir explicitly or set `hive-mcp-cider-nrepl-project-dir'" name (symbol-name repl-type)))
-    (let* ((default-directory resolved-dir)
+    (let* ((default-directory (file-name-as-directory resolved-dir))
         (buf-name (format "*nREPL-%s*" name))
-        (cmd (hive-mcp-cider-nrepl-build-command repl-type port resolved-dir)))
+        (cmd (hive-mcp-cider-nrepl-build-command repl-type port)))
     (apply #'start-process (format "nrepl-%s" name) buf-name cmd))))
 
 (defun hive-mcp-cider-nrepl-stop-process (process)
@@ -80,12 +106,18 @@
   (when (and process (process-live-p process))
     (kill-process process)))
 
-(defun hive-mcp-cider-nrepl-start-default ()
-  "Start the default nREPL server asynchronously.\nDoes not block Emacs startup. Uses `hive-mcp-cider-nrepl-port'."
-  (let* ((default-directory (hive-mcp-cider-nrepl-project-dir 'clj))
-        (port (number-to-string hive-mcp-cider-nrepl-port)))
-    (message "hive-mcp-cider-nrepl: Starting on port %s in %s..." port default-directory)
-    (setq hive-mcp-cider-nrepl--default-process (start-process "nrepl-server" "*nREPL-server*" "clojure" "-M:dev" "-m" "nrepl.cmdline" "--port" port "--middleware" "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"))))
+(defun hive-mcp-cider-nrepl-start-default (&optional dir)
+  "Start the default nREPL server on `hive-mcp-cider-nrepl-port'.\nThe working directory is `default-project-dir' of DIR; the command is\n`build-command' for 'clj, so no project alias is required.\nSignals an error naming the unset settings when no directory resolves, and\nanother when the resolved directory does not exist. Returns the process."
+  (interactive)
+  (let* ((resolved (hive-mcp-cider-nrepl-default-project-dir dir)))
+    (unless resolved
+    (error "hive-mcp-cider-nrepl: no directory for the default nREPL server — pass DIR, or set `hive-mcp-cider-nrepl-project-dir' or `hive-mcp-cider-nrepl-default-project-dir'"))
+    (unless (file-directory-p resolved)
+    (error "hive-mcp-cider-nrepl: default nREPL directory does not exist: %s" resolved))
+    (let* ((default-directory (file-name-as-directory resolved))
+        (cmd (hive-mcp-cider-nrepl-build-command 'clj hive-mcp-cider-nrepl-port)))
+    (message "hive-mcp-cider-nrepl: Starting on port %s in %s..." hive-mcp-cider-nrepl-port default-directory)
+    (setq hive-mcp-cider-nrepl--default-process (apply #'start-process "nrepl-server" "*nREPL-server*" cmd)))))
 
 (defun hive-mcp-cider-nrepl-stop-default ()
   "Stop the default nREPL server."

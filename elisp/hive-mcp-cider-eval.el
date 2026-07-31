@@ -19,7 +19,17 @@
 
 (declare-function cider-interactive-eval "cider-eval")
 
+(declare-function cider-interactive-eval-handler "cider-eval")
+
+(declare-function cider-current-repl "cider-connection")
+
 (declare-function nrepl-dict-get "nrepl-dict")
+
+(declare-function nrepl-dict-put "nrepl-dict")
+
+(declare-function nrepl-dict-p "nrepl-dict")
+
+(declare-function nrepl-request:interrupt "nrepl-client")
 
 (defcustom hive-mcp-cider-eval-timeout 60
   "Timeout in seconds for nREPL evaluation with heartbeat polling."
@@ -91,6 +101,26 @@
     (format "%S" result))))
   (error (format "cljel client eval error: %S" e))))
 
+(defun hive-mcp-cider-eval-run-compiled (compiled)
+  "Execute COMPILED cljel Elisp in Emacs and return its result as a string.\nSingle funnel for client-side execution: every eval entry point routes compiled\npayloads through this function. Never signals — an execution failure is\nreturned as an error string."
+  (hive-mcp-cider-eval--execute-compiled-elisp compiled))
+
+(defun hive-mcp-cider-eval-compiled-payload (response)
+  "Return the compiled Elisp string carried by nREPL RESPONSE, or nil."
+  (nrepl-dict-get response "cljel-compiled-elisp"))
+
+(defun hive-mcp-cider-eval--response-with-value (response value)
+  "Return RESPONSE carrying VALUE under \"value\" for stock CIDER handlers.\nRESPONSE is returned unchanged when it is not an nREPL dict."
+  (if (and (fboundp 'nrepl-dict-p) (fboundp 'nrepl-dict-put) (nrepl-dict-p response)) (nrepl-dict-put response "value" value) response))
+
+(defun hive-mcp-cider-eval-wrap-compiled-callback (callback)
+  "Return an nREPL callback that runs cljel compiled Elisp, then calls CALLBACK.\n\nA response carrying \"cljel-compiled-elisp\" is executed locally through\n`run-compiled' and the result is attached to the response as \"value\", so a\nstock CIDER handler displays it and a capture callback records it. Responses\nwithout a compiled payload, and a nil CALLBACK, are passed through untouched."
+  (lambda (response)
+    (let* ((compiled (hive-mcp-cider-eval-compiled-payload response)))
+    (if (not compiled) (when callback
+    (funcall callback response)) (let* ((result (hive-mcp-cider-eval-run-compiled compiled)))
+    (if callback (funcall callback (hive-mcp-cider-eval--response-with-value response result)) (message "%s" result)))))))
+
 (defun hive-mcp-cider-eval-finalize-eval-state (st)
   "Compute the final result string from a completed eval-state ST.\n\nCompiled Elisp delegates to the cider-cljel client helper when present, else\nexecutes directly. Plain clj output precedes its value."
   (let* ((value (aref st 0))
@@ -100,23 +130,49 @@
         (state (aref st 4)))
     (cond
   ((eq state 'error) (or err "Eval error"))
-  (compiled (hive-mcp-cider-eval--execute-compiled-elisp compiled))
+  (compiled (hive-mcp-cider-eval-run-compiled compiled))
   ((and value out (not (string= "" out))) (clel-str out value))
   (value value)
   ((and out (not (string= "" out))) out)
   (t "nil"))))
 
+(defun hive-mcp-cider-eval--current-connection ()
+  "Return the CIDER REPL connection buffer for the current context, or nil."
+  (when (fboundp 'cider-current-repl)
+    (ignore-errors (cider-current-repl))))
+
+(defun hive-mcp-cider-eval--connection-request-id (connection)
+  "Return the id of the last request nREPL sent on CONNECTION, or nil.\nRead immediately after a send, that id is the sent request's id."
+  (when (and connection (bufferp connection) (buffer-live-p connection))
+    (with-current-buffer connection
+    (when (boundp 'nrepl-request-counter)
+    (number-to-string nrepl-request-counter)))))
+
+(defun hive-mcp-cider-eval-interrupt-eval (request-id connection)
+  "Send an nREPL interrupt for REQUEST-ID over CONNECTION.\nReturns non-nil when an interrupt was dispatched, nil when it could not be."
+  (when (and request-id connection (fboundp 'nrepl-request:interrupt))
+    (ignore-errors (nrepl-request:interrupt request-id (lambda (_response)
+    nil) connection) t)))
+
 (defun hive-mcp-cider-eval-eval-with-heartbeat (code &optional timeout-override)
-  "Evaluate CODE asynchronously with heartbeat polling.\nOptional TIMEOUT-OVERRIDE in seconds (default: `hive-mcp-cider-eval-timeout').\nReturns result string when ready or signals error on timeout.\n\nAsync state lives in a closure-local eval-state vector (see `make-eval-state');\nthe callback folds each nREPL response into it via `apply-response', and\n`finalize-eval-state' turns the completed state into the result string —\nexecuting compiled cljel locally in Emacs when the session is cljel-active."
-  (let* ((st (hive-mcp-cider-eval-make-eval-state)))
+  "Evaluate CODE and return its result string, or signal on timeout.\nOptional TIMEOUT-OVERRIDE in seconds (default: `hive-mcp-cider-eval-timeout').\n\nContract: the nREPL request is asynchronous but this call is SYNCHRONOUS — it\npolls `accept-process-output' every `hive-mcp-cider-eval-poll-interval' and\nblocks the Emacs command loop until the response is complete, which is what the\nheadless MCP backend needs from a request/response tool call. Do not call it\nfrom inside another eval running in this same Emacs.\n\nAsync state lives in a closure-local eval-state vector (see `make-eval-state');\nthe callback folds each nREPL response into it via `apply-response', and\n`finalize-eval-state' turns the completed state into the result string —\nexecuting compiled cljel locally in Emacs when the session is cljel-active.\nOn timeout an nREPL interrupt is sent for the pending request so the server\nstops evaluating and the session is not left wedged."
+  (let* ((st (hive-mcp-cider-eval-make-eval-state))
+        (id-cell (make-vector 1 nil))
+        (connection (hive-mcp-cider-eval--current-connection)))
     (cider-nrepl-request:eval code (lambda (response)
+    (let* ((id (nrepl-dict-get response "id")))
+    (when id
+    (aset id-cell 0 id)))
     (hive-mcp-cider-eval-apply-response st response)))
+    (unless (aref id-cell 0)
+    (aset id-cell 0 (hive-mcp-cider-eval--connection-request-id connection)))
     (let* ((start-time (float-time))
         (timeout (or timeout-override hive-mcp-cider-eval-timeout))
         (interval hive-mcp-cider-eval-poll-interval))
     (while (and (not (aref st 4)) (< (- (float-time) start-time) timeout))
     (accept-process-output nil interval))
-    (if (not (aref st 4)) (error "Eval timed out after %d seconds (heartbeat polling)" timeout) (hive-mcp-cider-eval-finalize-eval-state st)))))
+    (if (not (aref st 4)) (let* ((interrupted (hive-mcp-cider-eval-interrupt-eval (aref id-cell 0) connection)))
+    (error "Eval timed out after %s seconds (synchronous heartbeat poll); server interrupt %s" timeout (if interrupted "sent" "NOT sent"))) (hive-mcp-cider-eval-finalize-eval-state st)))))
 
 (defun hive-mcp-cider-eval-eval-in-session (name code &optional timeout)
   "Evaluate CODE in the CIDER session NAME.\nOptional TIMEOUT in seconds (default: `hive-mcp-cider-eval-timeout').\nUses async evaluation with heartbeat polling."
@@ -138,11 +194,16 @@
     (error "CIDER could not connect - no nREPL available"))
   (hive-mcp-cider-eval-eval-with-heartbeat code timeout))
 
+(defun hive-mcp-cider-eval--interactive-handler ()
+  "Return CIDER's interactive eval handler for the current buffer, or nil."
+  (when (fboundp 'cider-interactive-eval-handler)
+    (cider-interactive-eval-handler)))
+
 (defun hive-mcp-cider-eval-eval-explicit (code)
-  "Evaluate CODE via CIDER interactively.\nShows output in REPL buffer for collaborative debugging.\nAuto-connects if not connected."
+  "Evaluate CODE via CIDER interactively.\nShows output in REPL buffer for collaborative debugging.\nA cljel session's compiled Elisp is executed in Emacs by\n`wrap-compiled-callback' before CIDER's handler sees the response, so an\nexplicit eval is never a silent no-op.\nAuto-connects if not connected."
   (unless (hive-mcp-cider-connection-ensure-connected)
     (error "CIDER could not connect - no nREPL available"))
-  (cider-interactive-eval code)
+  (cider-interactive-eval code (hive-mcp-cider-eval-wrap-compiled-callback (hive-mcp-cider-eval--interactive-handler)))
   (format "Sent to REPL: %s" (truncate-string-to-width code 50 nil nil "...")))
 
 (provide 'hive-mcp-cider-eval)

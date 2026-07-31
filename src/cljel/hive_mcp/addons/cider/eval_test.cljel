@@ -20,6 +20,9 @@ live nREPL. ST layout is [value err out compiled state]."
 ;; Mock: nrepl-dict-get over a plain (key . value) alist
 ;; ============================================================================
 
+(defvar nrepl-request-counter 0
+  "Test stand-in for nREPL's per-connection request counter.")
+
 (defun nrepl-dict-get (d k)
   "Test shim: look up string key K in alist D of (key . value) conses."
   (let [hit nil
@@ -305,6 +308,131 @@ its trailing provide; the result is the last form's value."
                          (hive-mcp-cider-eval-eval-in-session
                           "live" "(+ 1 2)" 7))))
       (kill-buffer buf))))
+
+;; ============================================================================
+;; wrap-compiled-callback — the shared compiled-elisp routing helper
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-eval-test-wrap-passes-plain-response-through nil
+  "A response with no compiled payload reaches the delegate unchanged."
+  (let [seen nil
+        cb (hive-mcp-cider-eval-wrap-compiled-callback
+             (lambda (response) (setq seen response)))
+        response (list (cons "value" "42") (cons "status" (list "done")))]
+    (funcall cb response)
+    (should (eq response seen))))
+
+(ert-deftest hive-mcp-cider-eval-test-wrap-executes-compiled-then-delegates nil
+  "A compiled payload is executed in Emacs before the delegate is called."
+  (let [seen nil
+        cb (hive-mcp-cider-eval-wrap-compiled-callback
+             (lambda (response) (setq seen response)))]
+    (setq hive-mcp-cider-eval-test--probe nil)
+    (funcall cb (list (cons "cljel-compiled-elisp"
+                            "(setq hive-mcp-cider-eval-test--probe 7)")
+                      (cons "status" (list "done"))))
+    (should (equal 7 hive-mcp-cider-eval-test--probe))
+    (should seen)))
+
+(ert-deftest hive-mcp-cider-eval-test-wrap-attaches-value-to-dict nil
+  "On a real nREPL dict the local result is attached as \"value\"."
+  (let [put nil
+        cb (hive-mcp-cider-eval-wrap-compiled-callback (lambda (_response) nil))]
+    (cl-letf (((symbol-function 'nrepl-dict-p) (lambda (_d) t))
+              ((symbol-function 'nrepl-dict-put)
+               (lambda (d k v) (setq put (list k v)) d)))
+      (funcall cb (list (cons "cljel-compiled-elisp" "(+ 20 22)")
+                        (cons "status" (list "done")))))
+    (should (equal (list "value" "42") put))))
+
+(ert-deftest hive-mcp-cider-eval-test-wrap-without-callback-still-executes nil
+  "A nil delegate still runs the compiled payload."
+  (let [cb (hive-mcp-cider-eval-wrap-compiled-callback nil)]
+    (setq hive-mcp-cider-eval-test--probe nil)
+    (funcall cb (list (cons "cljel-compiled-elisp"
+                            "(setq hive-mcp-cider-eval-test--probe 5)")
+                      (cons "status" (list "done"))))
+    (should (equal 5 hive-mcp-cider-eval-test--probe))))
+
+(ert-deftest hive-mcp-cider-eval-test-explicit-routes-compiled-elisp nil
+  "eval-explicit runs a cljel session's compiled Elisp instead of no-opping."
+  (let [reply nil]
+    (setq hive-mcp-cider-eval-test--probe nil)
+    (cl-letf (((symbol-function 'hive-mcp-cider-connection-ensure-connected)
+               (lambda () t))
+              ((symbol-function 'cider-interactive-eval)
+               (lambda (_code callback)
+                 (funcall callback
+                          (list (cons "cljel-compiled-elisp"
+                                      "(setq hive-mcp-cider-eval-test--probe 11)")
+                                (cons "status" (list "done")))))))
+      (setq reply (hive-mcp-cider-eval-eval-explicit "(setq x 11)")))
+    (should (equal 11 hive-mcp-cider-eval-test--probe))
+    (should (string-prefix-p "Sent to REPL:" reply))))
+
+;; ============================================================================
+;; eval-with-heartbeat — timeout must interrupt the server-side eval
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-eval-test-timeout-interrupts-observed-id nil
+  "A timed-out eval interrupts the request id observed in the responses."
+  (let [conn (generate-new-buffer " *conn-observed*")
+        interrupts nil
+        message nil]
+    (unwind-protect
+        (cl-letf (((symbol-function 'cider-current-repl) (lambda (&rest _) conn))
+                  ((symbol-function 'cider-nrepl-request:eval)
+                   (lambda (_code callback)
+                     (funcall callback (list (cons "id" "42")))))
+                  ((symbol-function 'nrepl-request:interrupt)
+                   (lambda (id _callback connection)
+                     (setq interrupts (cons (list id connection) interrupts)))))
+          (condition-case e
+              (hive-mcp-cider-eval-eval-with-heartbeat "(Thread/sleep 100000)" 0.2)
+            (error (setq message (error-message-string e)))))
+      (kill-buffer conn))
+    (should (string-match-p "Eval timed out after 0.2 seconds" message))
+    (should (string-match-p "server interrupt sent" message))
+    (should (equal 1 (length interrupts)))
+    (should (equal "42" (car (car interrupts))))))
+
+(ert-deftest hive-mcp-cider-eval-test-timeout-falls-back-to-connection-id nil
+  "With no response at all the interrupt uses the connection's last request id."
+  (let [conn (generate-new-buffer " *conn-counter*")
+        interrupts nil]
+    (with-current-buffer conn
+      (make-local-variable 'nrepl-request-counter)
+      (setq nrepl-request-counter 7))
+    (unwind-protect
+        (cl-letf (((symbol-function 'cider-current-repl) (lambda (&rest _) conn))
+                  ((symbol-function 'cider-nrepl-request:eval)
+                   (lambda (_code _callback) nil))
+                  ((symbol-function 'nrepl-request:interrupt)
+                   (lambda (id _callback _connection)
+                     (setq interrupts (cons id interrupts)))))
+          (should-error
+           (hive-mcp-cider-eval-eval-with-heartbeat "(loop)" 0.2)))
+      (kill-buffer conn))
+    (should (equal (list "7") interrupts))))
+
+(ert-deftest hive-mcp-cider-eval-test-completed-eval-sends-no-interrupt nil
+  "A completed eval returns its value and never interrupts."
+  (let [conn (generate-new-buffer " *conn-done*")
+        interrupts 0
+        result nil]
+    (unwind-protect
+        (cl-letf (((symbol-function 'cider-current-repl) (lambda (&rest _) conn))
+                  ((symbol-function 'cider-nrepl-request:eval)
+                   (lambda (_code callback)
+                     (funcall callback (list (cons "id" "3")
+                                             (cons "value" "42")
+                                             (cons "status" (list "done"))))))
+                  ((symbol-function 'nrepl-request:interrupt)
+                   (lambda (&rest _) (setq interrupts (1+ interrupts)))))
+          (setq result (hive-mcp-cider-eval-eval-with-heartbeat "(+ 40 2)" 5)))
+      (kill-buffer conn))
+    (should (equal "42" result))
+    (should (equal 0 interrupts))))
 
 ;; ============================================================================
 ;; Runner
