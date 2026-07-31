@@ -65,19 +65,30 @@
     (aset st 4 t)))
     st))
 
+(defun hive-mcp-cider-eval--read-compiled-forms (compiled)
+  "Read every top-level Elisp form in COMPILED and return them in source order."
+  (let* ((pos 0)
+        (len (length compiled))
+        (forms nil))
+    (condition-case nil
+    (while (< pos len)
+    (let* ((res (read-from-string compiled pos)))
+    (setq forms (cons (car res) forms))
+    (setq pos (cdr res))))
+  (end-of-file nil))
+    (nreverse forms)))
+
 (defun hive-mcp-cider-eval--execute-compiled-elisp (compiled)
-  "Execute one compiled Elisp form and return its printed result."
+  "Execute every top-level form in COMPILED and return the last printed result."
   (condition-case e
     (progn
   (unless (stringp compiled)
     (error "Invalid compiled Elisp payload: %S" compiled))
   (ignore-errors (require 'clojure-elisp-runtime nil t))
-  (if (fboundp 'cider-cljel--eval-elisp-string) (cider-cljel--eval-elisp-string compiled) (let* ((read-result (read-from-string compiled))
-        (form (car read-result))
-        (tail (substring compiled (cdr read-result))))
-    (when (string-match-p "[^[:space:]]" tail)
-    (error "Compiled Elisp contains trailing forms"))
-    (format "%S" (eval form t)))))
+  (if (fboundp 'cider-cljel--eval-elisp-string) (cider-cljel--eval-elisp-string compiled) (let* ((result nil))
+    (dolist (form (hive-mcp-cider-eval--read-compiled-forms compiled))
+    (setq result (eval form t)))
+    (format "%S" result))))
   (error (format "cljel client eval error: %S" e))))
 
 (defun hive-mcp-cider-eval-finalize-eval-state (st)

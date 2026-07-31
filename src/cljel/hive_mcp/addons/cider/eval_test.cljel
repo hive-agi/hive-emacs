@@ -180,18 +180,55 @@ live nREPL. ST layout is [value err out compiled state]."
     (should (equal "42" (hive-mcp-cider-eval-finalize-eval-state st)))
     (should (equal 42 hive-mcp-cider-eval-test--probe))))
 
-(ert-deftest hive-mcp-cider-eval-test-finalize-rejects-trailing-form nil
-  "The fallback executor rejects content after the first compiled form."
+(ert-deftest hive-mcp-cider-eval-test-finalize-executes-trailing-forms nil
+  "The fallback executor runs every compiled form and returns the last value."
   (let [st (hive-mcp-cider-eval-make-eval-state)]
     (setq hive-mcp-cider-eval-test--probe nil)
     (hive-mcp-cider-eval-apply-response
      st (list (cons "cljel-compiled-elisp"
                     "(+ 1 2) (setq hive-mcp-cider-eval-test--probe 99)")
               (cons "status" (list "done"))))
-    (should (string-match-p
-             "trailing forms"
-             (hive-mcp-cider-eval-finalize-eval-state st)))
-    (should-not hive-mcp-cider-eval-test--probe)))
+    (should (equal "99" (hive-mcp-cider-eval-finalize-eval-state st)))
+    (should (equal 99 hive-mcp-cider-eval-test--probe))))
+
+(ert-deftest hive-mcp-cider-eval-test-finalize-installs-whole-buffer nil
+  "A whole-buffer load-file payload installs namespaced defuns, a keymap and
+its trailing provide; the result is the last form's value."
+  (let [st (hive-mcp-cider-eval-make-eval-state)]
+    (fmakunbound 'hive-mcp-cider-eval-test-buf-bump)
+    (fmakunbound 'hive-mcp-cider-eval-test-buf--double)
+    (makunbound 'hive-mcp-cider-eval-test-buf-map)
+    (setq features (delq 'hive-mcp-cider-eval-test-buf features))
+    (hive-mcp-cider-eval-apply-response
+     st (list (cons "cljel-compiled-elisp"
+                    (elisp-concat
+                     "(defvar hive-mcp-cider-eval-test-buf-counter 0)\n"
+                     "(defun hive-mcp-cider-eval-test-buf--double (x) (* x 2))\n"
+                     "(defun hive-mcp-cider-eval-test-buf-bump (n)\n"
+                     "  (hive-mcp-cider-eval-test-buf--double n))\n"
+                     "(defvar hive-mcp-cider-eval-test-buf-map\n"
+                     "  (let* ((m (make-sparse-keymap)))\n"
+                     "    (define-key m (kbd \"C-c C-b\")"
+                     " 'hive-mcp-cider-eval-test-buf-bump)\n"
+                     "    m))\n"
+                     "(provide 'hive-mcp-cider-eval-test-buf)\n"))
+              (cons "status" (list "done"))))
+    (should (equal "hive-mcp-cider-eval-test-buf"
+                   (hive-mcp-cider-eval-finalize-eval-state st)))
+    (should (featurep 'hive-mcp-cider-eval-test-buf))
+    (should (fboundp 'hive-mcp-cider-eval-test-buf--double))
+    (should (equal 14 (hive-mcp-cider-eval-test-buf-bump 7)))
+    (should (keymapp hive-mcp-cider-eval-test-buf-map))
+    (should (eq 'hive-mcp-cider-eval-test-buf-bump
+                (lookup-key hive-mcp-cider-eval-test-buf-map (kbd "C-c C-b"))))))
+
+(ert-deftest hive-mcp-cider-eval-test-finalize-single-form-unchanged nil
+  "A single-form payload still yields that form's value."
+  (let [st (hive-mcp-cider-eval-make-eval-state)]
+    (hive-mcp-cider-eval-apply-response
+     st (list (cons "cljel-compiled-elisp" "(* 6 7)")
+              (cons "status" (list "done"))))
+    (should (equal "42" (hive-mcp-cider-eval-finalize-eval-state st)))))
 
 (ert-deftest hive-mcp-cider-eval-test-finalize-rejects-non-string nil
   "The compiled payload must be a string."
