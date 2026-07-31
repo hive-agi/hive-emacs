@@ -9,6 +9,8 @@
 
 (require 'cl-lib)
 
+(require 'help-fns)
+
 (declare-function cider-connected-p "cider-connection")
 
 (declare-function cider-connections "cider-connection")
@@ -23,7 +25,167 @@
 
 (declare-function nrepl-dict-get "nrepl-dict")
 
+(declare-function hive-mcp-cider-sessions-lookup "hive-mcp-cider-sessions")
+
 (defvar cider-repl-type)
+
+(defcustom hive-mcp-cider-introspection-native-cljel t
+  "When non-nil, cljel sessions are introspected against the Emacs obarray.\nWhen nil, cljel sessions fall through to CIDER's nREPL middleware, which\nresolves symbols in the Clojure host instead of in Emacs."
+  :group 'hive-mcp-cider
+  :type 'boolean)
+
+(defcustom hive-mcp-cider-introspection-match-limit 200
+  "Maximum number of candidates the native Elisp backend returns."
+  :group 'hive-mcp-cider
+  :type 'integer)
+
+(defun hive-mcp-cider-introspection-repl-type-label (value)
+  "Return REPL type VALUE as a lowercase string, or nil when unset.\nVALUE may be a symbol (registry, `cider-repl-type') or a string (API)."
+  (cond
+  ((null value) nil)
+  ((symbolp value) (downcase (symbol-name value)))
+  ((stringp value) (downcase value))
+  (t nil)))
+
+(defun hive-mcp-cider-introspection-native-backend-p (repl-type native-enabled)
+  "Return non-nil when REPL-TYPE must be introspected natively in Emacs.\nNATIVE-ENABLED is the `hive-mcp-cider-introspection-native-cljel' setting."
+  (and native-enabled (equal "cljel" (hive-mcp-cider-introspection-repl-type-label repl-type)) t))
+
+(defun hive-mcp-cider-introspection-session-repl-type (session-name)
+  "Return the registered :repl-type of SESSION-NAME, or nil.\nA nil SESSION-NAME reads the current connection's `cider-repl-type'."
+  (if session-name (plist-get (hive-mcp-cider-sessions-lookup session-name) :repl-type) (when (boundp 'cider-repl-type)
+    cider-repl-type)))
+
+(defun hive-mcp-cider-introspection-session-buffer (session-name)
+  "Return the live REPL buffer registered for SESSION-NAME.\nSignals when SESSION-NAME is unknown or its REPL buffer is gone."
+  (let* ((session (hive-mcp-cider-sessions-lookup session-name))
+        (buf (plist-get session :cider-buffer)))
+    (unless session
+    (error "Session '%s' not found" session-name))
+    (unless (and buf (buffer-live-p (get-buffer buf)))
+    (error "Session '%s' REPL buffer is gone" session-name))
+    (get-buffer buf)))
+
+(defun hive-mcp-cider-introspection-backend-for (session-name)
+  "Return `native' or `cider' as the introspection backend for SESSION-NAME."
+  (if (hive-mcp-cider-introspection-native-backend-p (hive-mcp-cider-introspection-session-repl-type session-name) hive-mcp-cider-introspection-native-cljel) 'native 'cider))
+
+(defun hive-mcp-cider-introspection-call-in-session (session-name thunk)
+  "Call THUNK inside SESSION-NAME's REPL buffer, or in place when nil."
+  (if session-name (with-current-buffer (hive-mcp-cider-introspection-session-buffer session-name)
+    (funcall thunk)) (funcall thunk)))
+
+(defun hive-mcp-cider-introspection--require-cider ()
+  "Signal unless CIDER is loaded and connected."
+  (unless (and (featurep 'cider) (cider-connected-p))
+    (error "CIDER not connected")))
+
+(defun hive-mcp-cider-introspection--elisp-symbol-p (sym)
+  "Return non-nil when SYM names an Elisp function or variable."
+  (and sym (or (fboundp sym) (boundp sym))))
+
+(defun hive-mcp-cider-introspection--elisp-doc-string (sym)
+  "Return SYM's function documentation, else its variable documentation."
+  (or (when (fboundp sym)
+    (ignore-errors (documentation sym t))) (when (boundp sym)
+    (ignore-errors (documentation-property sym 'variable-documentation t)))))
+
+(defun hive-mcp-cider-introspection--elisp-doc-first-line (sym)
+  "Return the first line of SYM's documentation, or an empty string."
+  (let* ((doc (hive-mcp-cider-introspection--elisp-doc-string sym)))
+    (if doc (car (split-string doc "\n")) "")))
+
+(defun hive-mcp-cider-introspection--elisp-symbol-kind (sym)
+  "Return \"macro\", \"function\" or \"variable\" for SYM."
+  (cond
+  ((and (fboundp sym) (macrop sym)) "macro")
+  ((fboundp sym) "function")
+  (t "variable")))
+
+(defun hive-mcp-cider-introspection-native-doc (symbol-name)
+  "Return the Elisp documentation plist for SYMBOL-NAME.\nShape matches the CIDER backend: :doc, :arglists, :ns, :name, :file, :line."
+  (let* ((sym (intern-soft symbol-name))
+        (known (hive-mcp-cider-introspection--elisp-symbol-p sym))
+        (doc (when known
+    (hive-mcp-cider-introspection--elisp-doc-string sym)))
+        (arglist (when (and known (fboundp sym) (fboundp 'help-function-arglist))
+    (ignore-errors (format "%S" (help-function-arglist sym t)))))
+        (file (when known
+    (ignore-errors (symbol-file sym)))))
+    (list :doc (or doc "No documentation available") :arglists (or arglist "") :ns "elisp" :name symbol-name :file (or file "") :line 0)))
+
+(defun hive-mcp-cider-introspection-native-info (symbol-name)
+  "Return the full Elisp info plist for SYMBOL-NAME, or an :error plist."
+  (let* ((sym (intern-soft symbol-name)))
+    (if (hive-mcp-cider-introspection--elisp-symbol-p sym) (append (hive-mcp-cider-introspection-native-doc symbol-name) (list :type (hive-mcp-cider-introspection--elisp-symbol-kind sym) :macro (when (and (fboundp sym) (macrop sym))
+    "true"))) (list :error (format "No info found for '%s'" symbol-name)))))
+
+(defun hive-mcp-cider-introspection-native-apropos (pattern &optional docs-p limit)
+  "Return a vector of Elisp symbols whose name matches regexp PATTERN.\nDOCS-P attaches each symbol's first documentation line.\nLIMIT caps the result (default `hive-mcp-cider-introspection-match-limit')."
+  (let* ((cap (or limit hive-mcp-cider-introspection-match-limit))
+        (syms (clel-sort (lambda (a b)
+    (string< (symbol-name a) (symbol-name b))) (apropos-internal pattern #'hive-mcp-cider-introspection--elisp-symbol-p)))
+        (matches '())
+        (taken 0))
+    (dolist (sym syms)
+    (when (< taken cap)
+    (setq taken (1+ taken))
+    (push (list :name (symbol-name sym) :type (hive-mcp-cider-introspection--elisp-symbol-kind sym) :doc (if docs-p (hive-mcp-cider-introspection--elisp-doc-first-line sym) "")) matches)))
+    (vconcat (nreverse matches))))
+
+(defun hive-mcp-cider-introspection-native-complete (prefix &optional limit)
+  "Return a vector of Elisp completion candidates for PREFIX.\nLIMIT caps the result (default `hive-mcp-cider-introspection-match-limit')."
+  (let* ((cap (or limit hive-mcp-cider-introspection-match-limit))
+        (names (clel-sort #'string< (all-completions prefix obarray #'hive-mcp-cider-introspection--elisp-symbol-p)))
+        (candidates '())
+        (taken 0))
+    (dolist (name names)
+    (when (< taken cap)
+    (setq taken (1+ taken))
+    (push (list :candidate name :type (hive-mcp-cider-introspection--elisp-symbol-kind (intern-soft name)) :ns "elisp") candidates)))
+    (vconcat (nreverse candidates))))
+
+(defun hive-mcp-cider-introspection--cider-doc-plist (symbol-name)
+  "Return the CIDER documentation plist for SYMBOL-NAME."
+  (hive-mcp-cider-introspection--require-cider)
+  (let* ((info (cider-var-info symbol-name))
+        (doc (nrepl-dict-get info "doc"))
+        (arglists (nrepl-dict-get info "arglists"))
+        (ns (nrepl-dict-get info "ns"))
+        (name (nrepl-dict-get info "name"))
+        (file (nrepl-dict-get info "file"))
+        (line (nrepl-dict-get info "line")))
+    (list :doc (or doc "No documentation available") :arglists (or arglists "") :ns (or ns "") :name (or name symbol-name) :file (or file "") :line (or line 0))))
+
+(defun hive-mcp-cider-introspection--cider-info-plist (symbol-name)
+  "Return the full CIDER info plist for SYMBOL-NAME, or an :error plist."
+  (hive-mcp-cider-introspection--require-cider)
+  (let* ((info (cider-var-info symbol-name)))
+    (if info (let* ((result '()))
+    (dolist (key '("name" "ns" "doc" "arglists" "file" "line" "column" "resource" "macro" "special-form" "protocol" "spec" "see-also" "added" "deprecated"))
+    (let* ((val (nrepl-dict-get info key)))
+    (when val
+    (setq result (plist-put result (intern (concat ":" key)) val)))))
+    result) (list :error (format "No info found for '%s'" symbol-name)))))
+
+(defun hive-mcp-cider-introspection--cider-apropos-vector (pattern docs-p)
+  "Return CIDER apropos matches for PATTERN as a vector.\nDOCS-P also searches docstrings."
+  (hive-mcp-cider-introspection--require-cider)
+  (let* ((ns (cider-current-ns))
+        (response (cider-nrepl-send-sync-request (list "op" "apropos" "query" pattern "ns" ns "docs?" (if docs-p "t" nil) "privates?" "t" "case-sensitive?" nil)))
+        (apropos-matches (nrepl-dict-get response "apropos-matches")))
+    (if apropos-matches (vconcat (mapcar (lambda (match)
+    (list :name (nrepl-dict-get match "name") :type (nrepl-dict-get match "type") :doc (or (nrepl-dict-get match "doc") ""))) apropos-matches)) (list ))))
+
+(defun hive-mcp-cider-introspection--cider-complete-vector (prefix)
+  "Return CIDER completion candidates for PREFIX as a vector."
+  (hive-mcp-cider-introspection--require-cider)
+  (let* ((ns (cider-current-ns))
+        (context (cider-completion-get-context))
+        (response (cider-nrepl-send-sync-request (list "op" "complete" "ns" ns "prefix" prefix "context" context)))
+        (completions (nrepl-dict-get response "completions")))
+    (if completions (vconcat (mapcar (lambda (c)
+    (list :candidate (nrepl-dict-get c "candidate") :type (nrepl-dict-get c "type") :ns (nrepl-dict-get c "ns"))) completions)) (list ))))
 
 (defun hive-mcp-cider-introspection-status ()
   "Return CIDER connection status as JSON-compatible plist."
@@ -32,43 +194,25 @@
     (cider-current-ns)) :repl-type (when (and (featurep 'cider) (boundp 'cider-repl-type))
     cider-repl-type)))
 
-(defun hive-mcp-cider-introspection-doc (symbol-name)
-  "Get documentation for SYMBOL-NAME using CIDER.\nReturns a plist with :doc, :arglists, :ns, :name."
-  (if (and (featurep 'cider) (cider-connected-p)) (let* ((info (cider-var-info symbol-name))
-        (doc (nrepl-dict-get info "doc"))
-        (arglists (nrepl-dict-get info "arglists"))
-        (ns (nrepl-dict-get info "ns"))
-        (name (nrepl-dict-get info "name"))
-        (file (nrepl-dict-get info "file"))
-        (line (nrepl-dict-get info "line")))
-    (list :doc (or doc "No documentation available") :arglists (or arglists "") :ns (or ns "") :name (or name symbol-name) :file (or file "") :line (or line 0))) (error "CIDER not connected")))
+(defun hive-mcp-cider-introspection-doc (symbol-name &optional session-name)
+  "Get documentation for SYMBOL-NAME, scoped to SESSION-NAME when given.\nA cljel session resolves SYMBOL-NAME in Emacs; other sessions use CIDER.\nReturns a plist with :doc, :arglists, :ns, :name, :file, :line."
+  (if (eq 'native (hive-mcp-cider-introspection-backend-for session-name)) (hive-mcp-cider-introspection-native-doc symbol-name) (hive-mcp-cider-introspection-call-in-session session-name (lambda ()
+    (hive-mcp-cider-introspection--cider-doc-plist symbol-name)))))
 
-(defun hive-mcp-cider-introspection-apropos (pattern &optional docs-p)
-  "Search for symbols matching PATTERN using CIDER.\nIf DOCS-P is non-nil, also search in docstrings.\nReturns a vector of matching symbols with their info."
-  (if (and (featurep 'cider) (cider-connected-p)) (let* ((ns (cider-current-ns))
-        (response (cider-nrepl-send-sync-request (list "op" "apropos" "query" pattern "ns" ns "docs?" (if docs-p "t" nil) "privates?" "t" "case-sensitive?" nil)))
-        (apropos-matches (nrepl-dict-get response "apropos-matches")))
-    (if apropos-matches (vconcat (mapcar (lambda (match)
-    (list :name (nrepl-dict-get match "name") :type (nrepl-dict-get match "type") :doc (or (nrepl-dict-get match "doc") ""))) apropos-matches)) (list ))) (error "CIDER not connected")))
+(defun hive-mcp-cider-introspection-info (symbol-name &optional session-name)
+  "Get full semantic info for SYMBOL-NAME, scoped to SESSION-NAME when given.\nA cljel session resolves SYMBOL-NAME in Emacs; other sessions use CIDER's info\nop, which also reports source location, spec and deprecation."
+  (if (eq 'native (hive-mcp-cider-introspection-backend-for session-name)) (hive-mcp-cider-introspection-native-info symbol-name) (hive-mcp-cider-introspection-call-in-session session-name (lambda ()
+    (hive-mcp-cider-introspection--cider-info-plist symbol-name)))))
 
-(defun hive-mcp-cider-introspection-info (symbol-name)
-  "Get full semantic info for SYMBOL-NAME via CIDER's info op.\nReturns comprehensive information including source location, spec, etc."
-  (if (and (featurep 'cider) (cider-connected-p)) (let* ((info (cider-var-info symbol-name)))
-    (if info (let* ((result '()))
-    (dolist (key '("name" "ns" "doc" "arglists" "file" "line" "column" "resource" "macro" "special-form" "protocol" "spec" "see-also" "added" "deprecated"))
-    (let* ((val (nrepl-dict-get info key)))
-    (when val
-    (setq result (plist-put result (intern (concat ":" key)) val)))))
-    result) (list :error (format "No info found for '%s'" symbol-name)))) (error "CIDER not connected")))
+(defun hive-mcp-cider-introspection-apropos (pattern &optional docs-p session-name)
+  "Search for symbols matching regexp PATTERN, scoped to SESSION-NAME when given.\nIf DOCS-P is non-nil, documentation is searched/attached as well.\nReturns a vector of matching symbols with their info."
+  (if (eq 'native (hive-mcp-cider-introspection-backend-for session-name)) (hive-mcp-cider-introspection-native-apropos pattern docs-p nil) (hive-mcp-cider-introspection-call-in-session session-name (lambda ()
+    (hive-mcp-cider-introspection--cider-apropos-vector pattern docs-p)))))
 
-(defun hive-mcp-cider-introspection-complete (prefix)
-  "Get completions for PREFIX using CIDER.\nReturns a vector of completion candidates."
-  (if (and (featurep 'cider) (cider-connected-p)) (let* ((ns (cider-current-ns))
-        (context (cider-completion-get-context))
-        (response (cider-nrepl-send-sync-request (list "op" "complete" "ns" ns "prefix" prefix "context" context)))
-        (completions (nrepl-dict-get response "completions")))
-    (if completions (vconcat (mapcar (lambda (c)
-    (list :candidate (nrepl-dict-get c "candidate") :type (nrepl-dict-get c "type") :ns (nrepl-dict-get c "ns"))) completions)) (list ))) (error "CIDER not connected")))
+(defun hive-mcp-cider-introspection-complete (prefix &optional session-name)
+  "Get completions for PREFIX, scoped to SESSION-NAME when given.\nA cljel session completes over the Emacs obarray.\nReturns a vector of completion candidates."
+  (if (eq 'native (hive-mcp-cider-introspection-backend-for session-name)) (hive-mcp-cider-introspection-native-complete prefix nil) (hive-mcp-cider-introspection-call-in-session session-name (lambda ()
+    (hive-mcp-cider-introspection--cider-complete-vector prefix)))))
 
 (provide 'hive-mcp-cider-introspection)
 ;;; hive-mcp-cider-introspection.el ends here

@@ -1,0 +1,236 @@
+(ns hive-mcp-cider-introspection-test
+  "ERT tests for session-scoped, cljel-aware CIDER introspection.
+
+Authored in cljel and run against the SHIPPED module
+elisp/hive-mcp-cider-introspection.el.
+
+No live nREPL and no CIDER: the session registry, `cider-var-info' and
+`cider-nrepl-send-sync-request' are stubbed with `cl-letf', and `features' is
+let-bound to satisfy the connected-p gate."
+  (:require [cl-lib]))
+
+(require 'ert)
+(require 'hive-mcp-cider-introspection)
+
+;; ============================================================================
+;; Probes — real Elisp symbols the native backend must find
+;; ============================================================================
+
+(defn probe-fn [x]
+  "Probe docstring for native introspection."
+  x)
+
+(defvar hive-mcp-cider-introspection-test-probe-var 7
+  "Probe variable docstring for native introspection.")
+
+(defn- dict-get [d k]
+  "Test shim: look up string key K in alist D of (key . value) conses."
+  (cdr (assoc k d)))
+
+(defn- cider-featurep [feature &rest _ignored]
+  "Test shim: answer as if CIDER were loaded, else defer to real features.
+`features' is not `special-variable-p', so a lexical let cannot fake it."
+  (or (eq feature 'cider) (and (memq feature features) t)))
+
+;; ============================================================================
+;; Backend selection (pure)
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-introspection-test-repl-type-label nil
+  "REPL types normalize to lowercase strings regardless of carrier type."
+  (should (equal "cljel" (hive-mcp-cider-introspection-repl-type-label 'cljel)))
+  (should (equal "cljel" (hive-mcp-cider-introspection-repl-type-label "CLJEL")))
+  (should (equal "clj" (hive-mcp-cider-introspection-repl-type-label 'clj)))
+  (should-not (hive-mcp-cider-introspection-repl-type-label nil)))
+
+(ert-deftest hive-mcp-cider-introspection-test-native-backend-p nil
+  "Only a cljel session with the toggle on selects the native backend."
+  (should (hive-mcp-cider-introspection-native-backend-p 'cljel t))
+  (should-not (hive-mcp-cider-introspection-native-backend-p 'cljel nil))
+  (should-not (hive-mcp-cider-introspection-native-backend-p 'clj t))
+  (should-not (hive-mcp-cider-introspection-native-backend-p nil t)))
+
+(ert-deftest hive-mcp-cider-introspection-test-backend-for-session nil
+  "The backend follows the registered :repl-type of the named session."
+  (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup)
+             (lambda (name)
+               (if (equal name "elisp-session")
+                   (list :repl-type 'cljel)
+                 (list :repl-type 'clj)))))
+    (should (eq 'native (hive-mcp-cider-introspection-backend-for "elisp-session")))
+    (should (eq 'cider (hive-mcp-cider-introspection-backend-for "jvm-session")))))
+
+(ert-deftest hive-mcp-cider-introspection-test-backend-honors-toggle nil
+  "Disabling the toggle sends cljel sessions back through CIDER."
+  (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup)
+             (lambda (_name) (list :repl-type 'cljel))))
+    (let [hive-mcp-cider-introspection-native-cljel nil]
+      (should (eq 'cider (hive-mcp-cider-introspection-backend-for "elisp-session"))))))
+
+;; ============================================================================
+;; Native Elisp backend — the cljel session answer
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-introspection-test-cljel-doc-is-elisp nil
+  "A cljel session resolves an Elisp symbol in Emacs, not in the Clojure host."
+  (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup)
+             (lambda (_name) (list :repl-type 'cljel :cider-buffer nil))))
+    (let [result (hive-mcp-cider-introspection-doc
+                  "hive-mcp-cider-introspection-test-probe-fn" "elisp-session")]
+      (should (equal "elisp" (plist-get result :ns)))
+      (should (equal "Probe docstring for native introspection."
+                     (plist-get result :doc)))
+      (should (equal "(x)" (plist-get result :arglists))))))
+
+(ert-deftest hive-mcp-cider-introspection-test-cljel-doc-variable nil
+  "Variable documentation answers when the symbol has no function cell."
+  (should (equal "Probe variable docstring for native introspection."
+                 (plist-get (hive-mcp-cider-introspection-native-doc
+                             "hive-mcp-cider-introspection-test-probe-var")
+                            :doc))))
+
+(ert-deftest hive-mcp-cider-introspection-test-native-doc-unknown nil
+  "An unknown symbol still yields the documented empty shape."
+  (let [result (hive-mcp-cider-introspection-native-doc
+                "hive-mcp-cider-introspection-test-no-such-symbol")]
+    (should (equal "No documentation available" (plist-get result :doc)))
+    (should (equal "elisp" (plist-get result :ns)))))
+
+(ert-deftest hive-mcp-cider-introspection-test-native-info-kind nil
+  "Native info reports the symbol kind and errors only for unknown symbols."
+  (let [fn-info (hive-mcp-cider-introspection-native-info
+                 "hive-mcp-cider-introspection-test-probe-fn")
+        missing (hive-mcp-cider-introspection-native-info
+                 "hive-mcp-cider-introspection-test-no-such-symbol")]
+    (should (equal "function" (plist-get fn-info :type)))
+    (should (equal "macro" (plist-get (hive-mcp-cider-introspection-native-info "when")
+                                      :type)))
+    (should (string-match-p "No info found" (plist-get missing :error)))))
+
+(ert-deftest hive-mcp-cider-introspection-test-cljel-apropos-finds-elisp nil
+  "A cljel session's apropos searches the Emacs obarray."
+  (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup)
+             (lambda (_name) (list :repl-type 'cljel))))
+    (let* [matches (hive-mcp-cider-introspection-apropos
+                    "hive-mcp-cider-introspection-test-probe" t "elisp-session")
+           names (mapcar (lambda (m) (plist-get m :name)) (append matches '()))]
+      (should (member "hive-mcp-cider-introspection-test-probe-fn" names))
+      (should (member "hive-mcp-cider-introspection-test-probe-var" names))
+      (should (equal "Probe docstring for native introspection."
+                     (plist-get (aref matches 0) :doc))))))
+
+(ert-deftest hive-mcp-cider-introspection-test-native-apropos-limit nil
+  "The match limit caps native results."
+  (should (= 1 (length (hive-mcp-cider-introspection-native-apropos
+                        "hive-mcp-cider-introspection-test-probe" nil 1)))))
+
+(ert-deftest hive-mcp-cider-introspection-test-cljel-complete nil
+  "A cljel session completes over Elisp symbols."
+  (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup)
+             (lambda (_name) (list :repl-type 'cljel))))
+    (let* [candidates (hive-mcp-cider-introspection-complete
+                       "hive-mcp-cider-introspection-test-probe-" "elisp-session")
+           names (mapcar (lambda (c) (plist-get c :candidate))
+                         (append candidates '()))]
+      (should (member "hive-mcp-cider-introspection-test-probe-fn" names))
+      (should (equal "elisp" (plist-get (aref candidates 0) :ns))))))
+
+;; ============================================================================
+;; Session scoping — the CIDER backend runs inside the session's REPL buffer
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-introspection-test-clj-session-scopes-buffer nil
+  "A clj session answers through CIDER inside its own registered REPL buffer."
+  (let [buf (generate-new-buffer " *clj-repl*")
+        seen nil]
+    (unwind-protect
+        (cl-letf (((symbol-function 'featurep)
+                   #'hive-mcp-cider-introspection-test--cider-featurep)
+                  ((symbol-function 'hive-mcp-cider-sessions-lookup)
+                   (lambda (_name) (list :repl-type 'clj :cider-buffer buf)))
+                  ((symbol-function 'cider-connected-p) (lambda () t))
+                  ((symbol-function 'nrepl-dict-get)
+                   #'hive-mcp-cider-introspection-test--dict-get)
+                  ((symbol-function 'cider-var-info)
+                   (lambda (_symbol)
+                     (setq seen (current-buffer))
+                     (list (cons "doc" "clj doc")
+                           (cons "ns" "clojure.core")
+                           (cons "name" "map")))))
+          (let [result (hive-mcp-cider-introspection-doc "map" "jvm-session")]
+            (should (eq buf seen))
+            (should (equal "clj doc" (plist-get result :doc)))
+            (should (equal "clojure.core" (plist-get result :ns)))))
+      (kill-buffer buf))))
+
+(ert-deftest hive-mcp-cider-introspection-test-clj-session-complete-scopes-buffer nil
+  "Completion for a clj session is sent from the session's REPL buffer."
+  (let [buf (generate-new-buffer " *clj-repl*")
+        seen nil]
+    (unwind-protect
+        (cl-letf (((symbol-function 'featurep)
+                   #'hive-mcp-cider-introspection-test--cider-featurep)
+                  ((symbol-function 'hive-mcp-cider-sessions-lookup)
+                   (lambda (_name) (list :repl-type 'clj :cider-buffer buf)))
+                  ((symbol-function 'cider-connected-p) (lambda () t))
+                  ((symbol-function 'cider-current-ns) (lambda () "user"))
+                  ((symbol-function 'cider-completion-get-context) (lambda () nil))
+                  ((symbol-function 'nrepl-dict-get)
+                   #'hive-mcp-cider-introspection-test--dict-get)
+                  ((symbol-function 'cider-nrepl-send-sync-request)
+                   (lambda (_request)
+                     (setq seen (current-buffer))
+                     (list (cons "completions"
+                                 (list (list (cons "candidate" "map")
+                                             (cons "type" "function")
+                                             (cons "ns" "clojure.core"))))))))
+          (let [candidates (hive-mcp-cider-introspection-complete "ma" "jvm-session")]
+            (should (eq buf seen))
+            (should (equal "map" (plist-get (aref candidates 0) :candidate)))))
+      (kill-buffer buf))))
+
+(ert-deftest hive-mcp-cider-introspection-test-unknown-session-errors nil
+  "An unregistered session name is reported, never silently retargeted."
+  (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup) (lambda (_name) nil)))
+    (let [message nil]
+      (condition-case e
+          (hive-mcp-cider-introspection-session-buffer "ghost")
+        (error (setq message (error-message-string e))))
+      (should (string-match-p "Session .*ghost.* not found" message)))))
+
+(ert-deftest hive-mcp-cider-introspection-test-dead-session-buffer-errors nil
+  "A registered session whose REPL buffer is gone errors clearly."
+  (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup)
+             (lambda (_name) (list :repl-type 'clj :cider-buffer " *gone-repl*"))))
+    (let [message nil]
+      (condition-case e
+          (hive-mcp-cider-introspection-session-buffer "dead")
+        (error (setq message (error-message-string e))))
+      (should (string-match-p "Session .*dead.* REPL buffer is gone" message)))))
+
+(ert-deftest hive-mcp-cider-introspection-test-no-session-keeps-legacy-target nil
+  "Omitting the session name leaves the current connection as the target."
+  (let [seen 'unset]
+    (cl-letf (((symbol-function 'featurep)
+               #'hive-mcp-cider-introspection-test--cider-featurep)
+              ((symbol-function 'hive-mcp-cider-sessions-lookup)
+               (lambda (_name) (error "registry must not be consulted")))
+              ((symbol-function 'cider-connected-p) (lambda () t))
+              ((symbol-function 'nrepl-dict-get)
+               #'hive-mcp-cider-introspection-test--dict-get)
+              ((symbol-function 'cider-var-info)
+               (lambda (_symbol)
+                 (setq seen (current-buffer))
+                 (list (cons "doc" "current connection doc")))))
+      (should (equal "current connection doc"
+                     (plist-get (hive-mcp-cider-introspection-doc "map") :doc)))
+      (should (eq seen (current-buffer))))))
+
+;; ============================================================================
+;; Runner
+;; ============================================================================
+
+(defn run-tests []
+  "Run all hive-mcp-cider-introspection ERT tests in batch."
+  (interactive)
+  (ert-run-tests-batch-and-exit "^hive-mcp-cider-introspection-test-"))
