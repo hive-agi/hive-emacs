@@ -78,6 +78,76 @@
   (should (eq 'starting (hive-mcp-cider-sessions-get-prop "booting" :status))))
   (hive-mcp-cider-sessions-clear-all)))
 
+(ert-deftest hive-mcp-cider-sessions-test-make-session-defaults nil "A bare session carries PORT plus every documented default." (let* ((session (hive-mcp-cider-sessions-make-session 7920)))
+    (should (equal 7920 (plist-get session :port)))
+    (should-not (plist-get session :process))
+    (should-not (plist-get session :buffer))
+    (should-not (plist-get session :agent-id))
+    (should-not (plist-get session :project-dir))
+    (should (eq 'clj (plist-get session :repl-type)))
+    (should (eq 'starting (plist-get session :status)))
+    (should-not (plist-get session :cider-buffer))
+    (should-not (plist-get session :timer))))
+
+(ert-deftest hive-mcp-cider-sessions-test-make-session-overrides nil "Every keyword pair overrides its default; PORT survives the overrides." (let* ((session (hive-mcp-cider-sessions-make-session 7931 :process 'proc :buffer "*buf*" :agent-id "worker-1" :project-dir "/tmp/proj" :repl-type 'cljel :status 'connected :cider-buffer "*cider-repl proj*" :timer 'tick)))
+    (should (equal 7931 (plist-get session :port)))
+    (should (eq 'proc (plist-get session :process)))
+    (should (equal "*buf*" (plist-get session :buffer)))
+    (should (equal "worker-1" (plist-get session :agent-id)))
+    (should (equal "/tmp/proj" (plist-get session :project-dir)))
+    (should (eq 'cljel (plist-get session :repl-type)))
+    (should (eq 'connected (plist-get session :status)))
+    (should (equal "*cider-repl proj*" (plist-get session :cider-buffer)))
+    (should (eq 'tick (plist-get session :timer)))))
+
+(ert-deftest hive-mcp-cider-sessions-test-make-session-partial-override nil "An override touches only its own key and admits keys outside the defaults." (let* ((session (hive-mcp-cider-sessions-make-session 7932 :status 'connected :nrepl-handshake t)))
+    (should (eq 'connected (plist-get session :status)))
+    (should (eq 'clj (plist-get session :repl-type)))
+    (should (plist-get session :nrepl-handshake))))
+
+(ert-deftest hive-mcp-cider-sessions-test-find-available-port-takes-base nil "An empty registry with a free probe allocates the configured base port." (hive-mcp-cider-sessions-clear-all) (unwind-protect
+    (let* ((hive-mcp-cider-sessions-port-base 7940)
+        (hive-mcp-cider-sessions-port-max 7949))
+    (should (equal 7940 (hive-mcp-cider-sessions-find-available-port (lambda (_port)
+    nil)))))
+  (hive-mcp-cider-sessions-clear-all)))
+
+(ert-deftest hive-mcp-cider-sessions-test-find-available-port-skips-probed nil "Ports the injected probe reports as occupied are skipped." (hive-mcp-cider-sessions-clear-all) (unwind-protect
+    (let* ((hive-mcp-cider-sessions-port-base 7940)
+        (hive-mcp-cider-sessions-port-max 7949)
+        (probed '()))
+    (should (equal 7943 (hive-mcp-cider-sessions-find-available-port (lambda (port)
+    (push port probed)
+    (memq port '(7940 7941 7942))))))
+    (should (equal '(7940 7941 7942 7943) (nreverse probed))))
+  (hive-mcp-cider-sessions-clear-all)))
+
+(ert-deftest hive-mcp-cider-sessions-test-find-available-port-skips-registered nil "A port already claimed by a registered session is skipped without probing." (hive-mcp-cider-sessions-clear-all) (unwind-protect
+    (let* ((hive-mcp-cider-sessions-port-base 7940)
+        (hive-mcp-cider-sessions-port-max 7949)
+        (probed '()))
+    (hive-mcp-cider-sessions-register "a" (list :port 7940))
+    (hive-mcp-cider-sessions-register "b" (list :port 7941))
+    (should (equal 7942 (hive-mcp-cider-sessions-find-available-port (lambda (port)
+    (push port probed)
+    nil))))
+    (should (equal '(7942) probed)))
+  (hive-mcp-cider-sessions-clear-all)))
+
+(ert-deftest hive-mcp-cider-sessions-test-find-available-port-honours-max nil "Allocation never returns a port above the configured maximum." (hive-mcp-cider-sessions-clear-all) (unwind-protect
+    (let* ((hive-mcp-cider-sessions-port-base 7940)
+        (hive-mcp-cider-sessions-port-max 7942))
+    (should (equal 7942 (hive-mcp-cider-sessions-find-available-port (lambda (port)
+    (< port 7942))))))
+  (hive-mcp-cider-sessions-clear-all)))
+
+(ert-deftest hive-mcp-cider-sessions-test-find-available-port-exhausted nil "An exhausted range signals rather than handing out an out-of-range port." (hive-mcp-cider-sessions-clear-all) (unwind-protect
+    (let* ((hive-mcp-cider-sessions-port-base 7940)
+        (hive-mcp-cider-sessions-port-max 7942))
+    (should-error (hive-mcp-cider-sessions-find-available-port (lambda (_port)
+    t))))
+  (hive-mcp-cider-sessions-clear-all)))
+
 (defun hive-mcp-cider-sessions-test-run-tests ()
   "Run all named-session registry ERT tests in batch."
   (interactive)
