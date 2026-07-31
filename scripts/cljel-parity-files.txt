@@ -4,11 +4,15 @@ hive_mcp/addons/cci.cljel
 hive_mcp/addons/chroma.cljel
 hive_mcp/addons/cider.cljel
 hive_mcp/addons/cider/connection.cljel
+hive_mcp/addons/cider/connection_test.cljel
 hive_mcp/addons/cider/eval.cljel
 hive_mcp/addons/cider/eval_test.cljel
 hive_mcp/addons/cider/introspection.cljel
+hive_mcp/addons/cider/introspection_test.cljel
 hive_mcp/addons/cider/memory.cljel
+hive_mcp/addons/cider/memory_test.cljel
 hive_mcp/addons/cider/nrepl.cljel
+hive_mcp/addons/cider/nrepl_test.cljel
 hive_mcp/addons/cider/sessions.cljel
 hive_mcp/addons/cider/sessions_test.cljel
 hive_mcp/addons/cider/ui.cljel
