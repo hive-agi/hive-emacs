@@ -15,35 +15,121 @@
 
 (declare-function hive-mcp-api-get-context "hive-mcp-api")
 
+(declare-function hive-mcp-memory-search "hive-mcp-memory")
+
 (declare-function cider-current-ns "cider-client")
 
 (declare-function cider-interactive-eval "cider-eval")
 
+(declare-function cider-interactive-eval-handler "cider-eval")
+
 (declare-function cider-last-sexp "cider-eval")
 
+(declare-function cider-nrepl-request:eval "cider-client")
+
+(declare-function nrepl-dict-get "nrepl-dict")
+
 (defcustom hive-mcp-cider-memory-auto-log nil
-  "When non-nil, automatically log REPL results to memory."
+  "When non-nil, REPL results are captured for later saving to memory.\nSet by `hive-mcp-cider-memory-toggle-auto-log', which also installs or removes\nthe capture advice — do not set it directly."
   :group 'hive-mcp-cider
   :type 'boolean)
 
-(defcustom hive-mcp-cider-memory-log-threshold 100
-  "Minimum result length to auto-log (avoids logging trivial results)."
+(defcustom hive-mcp-cider-memory-log-threshold 0
+  "Minimum result length to capture; 0 captures every result."
   :group 'hive-mcp-cider
   :type 'integer)
 
+(defcustom hive-mcp-cider-memory-query-limit 20
+  "Maximum number of memory entries `hive-mcp-cider-memory-query-solutions' shows."
+  :group 'hive-mcp-cider
+  :type 'integer)
+
+(defconst hive-mcp-cider-memory-eval-advice-target 'cider-nrepl-request:eval "CIDER function advised to capture evaluation results.\nEvery interactive and programmatic CIDER eval funnels through it.")
+
 (defvar hive-mcp-cider-memory--last-eval nil
-  "Last evaluated expression and result for potential saving.")
+  "Last captured evaluation as a plist of :expr, :ns, :result and :context.")
+
+(defun hive-mcp-cider-memory-capture-result-p (result threshold)
+  "Return non-nil when RESULT is worth recording under THRESHOLD."
+  (and result (>= (length (format "%s" result)) (or threshold 0)) t))
+
+(defun hive-mcp-cider-memory-merge-capture (prev expr ns result)
+  "Return the capture plist for EXPR, NS and RESULT.\nPREV's :context survives when PREV describes the same expression, so an\neval started by `hive-mcp-cider-memory-eval-with-context' keeps its context\nonce the asynchronous result arrives."
+  (list :expr expr :ns ns :result result :context (when (and prev (equal expr (plist-get prev :expr)))
+    (plist-get prev :context))))
+
+(defun hive-mcp-cider-memory-format-entry (capture)
+  "Render CAPTURE, a capture plist, as memory entry content."
+  (let* ((ctx (plist-get capture :context))
+        (buffer (plist-get (plist-get ctx :buffer) :name))
+        (project (plist-get (plist-get ctx :project) :name)))
+    (concat (format "Namespace: %s\nExpression: %s\nResult: %s" (plist-get capture :ns) (plist-get capture :expr) (plist-get capture :result)) (if ctx (format "\nContext: %s @ %s" buffer project) ""))))
+
+(defun hive-mcp-cider-memory-response-result (response)
+  "Return the result payload carried by nREPL RESPONSE, or nil.\nA cljel session answers with compiled Elisp instead of a printed value."
+  (or (nrepl-dict-get response "value") (nrepl-dict-get response "cljel-compiled-elisp")))
+
+(defun hive-mcp-cider-memory-response-done-p (response)
+  "Return non-nil when nREPL RESPONSE closes its request."
+  (and (member "done" (nrepl-dict-get response "status")) t))
+
+(defun hive-mcp-cider-memory--current-ns ()
+  "Return the current CIDER namespace, or nil when CIDER is absent."
+  (when (fboundp 'cider-current-ns)
+    (ignore-errors (cider-current-ns))))
+
+(defun hive-mcp-cider-memory-note-eval (expr ns result)
+  "Record EXPR, NS and RESULT as the last capture when RESULT clears threshold.\nReturns the stored capture plist, or nil when RESULT was rejected."
+  (when (hive-mcp-cider-memory-capture-result-p result hive-mcp-cider-memory-log-threshold)
+    (setq hive-mcp-cider-memory--last-eval (hive-mcp-cider-memory-merge-capture hive-mcp-cider-memory--last-eval expr ns result))))
+
+(defun hive-mcp-cider-memory-make-capture-callback (expr ns callback)
+  "Return an nREPL callback recording EXPR's result, then delegating to CALLBACK.\nValues accumulate across response chunks; the capture lands on \"done\"."
+  (let* ((acc (make-vector 1 nil)))
+    (lambda (response)
+    (let* ((value (hive-mcp-cider-memory-response-result response)))
+    (when value
+    (aset acc 0 value)))
+    (when (hive-mcp-cider-memory-response-done-p response)
+    (hive-mcp-cider-memory-note-eval expr ns (aref acc 0)))
+    (when callback
+    (funcall callback response)))))
+
+(defun hive-mcp-cider-memory-eval-request-advice (orig-fun input callback &rest args)
+  "Advice around ORIG-FUN, `cider-nrepl-request:eval', capturing INPUT's result.\nCALLBACK is wrapped while auto-log is on; ARGS are forwarded unchanged."
+  (apply orig-fun input (if hive-mcp-cider-memory-auto-log (hive-mcp-cider-memory-make-capture-callback input (hive-mcp-cider-memory--current-ns) callback) callback) args))
+
+(defun hive-mcp-cider-memory-auto-log-enabled-p ()
+  "Return non-nil when the capture advice is installed."
+  (and (advice-member-p #'hive-mcp-cider-memory-eval-request-advice hive-mcp-cider-memory-eval-advice-target) t))
+
+(defun hive-mcp-cider-memory-enable-auto-log ()
+  "Install the capture advice and turn auto-log on."
+  (advice-add hive-mcp-cider-memory-eval-advice-target :around #'hive-mcp-cider-memory-eval-request-advice)
+  (setq hive-mcp-cider-memory-auto-log t))
+
+(defun hive-mcp-cider-memory-disable-auto-log ()
+  "Remove the capture advice and turn auto-log off."
+  (advice-remove hive-mcp-cider-memory-eval-advice-target #'hive-mcp-cider-memory-eval-request-advice)
+  (setq hive-mcp-cider-memory-auto-log nil))
+
+(defun hive-mcp-cider-memory-toggle-auto-log ()
+  "Toggle automatic capture of REPL results.\nReturns the new state."
+  (interactive)
+  (if (hive-mcp-cider-memory-auto-log-enabled-p) (hive-mcp-cider-memory-disable-auto-log) (hive-mcp-cider-memory-enable-auto-log))
+  (message "Auto-log %s" (if hive-mcp-cider-memory-auto-log "enabled" "disabled"))
+  hive-mcp-cider-memory-auto-log)
 
 (defun hive-mcp-cider-memory-save-last-result ()
-  "Save the last REPL result to memory."
+  "Save the last captured REPL result to memory."
   (interactive)
-  (if hive-mcp-cider-memory--last-eval (let* ((expr (plist-get hive-mcp-cider-memory--last-eval :expr))
-        (result (plist-get hive-mcp-cider-memory--last-eval :result))
-        (ns (plist-get hive-mcp-cider-memory--last-eval :ns))
-        (tags (split-string (clel-read-string "Tags (comma-separated): " "clojure,repl") "," t " "))
-        (content (format "Namespace: %s\nExpression: %s\nResult: %s" ns expr result)))
+  (if hive-mcp-cider-memory--last-eval (let* ((tags (split-string (clel-read-string "Tags (comma-separated): " "clojure,repl") "," t " "))
+        (content (hive-mcp-cider-memory-format-entry hive-mcp-cider-memory--last-eval)))
     (hive-mcp-api-memory-add "snippet" content tags)
-    (message "Saved REPL result to memory")) (message "No recent REPL result to save")))
+    (message "Saved REPL result to memory")
+    content) (progn
+  (message "No recent REPL result to save")
+  nil)))
 
 (defun hive-mcp-cider-memory-save-defun ()
   "Save the current function definition to memory."
@@ -51,57 +137,86 @@
   (let* ((bounds (bounds-of-thing-at-point 'defun))
         (defun-text (when bounds
     (buffer-substring-no-properties (car bounds) (cdr bounds))))
-        (ns (when (fboundp 'cider-current-ns)
-    (cider-current-ns)))
-        (tags (split-string (clel-read-string "Tags (comma-separated): " "clojure,function") "," t " ")))
-    (if defun-text (let* ((content (format "Namespace: %s\n\n%s" ns defun-text)))
+        (ns (hive-mcp-cider-memory--current-ns)))
+    (if defun-text (let* ((tags (split-string (clel-read-string "Tags (comma-separated): " "clojure,function") "," t " "))
+        (content (format "Namespace: %s\n\n%s" ns defun-text)))
     (hive-mcp-api-memory-add "snippet" content tags)
-    (message "Saved function to memory")) (message "No function at point"))))
+    (message "Saved function to memory")
+    content) (progn
+  (message "No function at point")
+  nil))))
+
+(defun hive-mcp-cider-memory-query-plan (query limit semantic-available)
+  "Return the memory lookup plan for QUERY under LIMIT.\nFree text goes to semantic search when SEMANTIC-AVAILABLE; otherwise its\nwhitespace-separated words become extra tags on a typed snippet query. An empty\nQUERY keeps the plain clojure-tagged listing."
+  (let* ((terms (when query
+    (split-string query nil t))))
+    (cond
+  ((null terms) (list :mode 'tags :type "snippet" :tags '("clojure") :limit limit))
+  (semantic-available (list :mode 'semantic :query query :limit limit))
+  (t (list :mode 'tags :type "snippet" :tags (cons "clojure" terms) :limit limit)))))
+
+(defun hive-mcp-cider-memory-run-plan (plan)
+  "Execute the `hive-mcp-cider-memory-query-plan' PLAN and return its entries."
+  (if (eq 'semantic (plist-get plan :mode)) (hive-mcp-memory-search (plist-get plan :query) nil (plist-get plan :limit)) (hive-mcp-api-memory-query (plist-get plan :type) (plist-get plan :tags) (plist-get plan :limit))))
+
+(defun hive-mcp-cider-memory-entry-seq (results)
+  "Normalize RESULTS, a vector or list, to a list."
+  (cond
+  ((null results) '())
+  ((vectorp results) (append results '()))
+  ((listp results) results)
+  (t '())))
+
+(defun hive-mcp-cider-memory-entry-field (entry key)
+  "Read KEY, a symbol such as `content', from ENTRY.\nENTRY may be alist-shaped (API results) or plist-shaped (memory results)."
+  (cond
+  ((null entry) nil)
+  ((and (consp entry) (consp (car entry))) (alist-get key entry))
+  ((listp entry) (plist-get entry (intern (concat ":" (symbol-name key)))))
+  (t nil)))
+
+(defun hive-mcp-cider-memory-render-entries (plan entries)
+  "Return the buffer text listing ENTRIES retrieved by PLAN."
+  (let* ((text (format ";; === Clojure Solutions from Memory (%s: %s) ===\n\n" (plist-get plan :mode) (or (plist-get plan :query) (mapconcat #'identity (plist-get plan :tags) ", "))))
+        (index 0))
+    (if (null entries) (concat text ";; No solutions found\n") (progn
+  (dolist (entry entries)
+    (setq index (1+ index))
+    (setq text (concat text (format ";; --- Entry %d [%s] ---\n" index (mapconcat #'identity (hive-mcp-cider-memory-entry-seq (hive-mcp-cider-memory-entry-field entry 'tags)) ", ")) (format "%s" (or (hive-mcp-cider-memory-entry-field entry 'content) "")) "\n\n")))
+  text))))
 
 (defun hive-mcp-cider-memory-query-solutions (query)
   "Query memory for Clojure solutions matching QUERY."
-  (interactive "sSearch for: ")
-  (let* ((results (hive-mcp-api-memory-query "snippet" '("clojure") 20))
+  (interactive "sSearch memory for: ")
+  (let* ((plan (hive-mcp-cider-memory-query-plan query hive-mcp-cider-memory-query-limit (fboundp 'hive-mcp-memory-search)))
+        (entries (hive-mcp-cider-memory-entry-seq (hive-mcp-cider-memory-run-plan plan)))
         (buf (get-buffer-create "*MCP Clojure Solutions*")))
     (with-current-buffer buf
     (erase-buffer)
-    (clojure-mode)
-    (insert ";; === Clojure Solutions from Memory ===\n\n")
-    (if (equal (length results) 0) (insert ";; No solutions found\n") (cl-dotimes (i (length results))
-    (let* ((entry (aref results i))
-        (content (alist-get 'content entry))
-        (tags (alist-get 'tags entry)))
-    (insert (format ";; --- Entry %d [%s] ---\n" (1+ i) (mapconcat #'identity tags ", ")))
-    (insert content)
-    (insert "\n\n"))))
+    (when (fboundp 'clojure-mode)
+    (clojure-mode))
+    (insert (hive-mcp-cider-memory-render-entries plan entries))
     (goto-char (point-min)))
-    (display-buffer buf)))
+    (display-buffer buf)
+    buf))
+
+(defun hive-mcp-cider-memory--interactive-callback (expr ns)
+  "Return the nREPL callback for an interactive eval of EXPR in NS.\nCIDER's own handler is wrapped with capture only when the auto-log advice is\nabsent, so a result is recorded exactly once either way."
+  (let* ((handler (when (fboundp 'cider-interactive-eval-handler)
+    (cider-interactive-eval-handler))))
+    (if (hive-mcp-cider-memory-auto-log-enabled-p) handler (hive-mcp-cider-memory-make-capture-callback expr ns handler))))
 
 (defun hive-mcp-cider-memory-eval-with-context ()
-  "Evaluate expression with MCP context injected as comment."
+  "Evaluate the last expression, recording MCP context with its result."
   (interactive)
   (when (fboundp 'cider-interactive-eval)
     (let* ((ctx (hive-mcp-api-get-context))
-        (ctx-comment (format ";; Context: %s @ %s\n" (plist-get (plist-get ctx :buffer) :name) (plist-get (plist-get ctx :project) :name)))
         (expr (when (fboundp 'cider-last-sexp)
-    (cider-last-sexp))))
-    (setq hive-mcp-cider-memory--last-eval (list :expr expr :ns (when (fboundp 'cider-current-ns)
-    (cider-current-ns)) :context ctx))
-    (cider-interactive-eval expr))))
-
-(defun hive-mcp-cider-memory-after-eval-advice (orig-fun &rest args)
-  "Advice around ORIG-FUN with ARGS to capture eval results for saving."
-  (let* ((result (apply orig-fun args)))
-    (when (and hive-mcp-cider-memory-auto-log result (> (length (format "%s" result)) hive-mcp-cider-memory-log-threshold))
-    (setq hive-mcp-cider-memory--last-eval (list :expr (car args) :result result :ns (when (fboundp 'cider-current-ns)
-    (cider-current-ns)))))
-    result))
-
-(defun hive-mcp-cider-memory-toggle-auto-log ()
-  "Toggle automatic logging of REPL results."
-  (interactive)
-  (setq hive-mcp-cider-memory-auto-log (not hive-mcp-cider-memory-auto-log))
-  (message "Auto-log %s" (if hive-mcp-cider-memory-auto-log "enabled" "disabled")))
+    (cider-last-sexp)))
+        (ns (hive-mcp-cider-memory--current-ns)))
+    (setq hive-mcp-cider-memory--last-eval (list :expr expr :ns ns :result nil :context ctx))
+    (cider-interactive-eval expr (hive-mcp-cider-memory--interactive-callback expr ns))
+    expr)))
 
 (provide 'hive-mcp-cider-memory)
 ;;; hive-mcp-cider-memory.el ends here
