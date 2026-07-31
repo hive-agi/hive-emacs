@@ -34,7 +34,7 @@
   :group 'hive-mcp-cider
   :type 'string)
 
-(defcustom hive-mcp-cider-nrepl-cider-nrepl-version "0.58.0"
+(defcustom hive-mcp-cider-nrepl-cider-nrepl-version "0.62.2"
   "cider-nrepl version for inline -Sdeps spawn."
   :group 'hive-mcp-cider
   :type 'string)
