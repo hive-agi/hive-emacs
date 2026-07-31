@@ -1,0 +1,50 @@
+{:min-bb-version "1.3.0"
+
+ :tasks
+ {:requires ([babashka.fs :as fs]
+             [clojure.string :as str])
+
+  :init (do
+          (def repo-root (str (fs/parent (fs/absolutize *file*))))
+          ;; ERT artifacts are the *-test.el siblings build.sh writes next to their
+          ;; .cljel sources; claude_code_ide is upstream and never built here.
+          (defn ert-artifacts []
+            (->> (fs/glob repo-root "src/cljel/**/*-test.el")
+                 (map str)
+                 (remove (fn [f] (str/includes? f "claude_code_ide")))
+                 sort)))
+
+  build
+  {:doc  "Compile src/cljel/**/*.cljel to elisp/ (+ sibling ERT artifacts)."
+   :task (shell {:dir repo-root} "./build.sh")}
+
+  parity
+  {:doc  "Fail if any committed .el artifact is stale w.r.t. its .cljel source."
+   :task (shell {:dir repo-root} "bash" "scripts/check-cljel-parity.sh")}
+
+  test
+  {:doc  "Run the Clojure test suite (self-contained: published deps only)."
+   :task (shell {:dir repo-root} "clojure" "-M:test")}
+
+  ert-files
+  {:doc  "List the ERT artifacts the batch runner loads, one per line."
+   :task (run! println (ert-artifacts))}
+
+  test:ert
+  {:doc  "Run the addon ERT suites in a headless emacs -Q --batch process."
+   :task (let [files (ert-artifacts)
+               dirs  (distinct (map (fn [f] (str (fs/parent f))) files))]
+           (when (empty? files)
+             (println "No ERT artifacts found under src/cljel — run `bb build` first.")
+             (System/exit 1))
+           (apply shell {:dir repo-root}
+                  "emacs" "-Q" "--batch"
+                  (concat ["-L" (str (fs/path repo-root "elisp"))]
+                          (mapcat (fn [d] ["-L" d]) dirs)
+                          ["-l" "ert"]
+                          (mapcat (fn [f] ["-l" f]) files)
+                          ["-f" "ert-run-tests-batch-and-exit"])))}
+
+  test:all
+  {:doc     "Clojure suite + elisp parity + ERT suites."
+   :depends [test parity test:ert]}}}

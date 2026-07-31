@@ -74,6 +74,31 @@ clojure -M:ansatz-test
 bash scripts/check-cljel-parity.sh
 ```
 
+`clojure -M:test` is self-contained: it resolves published artifacts only and
+carries no host dependency (`hive-emacs.dependency-boundary-test` enforces that).
+
+The elisp side is covered by ERT, not `clojure.test`. Babashka wraps both halves:
+
+```bash
+bb build      # compile src/cljel/**/*.cljel
+bb parity     # committed .el artifacts match their .cljel sources
+bb test       # Clojure suite
+bb test:ert   # addon ERT suites in emacs -Q --batch (never touches a daemon)
+bb test:all   # all three
+```
+
+### Elisp artifact layout
+
+| source                              | artifact                     | shipped |
+| ----------------------------------- | ---------------------------- | ------- |
+| `src/cljel/**/<name>.cljel`          | `elisp/<provide>.el`         | yes     |
+| `src/cljel/**/<name>_test.cljel`     | `<source dir>/<provide>.el`  | no      |
+| `src/cljel/claude_code_ide/*.cljel`  | not built (upstream package) | n/a     |
+
+`build.sh` compiles into a staging directory and swaps `elisp/` in only after
+every source compiles, so a failed build never leaves a partial load-path and
+never removes a committed artifact.
+
 Malli is the source for runtime validation, generated property/contract/mutation
 tests, and Typed Clojure aliases. The Ansatz suite proves the saturating capacity
 laws over every natural number and checks its executable model against the

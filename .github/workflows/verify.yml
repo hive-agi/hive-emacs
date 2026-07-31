@@ -66,6 +66,7 @@ jobs:
         uses: DeLaGuardo/setup-clojure@12.5
         with:
           cli: latest
+          bb: latest
 
       - name: Install Emacs
         run: |
@@ -75,22 +76,7 @@ jobs:
       - name: Verify generated Elisp
         env:
           CLEL_HOME: ${{ github.workspace }}/.cache/clojure-elisp
-        run: bash scripts/check-cljel-parity.sh
+        run: bb parity
 
-      - name: Run CIDER eval ERT tests
-        run: >-
-          emacs -Q --batch
-          -L elisp
-          -L src/cljel/hive_mcp/addons/cider
-          -l ert
-          -l hive-mcp-cider-eval-test.el
-          -f ert-run-tests-batch-and-exit
-
-      - name: Run CIDER session ERT tests
-        run: >-
-          emacs -Q --batch
-          -L elisp
-          -L src/cljel/hive_mcp/addons/cider
-          -l ert
-          -l hive-mcp-cider-sessions-test.el
-          -f ert-run-tests-batch-and-exit
+      - name: Run addon ERT suites
+        run: bb test:ert
