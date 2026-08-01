@@ -57,9 +57,10 @@ directly."
     (should (member "-M:dev" cmd))
     (should-not (member "-M" cmd))))
 
-(ert-deftest hive-mcp-cider-nrepl-test-build-command-has-no-dir-param nil
-  "The dead DIR parameter is gone — the caller owns the working directory."
-  (should-error (hive-mcp-cider-nrepl-build-command 'clj 7999 "/tmp")))
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-rejects-extra-arity nil
+  "build-command takes (repl-type port &optional extra-args aliases extra-deps)
+— a sixth argument signals."
+  (should-error (hive-mcp-cider-nrepl-build-command 'clj 7999 nil nil nil nil)))
 
 (ert-deftest hive-mcp-cider-nrepl-test-build-command-cljel-middleware nil
   "The cljel command pins the canonical clojure-elisp checkout and its middleware."
@@ -221,3 +222,107 @@ signalling `stringp, nil' from start-process."
   "Run all hive-mcp-cider-nrepl ERT tests in batch."
   (interactive)
   (ert-run-tests-batch-and-exit "^hive-mcp-cider-nrepl-test-"))
+
+(ert-deftest hive-mcp-cider-nrepl-test-local-deps-contents-detects-file nil
+  "A local.deps.edn in DIR yields its contents, in probe order."
+  (let [dir (make-temp-file "hive-mcp-cider-nrepl-test" t)]
+    (unwind-protect
+        (let [hive-mcp-cider-nrepl-local-deps-files '("local.deps.edn")]
+          (with-temp-file (expand-file-name "local.deps.edn" dir)
+            (insert "{:deps {my/lib {:local/root \"../lib\"}}}"))
+          (should (equal '("{:deps {my/lib {:local/root \"../lib\"}}}")
+                         (hive-mcp-cider-nrepl-local-deps-contents dir))))
+      (delete-directory dir t))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-local-deps-contents-absent-and-disabled nil
+  "No probe file means no contents; a nil defcustom disables detection entirely."
+  (let [dir (make-temp-file "hive-mcp-cider-nrepl-test" t)]
+    (unwind-protect
+        (progn
+          (let [hive-mcp-cider-nrepl-local-deps-files '("local.deps.edn")]
+            (should-not (hive-mcp-cider-nrepl-local-deps-contents dir)))
+          (let [hive-mcp-cider-nrepl-local-deps-files nil]
+            (with-temp-file (expand-file-name "local.deps.edn" dir)
+              (insert "{:deps {}}"))
+            (should-not (hive-mcp-cider-nrepl-local-deps-contents dir))))
+      (delete-directory dir t))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-merge-deps-edn-merges-into-one-sdeps nil
+  "Overrides merge key-wise into the base map — the CLI keeps only the last
+-Sdeps, so the spawn command must carry ONE merged map."
+  (let [merged (hive-mcp-cider-nrepl-merge-deps-edn
+                "{:deps {nrepl/nrepl {:mvn/version \"1.7.0\"}}}"
+                '("{:deps {my/lib {:local/root \"../lib\"}}}"
+                  "{:aliases {:test {}}}"))]
+    (should (string-match-p "nrepl/nrepl" merged))
+    (should (string-match-p "my/lib" merged))
+    (should (string-match-p ":test" merged)))
+  (should (string-match-p "0.62.2"
+                          (hive-mcp-cider-nrepl-merge-deps-edn
+                           "{:deps {cider/cider-nrepl {:mvn/version \"0.1.0\"}}}"
+                           '("{:deps {cider/cider-nrepl {:mvn/version \"0.62.2\"}}}")))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-launch-process-merges-local-deps nil
+  "launch-process carries ONE -Sdeps merging built-in nrepl deps with
+local.deps.edn, and it lands before -M."
+  (let [dir (make-temp-file "hive-mcp-cider-nrepl-test" t)
+        captured nil]
+    (unwind-protect
+        (let [hive-mcp-cider-nrepl-local-deps-files '("local.deps.edn")
+              hive-mcp-cider-nrepl-launch-aliases nil]
+          (with-temp-file (expand-file-name "local.deps.edn" dir)
+            (insert "{:deps {my/lib {:local/root \"../lib\"}}}"))
+          (cl-letf (((symbol-function 'start-process)
+                     (lambda (name buffer &rest cmd)
+                       (setq captured cmd)
+                       'stub-process)))
+            (should (eq 'stub-process
+                        (hive-mcp-cider-nrepl-launch-process "s" 7999 'clj dir)))
+            (should (equal 1 (length (delq nil (mapcar (lambda (a)
+                                                         (and (stringp a)
+                                                              (string= "-Sdeps" a)))
+                                                       captured)))))
+            (let* ((sdeps-pos (cl-position "-Sdeps" captured :test #'equal))
+                   (sdeps-val (nth captured (1+ sdeps-pos)))
+                   (m-pos (cl-position "-M" captured :test #'equal)))
+              (should (string-match-p "nrepl/nrepl" sdeps-val))
+              (should (string-match-p "my/lib" sdeps-val))
+              (should (< sdeps-pos m-pos)))))
+      (delete-directory dir t))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-extra-args-exact-argv nil
+  "EXTRA-ARGS splice raw after -Sdeps and before the -M flag. A raw -Sdeps
+there REPLACES the built-in one (the CLI keeps only the last) — merge-style
+layering belongs in EXTRA-DEPS, not EXTRA-ARGS."
+  (let [cmd (let [hive-mcp-cider-nrepl-launch-aliases nil
+                  hive-mcp-cider-nrepl-version "1.7.0"
+                  hive-mcp-cider-nrepl-cider-nrepl-version "0.62.2"]
+              (hive-mcp-cider-nrepl-build-command 'clj 7999 '("-Sdeps" "{:deps {my/lib {:local/root \"../lib\"}}}") '("test")))]
+    (should (equal cmd
+                   '("clojure" "-Sdeps" "{:deps {nrepl/nrepl {:mvn/version \"1.7.0\"} cider/cider-nrepl {:mvn/version \"0.62.2\"}}}"
+                     "-Sdeps" "{:deps {my/lib {:local/root \"../lib\"}}}"
+                     "-M:test" "-m" "nrepl.cmdline"
+                     "--port" "7999"
+                     "--middleware" "[cider.nrepl/cider-middleware]")))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-per-spawn-aliases-override nil
+  "A per-spawn ALIASES argument overrides the launch-aliases defcustom."
+  (let [cmd (let [hive-mcp-cider-nrepl-launch-aliases nil]
+              (hive-mcp-cider-nrepl-build-command 'clj 7999 nil '("test")))]
+    (should (member "-M:test" cmd))
+    (should-not (member "-M" cmd))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-launch-process-forwards-extra-args nil
+  "launch-process forwards EXTRA-ARGS and ALIASES into the spawned argv."
+  (let [dir (make-temp-file "hive-mcp-cider-nrepl-test" t)
+        captured nil]
+    (unwind-protect
+        (cl-letf (((symbol-function 'start-process)
+                   (lambda (name buffer &rest cmd)
+                     (setq captured cmd)
+                     'stub-process)))
+          (should (eq 'stub-process
+                      (hive-mcp-cider-nrepl-launch-process "s" 7999 'clj dir '("-Sdeps" "{:deps {}}") '("test"))))
+          (should (member "{:deps {}}" captured))
+          (should (member "-M:test" captured)))
+      (delete-directory dir t))))

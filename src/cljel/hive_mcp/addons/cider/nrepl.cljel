@@ -10,6 +10,7 @@ Design principles (SOLID/CLARITY):
 - Pure where possible: build-command is a pure function")
 
 (require 'cl-lib)
+(require 'parseedn)
 
 ;; ============================================================================
 ;; Configuration
@@ -65,6 +66,14 @@ Example: '(\"dev\") launches clojure -Sdeps ... -M:dev -m nrepl.cmdline."
   :type '(repeat string)
   :group 'hive-mcp-cider)
 
+(defcustom hive-mcp-cider-nrepl-local-deps-files '("local.deps.edn")
+  "Files probed in the spawn working directory for -Sdeps layering.
+Each existing file's contents splice into the spawn command as an extra
+-Sdeps, after the built-in one and before -M — the spawn-time equivalent of
+-Sdeps \"$(cat <file>)\". Nil disables detection."
+  :type '(repeat string)
+  :group 'hive-mcp-cider)
+
 ;; ============================================================================
 ;; Internal State
 ;; ============================================================================
@@ -90,35 +99,83 @@ A leading colon on an alias name is tolerated. This is a pure function."
         (elisp-concat "-M" (mapconcat (lambda (n) (elisp-concat ":" n)) names ""))
       "-M")))
 
-(defn build-command [repl-type port]
+(defn local-deps-contents [dir]
+  "Return the contents of `hive-mcp-cider-nrepl-local-deps-files' present in
+DIR, in probe order. Nil when none exist or detection is off."
+  (when (and dir (listp hive-mcp-cider-nrepl-local-deps-files))
+    (delq nil
+          (mapcar (lambda (f)
+                    (let [path (expand-file-name f dir)]
+                      (when (file-readable-p path)
+                        (with-temp-buffer
+                          (insert-file-contents path)
+                          (buffer-string)))))
+                  hive-mcp-cider-nrepl-local-deps-files))))
+
+(defn- -deep-merge [base override]
+  "Merge OVERRIDE hash-table into BASE hash-table recursively, in place.
+Nested maps merge key-wise; any other value is replaced. Returns BASE."
+  (maphash (lambda (k v)
+             (puthash k (let [old (gethash k base)]
+                          (if (and (hash-table-p old) (hash-table-p v))
+                              (-deep-merge old v)
+                            v))
+                      base))
+           override)
+  base)
+
+(defn merge-deps-edn [base-str override-strs]
+  "Merge the deps EDN map BASE-STR with each of OVERRIDE-STRS, in order, and
+return a single EDN string. The clojure CLI keeps only the LAST -Sdeps (the
+bash script assigns one var), so layered deps must be merged into one map:
+-Sdeps A -Sdeps B discards A entirely."
+  (let [merged (parseedn-read-str base-str)]
+    (dolist (s override-strs)
+      (when (and (stringp s) (not (string= "" s)))
+        (-deep-merge merged (parseedn-read-str s))))
+    (parseedn-print-str merged)))
+
+(defn build-command [repl-type port &optional extra-args aliases extra-deps]
   "Build the nREPL start command for REPL-TYPE on PORT.
 Returns a list of (program . args) for `start-process'; the caller owns the
 working directory. REPL-TYPE is one of 'clj, 'cljs, or 'cljel.
-Uses inline -Sdeps plus `hive-mcp-cider-nrepl-launch-aliases' so spawn works in
-any project without requiring a :nrepl or :dev alias.
+Uses inline -Sdeps plus ALIASES (default `hive-mcp-cider-nrepl-launch-aliases')
+so spawn works in any project without requiring a :nrepl or :dev alias.
+EXTRA-DEPS is a list of deps EDN strings (e.g. local.deps.edn contents)
+merged into the built-in -Sdeps map via `merge-deps-edn' — the CLI keeps
+only the last -Sdeps, so layering must merge, not repeat the flag.
+EXTRA-ARGS is a list of raw CLI args spliced after -Sdeps and before the -M
+main flag (e.g. '(\"-Srepro\") or JVM opts); everything after -M is
+main-opts, so CLI opts must precede it.
 This is a pure function — no side effects."
   (let [port-str (number-to-string port)
-        main-flag (launch-flag hive-mcp-cider-nrepl-launch-aliases)
+        main-flag (launch-flag (or aliases hive-mcp-cider-nrepl-launch-aliases))
         clj-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"}}}"
                          hive-mcp-cider-nrepl-version
                          hive-mcp-cider-nrepl-cider-nrepl-version)
         cljel-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"} io.github.BuddhiLW/clojure-elisp {:local/root \"%s\"}}}"
                            hive-mcp-cider-nrepl-version
                            hive-mcp-cider-nrepl-cider-nrepl-version
-                           (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir))]
+                           (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir))
+        sdeps-for (lambda (base)
+                    (if extra-deps
+                        (merge-deps-edn base extra-deps)
+                      base))]
     (pcase repl-type
       ('cljs
        (list "npx" "shadow-cljs" "watch" hive-mcp-cider-nrepl-shadow-build))
       ('cljel
-       (list "clojure" "-Sdeps" cljel-deps
-             main-flag "-m" "nrepl.cmdline"
-             "--port" port-str
-             "--middleware" "[cider.nrepl/cider-middleware,clojure-elisp.nrepl/wrap-cljel]"))
+       (append (list "clojure" "-Sdeps" (funcall sdeps-for cljel-deps))
+               extra-args
+               (list main-flag "-m" "nrepl.cmdline"
+                     "--port" port-str
+                     "--middleware" "[cider.nrepl/cider-middleware,clojure-elisp.nrepl/wrap-cljel]")))
       (_
-       (list "clojure" "-Sdeps" clj-deps
-             main-flag "-m" "nrepl.cmdline"
-             "--port" port-str
-             "--middleware" "[cider.nrepl/cider-middleware]")))))
+       (append (list "clojure" "-Sdeps" (funcall sdeps-for clj-deps))
+               extra-args
+               (list main-flag "-m" "nrepl.cmdline"
+                     "--port" port-str
+                     "--middleware" "[cider.nrepl/cider-middleware]"))))))
 
 (defn project-dir [repl-type]
   "Resolve the project directory for REPL-TYPE.
@@ -167,9 +224,11 @@ Returns t if port is open, nil otherwise."
 ;; Process Lifecycle
 ;; ============================================================================
 
-(defn launch-process [name port repl-type &optional dir]
+(defn launch-process [name port repl-type &optional dir extra-args aliases]
   "Start an nREPL process named NAME on PORT for REPL-TYPE.
 Optional DIR overrides the working directory.
+`local-deps-contents' of the resolved dir (e.g. local.deps.edn) merge into
+the built-in -Sdeps; EXTRA-ARGS splice raw before -M; ALIASES select -M.
 Errors if no dir can be resolved — explicit project routing only.
 Returns the process object."
   (let* [resolved-dir (or dir (project-dir repl-type))]
@@ -178,7 +237,10 @@ Returns the process object."
              name (symbol-name repl-type)))
     (let* [default-directory (file-name-as-directory resolved-dir)
            buf-name (format "*nREPL-%s*" name)
-           cmd (build-command repl-type port)]
+           cmd (build-command repl-type port
+                              extra-args
+                              aliases
+                              (local-deps-contents resolved-dir))]
       (apply #'start-process (format "nrepl-%s" name) buf-name cmd))))
 
 (defn stop-process [process]
@@ -189,7 +251,9 @@ Returns the process object."
 (defn start-default [&optional dir]
   "Start the default nREPL server on `hive-mcp-cider-nrepl-port'.
 The working directory is `default-project-dir' of DIR; the command is
-`build-command' for 'clj, so no project alias is required.
+`build-command' for 'clj with `local-deps-contents' of the resolved
+directory merged into the built-in -Sdeps, so no project alias is required
+and a local deps override is honored.
 Signals an error naming the unset settings when no directory resolves, and
 another when the resolved directory does not exist. Returns the process."
   (interactive)
@@ -199,7 +263,9 @@ another when the resolved directory does not exist. Returns the process."
     (unless (file-directory-p resolved)
       (error "hive-mcp-cider-nrepl: default nREPL directory does not exist: %s" resolved))
     (let* [default-directory (file-name-as-directory resolved)
-           cmd (build-command 'clj hive-mcp-cider-nrepl-port)]
+           cmd (build-command 'clj hive-mcp-cider-nrepl-port
+                              nil nil
+                              (local-deps-contents resolved))]
       (message "hive-mcp-cider-nrepl: Starting on port %s in %s..."
                hive-mcp-cider-nrepl-port default-directory)
       (setq hive-mcp-cider-nrepl--default-process

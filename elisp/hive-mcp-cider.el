@@ -64,16 +64,16 @@
   (hive-mcp-cider-sessions-list-all))
 
 (defun hive-mcp-cider-spawn-session-from-plist (params)
-  "Spawn a new CIDER session from a structured request plist.\nMCP entry point — named params prevent positional arg ordering bugs.\nPARAMS is a plist with keys :name, :repl-type, :port, :project-dir, :agent-id.\nDelegates to spawn-session after destructuring."
-  (hive-mcp-cider-spawn-session (plist-get params :name) (plist-get params :repl-type) (plist-get params :port) (plist-get params :project-dir) (plist-get params :agent-id)))
+  "Spawn a new CIDER session from a structured request plist.\nMCP entry point — named params prevent positional arg ordering bugs.\nPARAMS is a plist with keys :name, :repl-type, :port, :project-dir,\n:agent-id, :extra-args, :aliases.\nDelegates to spawn-session after destructuring."
+  (hive-mcp-cider-spawn-session (plist-get params :name) (plist-get params :repl-type) (plist-get params :port) (plist-get params :project-dir) (plist-get params :agent-id) (plist-get params :extra-args) (plist-get params :aliases)))
 
-(defun hive-mcp-cider-spawn-session (name &optional repl-type port project-dir agent-id)
-  "Spawn a new named CIDER session with its own nREPL server.\nNAME is the session identifier (e.g., \"agent-1\", \"task-render\").\nREPL-TYPE is one of 'clj (default), 'cljs, or 'cljel.\nPORT is the nREPL port (default: auto-assign from session range).\nPROJECT-DIR is the directory to start nREPL in (default: current project).\nAGENT-ID optionally links this session to a swarm agent."
+(defun hive-mcp-cider-spawn-session (name &optional repl-type port project-dir agent-id extra-args aliases)
+  "Spawn a new named CIDER session with its own nREPL server.\nNAME is the session identifier (e.g., \"agent-1\", \"task-render\").\nREPL-TYPE is one of 'clj (default), 'cljs, or 'cljel.\nPORT is the nREPL port (default: auto-assign from session range).\nPROJECT-DIR is the directory to start nREPL in (default: current project).\nAGENT-ID optionally links this session to a swarm agent.\nEXTRA-ARGS is a list of raw clojure CLI args spliced after -Sdeps and\nbefore the -M flag (a raw -Sdeps there REPLACES the built-in one — the CLI\nkeeps only the last; merge-style layering is automatic via local.deps.edn\ndetection in `hive-mcp-cider-nrepl-local-deps-files').\nALIASES is a list of bare alias names (e.g. '(\"test\")) selecting the -M\nflag for this spawn, overriding `hive-mcp-cider-nrepl-launch-aliases'."
   (interactive "sSession name: ")
   (let* ((rtype (or repl-type 'clj))
         (the-port (or port (hive-mcp-cider-sessions-find-available-port #'hive-mcp-cider-nrepl-port-open-p)))
         (dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype)))
-        (process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir))
+        (process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir extra-args aliases))
         (timer (run-with-timer hive-mcp-cider-connection-spawn-initial-delay hive-mcp-cider-connection-retry-interval (lambda ()
     (condition-case err
     (hive-mcp-cider-connection-try-connect-session name)
