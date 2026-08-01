@@ -203,25 +203,30 @@ cljel target whose upgrade never confirmed reports clj rather than lying."
        (error "Session '%s' connect failed: %s" name (error-message-string err))))))
 
 (defn kill-session [name]
-  "Kill the CIDER session NAME — stops process and cleans up."
+  "Kill the CIDER session NAME — stops process and cleans up.
+Signals an error when NAME is blank or names no registered session."
   (interactive
    (list (completing-read "Kill session: "
                           (hive-mcp-cider-sessions-names))))
-  (let [session (hive-mcp-cider-sessions-lookup name)]
-    (when session
-      ;; Cancel any timer
-      (when-let* [timer (plist-get session :timer)]
-        (when (timerp timer) (cancel-timer timer)))
-      ;; Kill CIDER connection
-      (when-let* [cider-buf (plist-get session :cider-buffer)]
-        (when (get-buffer cider-buf)
-          (with-current-buffer cider-buf
-            (when (fboundp 'cider-quit) (cider-quit)))))
-      ;; Kill nREPL process
-      (hive-mcp-cider-nrepl-stop-process (plist-get session :process))
-      ;; Remove from registry
-      (hive-mcp-cider-sessions-unregister name)
-      (message "hive-mcp-cider: Session '%s' killed" name))))
+  (if (or (not name) (string= name ""))
+    (error "hive-mcp-cider: kill-session requires a session name")
+    (let [session (hive-mcp-cider-sessions-lookup name)]
+      (if (not session)
+        (error "hive-mcp-cider: unknown session '%s'" name)
+        (progn
+          ;; Cancel any timer
+          (when-let* [timer (plist-get session :timer)]
+            (when (timerp timer) (cancel-timer timer)))
+          ;; Kill CIDER connection
+          (when-let* [cider-buf (plist-get session :cider-buffer)]
+            (when (get-buffer cider-buf)
+              (with-current-buffer cider-buf
+                (when (fboundp 'cider-quit) (cider-quit)))))
+          ;; Kill nREPL process
+          (hive-mcp-cider-nrepl-stop-process (plist-get session :process))
+          ;; Remove from registry
+          (hive-mcp-cider-sessions-unregister name)
+          (message "hive-mcp-cider: Session '%s' killed" name))))))
 
 (defn kill-all-sessions []
   "Kill all CIDER sessions."

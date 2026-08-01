@@ -94,6 +94,15 @@
         (is (true? (:isError resp))))
       (is (empty? @calls)))))
 
+(deftest kill-session-unknown-surfaces-elisp-error
+  (let [{:keys [eval-fn]}
+        (make-stub (fn [_] {:success false
+                            :error "hive-mcp-cider: unknown session 'ghost'"}))]
+    (binding [cider/*eval-fn* eval-fn]
+      (let [resp (cider/handle-kill-session {:session_name "ghost"})]
+        (is (true? (:isError resp)))
+        (is (str/includes? (:text resp) "unknown session"))))))
+
 ;;; =============================================================================
 ;;; eval — session routing + auto-connect spawn
 ;;; =============================================================================
@@ -134,6 +143,27 @@
       (is (some #(str/includes? % "eval-in-session") @calls)))))
 
 ;;; =============================================================================
+;;; ensure-connected — the ICiderPort auto-connect verb
+;;; =============================================================================
+
+(deftest ensure-connected-returns-connected-session-name
+  (let [sessions-json "[{\"name\": \"auto-1\", \"status\": \"connected\", \"project-dir\": \"/proj\"}]"
+        {:keys [eval-fn]}
+        (make-stub (fn [_] {:success true :result sessions-json}))]
+    (binding [cider/*eval-fn* eval-fn]
+      (is (= "auto-1" (cider/ensure-connected "/proj"))))))
+
+(deftest ensure-connected-throws-on-spawn-failure
+  (let [{:keys [eval-fn]}
+        (make-stub (fn [code]
+                     (if (str/includes? code "list-sessions")
+                       {:success true :result "[]"}
+                       {:success false :error "daemon down"})))]
+    (binding [cider/*eval-fn* eval-fn]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (cider/ensure-connected "/proj"))))))
+
+;;; =============================================================================
 ;;; introspection — session arg normalization
 ;;; =============================================================================
 
@@ -163,6 +193,30 @@
                :sessions :kill-session :kill-all]]
       (is (contains? verbs v) (str "missing verb " v))))
   (is (ifn? (get-in cider/commands ["cider" :handler])))
-  (is (map? cider/spawn-schema-params))
-  (is (= #{"extra_args" "aliases" "extra_deps" "middleware"}
-         (set (keys cider/spawn-schema-params)))))
+  (is (map? cider/schema-params))
+  (is (= #{"code" "mode" "timeout" "symbol" "prefix" "pattern" "search_docs"
+           "session_name" "name" "host" "port" "project_dir" "agent_id"
+           "repl_type" "extra_args" "aliases" "extra_deps" "middleware"}
+         (set (keys cider/schema-params)))))
+
+;;; =============================================================================
+;;; contribute!/retract! — the injected :extension/* runtime ports do the work
+;;; =============================================================================
+
+(deftest contribute-uses-injected-runtime-port
+  (let [calls (atom [])]
+    (cider/contribute!
+     {:extension/contribute-commands!
+      (fn [tool addon cmds] (swap! calls conj [tool addon (keys cmds)]))})
+    (is (= [["code" "hive.emacs" '("cider")]] @calls))))
+
+(deftest contribute-noops-without-runtime-ports
+  (is (nil? (cider/contribute! nil)))
+  (is (nil? (cider/retract! nil))))
+
+(deftest retract-uses-injected-runtime-port
+  (let [calls (atom [])]
+    (cider/retract!
+     {:extension/retract-contributions!
+      (fn [addon] (swap! calls conj addon))})
+    (is (= ["hive.emacs"] @calls))))

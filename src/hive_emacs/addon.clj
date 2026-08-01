@@ -91,7 +91,7 @@
                    (daemon-store/start-heartbeat-loop!)
                    true))
                 bridge-ready? (ensure-elisp-loaded!)
-                _ (when bridge-ready? (cider-tool/contribute!))
+                _ (when bridge-ready? (cider-tool/contribute! (:runtime/ports config)))
                 metadata {:bridge-ready? bridge-ready?
                           :editor-id :emacsclient
                           :heartbeat-started? heartbeat-started?
@@ -101,7 +101,8 @@
                                set)}]
             (reset! state {:lifecycle :active
                            :metadata metadata
-                           :heartbeat-started? heartbeat-started?})
+                           :heartbeat-started? heartbeat-started?
+                           :runtime/ports (:runtime/ports config)})
             (log/info "hive-emacs initialized" metadata)
             {:success? true :errors [] :metadata metadata})
           (catch Exception e
@@ -115,7 +116,7 @@
 (defn- shutdown-addon!
   [state]
   (locking state
-    (cider-tool/retract!)
+    (cider-tool/retract! (:runtime/ports @state))
     (when (:heartbeat-started? @state)
       (daemon-store/stop-heartbeat-loop!))
     (ec/shutdown-executor!)
@@ -157,7 +158,9 @@
     (if (= :active (:lifecycle @state)) emacs-tool/tools []))
 
   (schema-extensions [_]
-    {"code" cider-tool/spawn-schema-params})
+    (if (= :active (:lifecycle @state))
+      {"code" cider-tool/schema-params}
+      []))
 
   (health [_]
     (addon-health state))

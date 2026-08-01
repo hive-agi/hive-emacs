@@ -105,21 +105,21 @@
       (error "Session '%s' connect failed: %s" name (error-message-string err))))))
 
 (defun hive-mcp-cider-kill-session (name)
-  "Kill the CIDER session NAME — stops process and cleans up."
+  "Kill the CIDER session NAME — stops process and cleans up.\nSignals an error when NAME is blank or names no registered session."
   (interactive (list (completing-read "Kill session: " (hive-mcp-cider-sessions-names))))
-  (let* ((session (hive-mcp-cider-sessions-lookup name)))
-    (when session
-    (when-let* ((timer (plist-get session :timer)))
+  (if (or (not name) (string= name "")) (error "hive-mcp-cider: kill-session requires a session name") (let* ((session (hive-mcp-cider-sessions-lookup name)))
+    (if (not session) (error "hive-mcp-cider: unknown session '%s'" name) (progn
+  (when-let* ((timer (plist-get session :timer)))
     (when (timerp timer)
     (cancel-timer timer)))
-    (when-let* ((cider-buf (plist-get session :cider-buffer)))
+  (when-let* ((cider-buf (plist-get session :cider-buffer)))
     (when (get-buffer cider-buf)
     (with-current-buffer cider-buf
     (when (fboundp 'cider-quit)
     (cider-quit)))))
-    (hive-mcp-cider-nrepl-stop-process (plist-get session :process))
-    (hive-mcp-cider-sessions-unregister name)
-    (message "hive-mcp-cider: Session '%s' killed" name))))
+  (hive-mcp-cider-nrepl-stop-process (plist-get session :process))
+  (hive-mcp-cider-sessions-unregister name)
+  (message "hive-mcp-cider: Session '%s' killed" name))))))
 
 (defun hive-mcp-cider-kill-all-sessions ()
   "Kill all CIDER sessions."

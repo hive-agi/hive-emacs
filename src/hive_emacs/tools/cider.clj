@@ -84,7 +84,7 @@
       (f))))
 
 ;;; =============================================================================
-;;; Auto-connect helpers (ported from hive-mcp.tools.cider)
+;;; Auto-connect helpers
 ;;; =============================================================================
 
 (defn- cider-not-connected-error?
@@ -185,6 +185,16 @@
                         (eval-thunk))
          r)))))
 
+(defn ensure-connected
+  "ICiderPort auto-connect verb: the name of a connected session for
+   PROJECT-DIR, spawning one when none is connected. Nil PROJECT-DIR falls
+   back to the daemon's project root. Throws ex-info on failure."
+  [project-dir]
+  (let [r (ensure-connected* project-dir)]
+    (if (result/ok? r)
+      (:ok r)
+      (throw (ex-info (or (:message r) "cider auto-connect failed") r)))))
+
 ;;; =============================================================================
 ;;; Eval handlers
 ;;; =============================================================================
@@ -280,9 +290,40 @@
 ;;; Session lifecycle handlers
 ;;; =============================================================================
 
-(def spawn-schema-params
-  "The addon-contributed `code` schema params for the full spawn CLI surface."
-  {"extra_args" {:type "array"
+(def schema-params
+  "The addon-contributed `code` schema params for the whole :cider subtree —
+   core's `code` tool advertises no cider keys of its own."
+  {"code" {:type "string"
+           :description "eval: Clojure code to evaluate"}
+   "mode" {:type "string"
+           :enum ["silent" "explicit"]
+           :description "eval: 'silent' (default) or 'explicit' (shows in REPL buffer)"}
+   "timeout" {:type "integer"
+              :description "eval: timeout in seconds (default: 60)"}
+   "symbol" {:type "string"
+             :description "doc/info: symbol name to look up"}
+   "prefix" {:type "string"
+             :description "complete: prefix to complete"}
+   "pattern" {:type "string"
+              :description "apropos: regex pattern to search"}
+   "search_docs" {:type "boolean"
+                  :description "apropos: also search docstrings"}
+   "session_name" {:type "string"
+                   :description "Named session to target: eval routes code there; kill-session kills it; doc/info/complete/apropos introspect inside that session's REPL (a cljel session resolves symbols in Emacs, not in the Clojure host). Omit for the current connection."}
+   "name" {:type "string"
+           :description "spawn/connect: session name"}
+   "host" {:type "string"
+           :description "connect: nREPL host (default: localhost)"}
+   "port" {:type "integer"
+           :description "connect: nREPL port; spawn: explicit port"}
+   "project_dir" {:type "string"
+                  :description "spawn: nREPL root. eval: routes to that project's nREPL session (spawning auto-<hash> if none). Defaults to the caller's cwd."}
+   "agent_id" {:type "string"
+               :description "spawn/connect: agent ID to link the session"}
+   "repl_type" {:type "string"
+                :enum ["clj" "cljs" "cljel"]
+                :description "spawn/connect: REPL type: clj (default), cljs (shadow-cljs), or cljel (ClojureElisp)"}
+   "extra_args" {:type "array"
                  :items {:type "string"}
                  :description "spawn only: raw clojure CLI args spliced after -Sdeps and before the -M flag (e.g. [\"-Srepro\"] or JVM opts like [\"-J-Xmx4g\"]). A raw -Sdeps here REPLACES the merged one — use extra_deps to layer instead. Everything after -M is main-opts, so CLI opts must go here."}
    "aliases" {:type "array"
@@ -400,22 +441,32 @@
   (subdomain-handler "cider" (tool/make-cli-handler handlers)))
 
 (def commands
-  "Command contribution map for hive-mcp.extensions.registry/contribute-commands!."
+  "Command contribution map for the host's :extension/contribute-commands!
+   runtime port."
   {"cider" {:handler     handle-cider-subdomain
-            :params      spawn-schema-params
+            :params      schema-params
             :description "CIDER REPL operations (hive.emacs addon): eval (silent|explicit), doc, info, complete, apropos, status, spawn (extra_args/aliases/extra_deps/middleware; local.deps.edn auto-detected), connect, sessions, kill-session, kill-all."}})
 
 (defn contribute!
-  "Register the :cider subtree into the host's `code` composite tool.
-   Soft-resolved — no-op outside a live hive-mcp host. Idempotent."
-  []
-  (when-let [contribute (resolve 'hive-mcp.extensions.registry/contribute-commands!)]
+  "Register the :cider subtree into the host's `code` composite tool and the
+   EmacsCiderPort into the hive-spi cider registry. RUNTIME-PORTS is the
+   host-injected port vocabulary (:extension/contribute-commands!) — nil
+   outside a live host, making this a no-op. Idempotent."
+  [runtime-ports]
+  (when-let [contribute (:extension/contribute-commands! runtime-ports)]
     (contribute "code" "hive.emacs" commands)
     (log/info "hive-emacs: contributed :cider subtree to `code`"
-              {:verbs (keys handlers)})))
+              {:verbs (keys handlers)}))
+  (when-let [register (result/rescue nil (requiring-resolve 'hive-emacs.cider.port/register!))]
+    (register))
+  nil)
 
 (defn retract!
-  "Retract the addon's `code` contributions. No-op outside a live host."
-  []
-  (when-let [retract (resolve 'hive-mcp.extensions.registry/retract-commands!)]
-    (retract "code" "hive.emacs")))
+  "Retract the addon's `code` contributions and the cider port. No-op outside
+   a live host."
+  [runtime-ports]
+  (when-let [retract (:extension/retract-contributions! runtime-ports)]
+    (retract "hive.emacs"))
+  (when-let [unregister (result/rescue nil (requiring-resolve 'hive-emacs.cider.port/unregister!))]
+    (unregister))
+  nil)

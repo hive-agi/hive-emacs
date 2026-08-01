@@ -1,0 +1,30 @@
+(ns hive-mcp-cider-test
+  "ERT contract tests for the hive-mcp-cider facade — session lifecycle guards."
+  (:require [cl-lib]))
+
+(require 'ert)
+(require 'transient)
+(require 'hive-mcp-cider)
+
+(ert-deftest hive-mcp-cider-test-kill-session-unknown-signals nil
+  "Killing an unregistered session is a loud error, never a silent no-op."
+  (hive-mcp-cider-sessions-clear-all)
+  (unwind-protect
+      (should-error (hive-mcp-cider-kill-session "no-such-session-xyz")
+                    :type 'error)
+    (hive-mcp-cider-sessions-clear-all)))
+
+(ert-deftest hive-mcp-cider-test-kill-session-blank-signals nil
+  "A blank or nil session name is a loud error."
+  (should-error (hive-mcp-cider-kill-session "") :type 'error)
+  (should-error (hive-mcp-cider-kill-session nil) :type 'error))
+
+(ert-deftest hive-mcp-cider-test-kill-session-registered-succeeds nil
+  "A registered session is killed and unregistered."
+  (hive-mcp-cider-sessions-clear-all)
+  (unwind-protect
+      (progn
+        (hive-mcp-cider-sessions-register "victim" (list :port 7999 :process nil))
+        (hive-mcp-cider-kill-session "victim")
+        (should (not (hive-mcp-cider-sessions-exists-p "victim"))))
+    (hive-mcp-cider-sessions-clear-all)))
