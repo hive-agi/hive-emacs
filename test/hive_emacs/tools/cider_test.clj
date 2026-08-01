@@ -5,7 +5,7 @@
    cider/*eval-fn*. The stub records every elisp form and answers canned
    responses per call — no Emacs, no hive-mcp, no nREPL."
   (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.test :refer [deftest is]]
             [hive-emacs.tools.cider :as cider]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

@@ -12,7 +12,19 @@
             (->> (fs/glob repo-root "src/cljel/**/*-test.el")
                  (map str)
                  (remove (fn [f] (str/includes? f "claude_code_ide")))
-                 sort)))
+                 sort))
+          ;; Third-party elisp the compiled artifacts require at load time.
+          ;; Fetched pinned into .cache/elisp-vendor (gitignored) at test time —
+          ;; never committed, so GPL sources stay out of the tree.
+          (def elisp-test-deps
+            [["https://github.com/clojure-emacs/parseclj" "v1.1.1"]
+             ["https://github.com/clojure-emacs/parseedn" "v1.2.1"]])
+          (def elisp-vendor-root (str (fs/path repo-root ".cache" "elisp-vendor")))
+          (defn vendored-dep-dirs []
+            (->> elisp-test-deps
+                 (map (fn [[repo _]]
+                        (str (fs/path elisp-vendor-root (fs/file-name repo)))))
+                 (filter fs/directory?))))
 
   build
   {:doc  "Compile src/cljel/**/*.cljel to elisp/ (+ sibling ERT artifacts)."
@@ -26,12 +38,24 @@
   {:doc  "Run the Clojure test suite (self-contained: published deps only)."
    :task (shell {:dir repo-root} "clojure" "-M:test")}
 
+  vendor:elisp-deps
+  {:doc  "Fetch pinned third-party elisp test deps (parseclj/parseedn) into
+          .cache/elisp-vendor (gitignored). ERT loads them via -L."
+   :task (doseq [[repo tag] elisp-test-deps
+                 :let [dir (str (fs/path elisp-vendor-root
+                                         (fs/file-name repo)))]]
+           (when-not (fs/exists? dir)
+             (println "Fetching" repo tag)
+             (shell "git" "clone" "--quiet" "--depth" "1"
+                    "--branch" tag repo dir)))}
+
   ert-files
   {:doc  "List the ERT artifacts the batch runner loads, one per line."
    :task (run! println (ert-artifacts))}
 
   test:ert
-  {:doc  "Run the addon ERT suites in a headless emacs -Q --batch process."
+  {:doc     "Run the addon ERT suites in a headless emacs -Q --batch process."
+   :depends [vendor:elisp-deps]
    :task (let [files (ert-artifacts)
                dirs  (distinct (map (fn [f] (str (fs/parent f))) files))]
            (when (empty? files)
@@ -40,6 +64,7 @@
            (apply shell {:dir repo-root}
                   "emacs" "-Q" "--batch"
                   (concat ["-L" (str (fs/path repo-root "elisp"))]
+                          (mapcat (fn [d] ["-L" d]) (vendored-dep-dirs))
                           (mapcat (fn [d] ["-L" d]) dirs)
                           ["-l" "ert"]
                           (mapcat (fn [f] ["-l" f]) files)
