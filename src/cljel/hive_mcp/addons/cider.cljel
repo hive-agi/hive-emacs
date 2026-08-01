@@ -88,7 +88,7 @@ Returns the vector `hive-mcp-cider-sessions-list-all' produces."
   "Spawn a new CIDER session from a structured request plist.
 MCP entry point — named params prevent positional arg ordering bugs.
 PARAMS is a plist with keys :name, :repl-type, :port, :project-dir,
-:agent-id, :extra-args, :aliases.
+:agent-id, :extra-args, :aliases, :extra-deps, :middleware.
 Delegates to spawn-session after destructuring."
   (spawn-session
     (plist-get params :name)
@@ -97,9 +97,11 @@ Delegates to spawn-session after destructuring."
     (plist-get params :project-dir)
     (plist-get params :agent-id)
     (plist-get params :extra-args)
-    (plist-get params :aliases)))
+    (plist-get params :aliases)
+    (plist-get params :extra-deps)
+    (plist-get params :middleware)))
 
-(defn spawn-session [name &optional repl-type port project-dir agent-id extra-args aliases]
+(defn spawn-session [name &optional repl-type port project-dir agent-id extra-args aliases extra-deps middleware]
   "Spawn a new named CIDER session with its own nREPL server.
 NAME is the session identifier (e.g., \"agent-1\", \"task-render\").
 REPL-TYPE is one of 'clj (default), 'cljs, or 'cljel.
@@ -111,13 +113,17 @@ before the -M flag (a raw -Sdeps there REPLACES the built-in one — the CLI
 keeps only the last; merge-style layering is automatic via local.deps.edn
 detection in `hive-mcp-cider-nrepl-local-deps-files').
 ALIASES is a list of bare alias names (e.g. '(\"test\")) selecting the -M
-flag for this spawn, overriding `hive-mcp-cider-nrepl-launch-aliases'."
+flag for this spawn, overriding `hive-mcp-cider-nrepl-launch-aliases'.
+EXTRA-DEPS is a list of deps EDN strings merged into the built-in -Sdeps,
+after any auto-detected local deps (later entries win key-wise).
+MIDDLEWARE is a list of nREPL middleware symbol strings appended to the
+built-in list."
   (interactive "sSession name: ")
   (let* [rtype (or repl-type 'clj)
          the-port (or port (hive-mcp-cider-sessions-find-available-port
                              #'hive-mcp-cider-nrepl-port-open-p))
          dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype))
-         process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir extra-args aliases)
+         process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir extra-args aliases extra-deps middleware)
          timer (run-with-timer hive-mcp-cider-connection-spawn-initial-delay
                                hive-mcp-cider-connection-retry-interval
                                 (lambda ()

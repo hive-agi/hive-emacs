@@ -11,6 +11,7 @@
             [hive-emacs.dsl.ext-hooks :as ext-hooks]
             [hive-emacs.dsl.multi-hooks :as multi-hooks]
             [hive-emacs.runtime-ports :as runtime-ports]
+            [hive-emacs.tools.cider :as cider-tool]
             [hive-emacs.tools.emacs :as emacs-tool]
             [taoensso.timbre :as log]))
 
@@ -90,6 +91,7 @@
                    (daemon-store/start-heartbeat-loop!)
                    true))
                 bridge-ready? (ensure-elisp-loaded!)
+                _ (when bridge-ready? (cider-tool/contribute!))
                 metadata {:bridge-ready? bridge-ready?
                           :editor-id :emacsclient
                           :heartbeat-started? heartbeat-started?
@@ -113,6 +115,7 @@
 (defn- shutdown-addon!
   [state]
   (locking state
+    (cider-tool/retract!)
     (when (:heartbeat-started? @state)
       (daemon-store/stop-heartbeat-loop!))
     (ec/shutdown-executor!)
@@ -153,7 +156,8 @@
   (tools [_]
     (if (= :active (:lifecycle @state)) emacs-tool/tools []))
 
-  (schema-extensions [_] [])
+  (schema-extensions [_]
+    {"code" cider-tool/spawn-schema-params})
 
   (health [_]
     (addon-health state))

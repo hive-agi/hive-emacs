@@ -32,7 +32,7 @@
     (should (member "-M:dev" cmd))
     (should-not (member "-M" cmd))))
 
-(ert-deftest hive-mcp-cider-nrepl-test-build-command-rejects-extra-arity nil "build-command takes (repl-type port &optional extra-args aliases extra-deps)\n— a sixth argument signals." (should-error (hive-mcp-cider-nrepl-build-command 'clj 7999 nil nil nil nil)))
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-rejects-extra-arity nil "build-command takes (repl-type port &optional extra-args aliases extra-deps\nmiddleware) — a seventh argument signals." (should-error (hive-mcp-cider-nrepl-build-command 'clj 7999 nil nil nil nil nil)))
 
 (ert-deftest hive-mcp-cider-nrepl-test-build-command-cljel-middleware nil "The cljel command pins the canonical clojure-elisp checkout and its middleware." (let* ((cmd (let* ((hive-mcp-cider-nrepl-cljel-project-dir "/tmp/clojure-elisp"))
     (hive-mcp-cider-nrepl-build-command 'cljel 7922)))
@@ -137,6 +137,27 @@
   (interactive)
   (ert-run-tests-batch-and-exit "^hive-mcp-cider-nrepl-test-"))
 
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-appends-middleware nil "MIDDLEWARE strings append to the built-in list for the repl type." (let* ((cmd (let* ((hive-mcp-cider-nrepl-launch-aliases nil))
+    (hive-mcp-cider-nrepl-build-command 'clj 7999 nil nil nil '("refactor-nrepl.middleware/wrap-refactor")))))
+    (should (member "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]" cmd))) (let* ((cmd (let* ((hive-mcp-cider-nrepl-cljel-project-dir "/tmp/clojure-elisp"))
+    (hive-mcp-cider-nrepl-build-command 'cljel 7999 nil nil nil '("my.mw/wrap-x")))))
+    (should (member "[cider.nrepl/cider-middleware,clojure-elisp.nrepl/wrap-cljel,my.mw/wrap-x]" cmd))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-launch-process-explicit-extra-deps nil "Explicit EXTRA-DEPS merge after the auto-detected local deps (later wins)." (let* ((dir (make-temp-file "hive-mcp-cider-nrepl-test" t))
+        (captured nil))
+    (unwind-protect
+    (let* ((hive-mcp-cider-nrepl-local-deps-files '("local.deps.edn"))
+        (hive-mcp-cider-nrepl-launch-aliases nil))
+    (with-temp-file (expand-file-name "local.deps.edn" dir) (insert "{:deps {my/lib {:local/root \"../lib\"}}}"))
+    (cl-letf (((symbol-function 'start-process) (lambda (name buffer &rest cmd)
+    (setq captured cmd)
+    'stub-process))) (should (eq 'stub-process (hive-mcp-cider-nrepl-launch-process "s" 7999 'clj dir nil nil '("{:deps {other/lib {:mvn/version \"1.0.0\"}}}")))) (let* ((sdeps-pos (cl-position "-Sdeps" captured :test #'equal))
+        (sdeps-val (clel-nth captured (+ 1 sdeps-pos))))
+    (should (string-match-p "nrepl/nrepl" sdeps-val))
+    (should (string-match-p "my/lib" sdeps-val))
+    (should (string-match-p "other/lib" sdeps-val)))))
+  (delete-directory dir t))))
+
 (ert-deftest hive-mcp-cider-nrepl-test-local-deps-contents-detects-file nil "A local.deps.edn in DIR yields its contents, in probe order." (let* ((dir (make-temp-file "hive-mcp-cider-nrepl-test" t)))
     (unwind-protect
     (let* ((hive-mcp-cider-nrepl-local-deps-files '("local.deps.edn")))
@@ -169,7 +190,7 @@
     (setq captured cmd)
     'stub-process))) (should (eq 'stub-process (hive-mcp-cider-nrepl-launch-process "s" 7999 'clj dir))) (should (equal 1 (length (delq nil (mapcar (lambda (a)
     (and (stringp a) (string= "-Sdeps" a))) captured))))) (let* ((sdeps-pos (cl-position "-Sdeps" captured :test #'equal))
-        (sdeps-val (clel-nth captured (1+ sdeps-pos)))
+        (sdeps-val (clel-nth captured (+ 1 sdeps-pos)))
         (m-pos (cl-position "-M" captured :test #'equal)))
     (should (string-match-p "nrepl/nrepl" sdeps-val))
     (should (string-match-p "my/lib" sdeps-val))

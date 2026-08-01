@@ -135,7 +135,7 @@ bash script assigns one var), so layered deps must be merged into one map:
         (-deep-merge merged (parseedn-read-str s))))
     (parseedn-print-str merged)))
 
-(defn build-command [repl-type port &optional extra-args aliases extra-deps]
+(defn build-command [repl-type port &optional extra-args aliases extra-deps middleware]
   "Build the nREPL start command for REPL-TYPE on PORT.
 Returns a list of (program . args) for `start-process'; the caller owns the
 working directory. REPL-TYPE is one of 'clj, 'cljs, or 'cljel.
@@ -144,6 +144,8 @@ so spawn works in any project without requiring a :nrepl or :dev alias.
 EXTRA-DEPS is a list of deps EDN strings (e.g. local.deps.edn contents)
 merged into the built-in -Sdeps map via `merge-deps-edn' — the CLI keeps
 only the last -Sdeps, so layering must merge, not repeat the flag.
+MIDDLEWARE is a list of nREPL middleware symbol strings appended to the
+built-in list for REPL-TYPE.
 EXTRA-ARGS is a list of raw CLI args spliced after -Sdeps and before the -M
 main flag (e.g. '(\"-Srepro\") or JVM opts); everything after -M is
 main-opts, so CLI opts must precede it.
@@ -160,7 +162,12 @@ This is a pure function — no side effects."
         sdeps-for (lambda (base)
                     (if extra-deps
                         (merge-deps-edn base extra-deps)
-                      base))]
+                      base))
+        mw-for (lambda (built-ins)
+                 (elisp-concat "["
+                               (mapconcat (lambda (m) (format "%s" m))
+                                          (append built-ins middleware) ",")
+                               "]"))]
     (pcase repl-type
       ('cljs
        (list "npx" "shadow-cljs" "watch" hive-mcp-cider-nrepl-shadow-build))
@@ -169,13 +176,16 @@ This is a pure function — no side effects."
                extra-args
                (list main-flag "-m" "nrepl.cmdline"
                      "--port" port-str
-                     "--middleware" "[cider.nrepl/cider-middleware,clojure-elisp.nrepl/wrap-cljel]")))
+                     "--middleware"
+                     (funcall mw-for '("cider.nrepl/cider-middleware"
+                                       "clojure-elisp.nrepl/wrap-cljel")))))
       (_
        (append (list "clojure" "-Sdeps" (funcall sdeps-for clj-deps))
                extra-args
                (list main-flag "-m" "nrepl.cmdline"
                      "--port" port-str
-                     "--middleware" "[cider.nrepl/cider-middleware]"))))))
+                     "--middleware"
+                     (funcall mw-for '("cider.nrepl/cider-middleware"))))))))
 
 (defn project-dir [repl-type]
   "Resolve the project directory for REPL-TYPE.
@@ -224,11 +234,13 @@ Returns t if port is open, nil otherwise."
 ;; Process Lifecycle
 ;; ============================================================================
 
-(defn launch-process [name port repl-type &optional dir extra-args aliases]
+(defn launch-process [name port repl-type &optional dir extra-args aliases extra-deps middleware]
   "Start an nREPL process named NAME on PORT for REPL-TYPE.
 Optional DIR overrides the working directory.
 `local-deps-contents' of the resolved dir (e.g. local.deps.edn) merge into
-the built-in -Sdeps; EXTRA-ARGS splice raw before -M; ALIASES select -M.
+the built-in -Sdeps ahead of EXTRA-DEPS (later entries win key-wise).
+EXTRA-ARGS splice raw before -M; ALIASES select -M; MIDDLEWARE appends
+nREPL middleware symbol strings to the built-in list.
 Errors if no dir can be resolved — explicit project routing only.
 Returns the process object."
   (let* [resolved-dir (or dir (project-dir repl-type))]
@@ -240,7 +252,8 @@ Returns the process object."
            cmd (build-command repl-type port
                               extra-args
                               aliases
-                              (local-deps-contents resolved-dir))]
+                              (append (local-deps-contents resolved-dir) extra-deps)
+                              middleware)]
       (apply #'start-process (format "nrepl-%s" name) buf-name cmd))))
 
 (defn stop-process [process]
