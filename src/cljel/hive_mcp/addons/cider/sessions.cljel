@@ -99,7 +99,9 @@ Signals error if session not found."
 
 (defn list-all []
   "Return a vector of session info plists for JSON encoding.
-Each entry contains :name, :port, :repl-type, :status, :agent-id, :cider-buffer."
+Each entry contains :name, :port, :repl-type, :status, :agent-id,
+:project-dir, :cider-buffer. :project-dir lets callers match a session to
+its project for scoped reuse."
   (let [sessions '()]
     (maphash (lambda (name props)
                (when (stringp name)
@@ -110,6 +112,7 @@ Each entry contains :name, :port, :repl-type, :status, :agent-id, :cider-buffer.
                                :repl-type (enum-label rtype "clj")
                                :status (enum-label status "unknown")
                                :agent-id (plist-get props :agent-id)
+                               :project-dir (plist-get props :project-dir)
                                :cider-buffer (plist-get props :cider-buffer))
                          sessions))))
              hive-mcp-cider-sessions--registry)

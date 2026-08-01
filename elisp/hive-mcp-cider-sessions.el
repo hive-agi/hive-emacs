@@ -81,13 +81,13 @@
   (t value)))
 
 (defun hive-mcp-cider-sessions-list-all ()
-  "Return a vector of session info plists for JSON encoding.\nEach entry contains :name, :port, :repl-type, :status, :agent-id, :cider-buffer."
+  "Return a vector of session info plists for JSON encoding.\nEach entry contains :name, :port, :repl-type, :status, :agent-id,\n:project-dir, :cider-buffer. :project-dir lets callers match a session to\nits project for scoped reuse."
   (let* ((sessions '()))
     (maphash (lambda (name props)
     (when (stringp name)
     (let* ((status (plist-get props :status))
         (rtype (plist-get props :repl-type)))
-    (push (list :name name :port (plist-get props :port) :repl-type (hive-mcp-cider-sessions-enum-label rtype "clj") :status (hive-mcp-cider-sessions-enum-label status "unknown") :agent-id (plist-get props :agent-id) :cider-buffer (plist-get props :cider-buffer)) sessions)))) hive-mcp-cider-sessions--registry)
+    (push (list :name name :port (plist-get props :port) :repl-type (hive-mcp-cider-sessions-enum-label rtype "clj") :status (hive-mcp-cider-sessions-enum-label status "unknown") :agent-id (plist-get props :agent-id) :project-dir (plist-get props :project-dir) :cider-buffer (plist-get props :cider-buffer)) sessions)))) hive-mcp-cider-sessions--registry)
     (vconcat sessions)))
 
 (defun hive-mcp-cider-sessions-find-by-status (status)

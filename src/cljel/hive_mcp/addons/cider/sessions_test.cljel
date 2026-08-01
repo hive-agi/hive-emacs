@@ -203,6 +203,18 @@
                         (lambda (_port) t))))
     (hive-mcp-cider-sessions-clear-all)))
 
+(ert-deftest hive-mcp-cider-sessions-test-list-includes-project-dir nil
+  "list-all carries :project-dir so callers can scope sessions by project."
+  (hive-mcp-cider-sessions-clear-all)
+  (unwind-protect
+      (progn
+        (hive-mcp-cider-sessions-register
+         "scoped" (list :port 7922 :project-dir "/tmp/proj"))
+        (let* [listed (hive-mcp-cider-sessions-list-all)
+               session (aref listed 0)]
+          (should (equal "/tmp/proj" (plist-get session :project-dir)))))
+    (hive-mcp-cider-sessions-clear-all)))
+
 (defn run-tests []
   "Run all named-session registry ERT tests in batch."
   (interactive)
