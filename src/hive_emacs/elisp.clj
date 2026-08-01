@@ -31,10 +31,13 @@
 
 (defn- elisp-quote
   "Quote a Clojure value for elisp.
-   Strings get double-quoted, symbols get quoted, numbers pass through."
+   Strings get double-quoted, symbols get quoted, numbers pass through,
+   booleans become elisp's `t` / `nil`."
   [v]
   (cond
     (nil? v) "nil"
+    (true? v) "t"
+    (false? v) "nil"
     (string? v) (pr-str v)
     (number? v) (str v)
     (keyword? v) (str ":" (name v))
