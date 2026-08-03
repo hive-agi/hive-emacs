@@ -45,6 +45,7 @@
    [:report-daemon-error-fn [:maybe ifn?]]
    [:terminal-dispatch-fn [:maybe ifn?]]
    [:resolve-agent-context-fn [:maybe ifn?]]
+   [:current-dir-fn [:maybe ifn?]]
    [:capability-fn [:maybe ifn?]]])
 
 (def DaemonStatus

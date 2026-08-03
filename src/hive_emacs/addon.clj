@@ -13,7 +13,9 @@
             [hive-emacs.runtime-ports :as runtime-ports]
             [hive-emacs.tools.cider :as cider-tool]
             [hive-emacs.tools.emacs :as emacs-tool]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-emacs.editor.port :as editor-port]
+            [hive-spi.editor.registry :as registry]))
 
 ;; Copyright (C) 2024-2026 hive-agi contributors
 ;;
@@ -32,6 +34,7 @@
    :emacs/report-daemon-error-fn :report-daemon-error-fn
    :emacs/terminal-dispatch-fn :terminal-dispatch-fn
    :emacs/resolve-agent-context-fn :resolve-agent-context-fn
+   :emacs/current-dir-fn :current-dir-fn
    :emacs/capability-fn :capability-fn})
 
 (defn- flatten-config
@@ -92,8 +95,10 @@
                    true))
                 bridge-ready? (ensure-elisp-loaded!)
                 _ (when bridge-ready? (cider-tool/contribute! (:runtime/ports config)))
+                editor-port (editor-port/register!)
                 metadata {:bridge-ready? bridge-ready?
                           :editor-id :emacsclient
+                          :editor-surfaces (registry/surfaces editor-port)
                           :heartbeat-started? heartbeat-started?
                           :configured-ports
                           (->> ports
@@ -117,6 +122,7 @@
   [state]
   (locking state
     (cider-tool/retract! (:runtime/ports @state))
+    (editor-port/unregister!)
     (when (:heartbeat-started? @state)
       (daemon-store/stop-heartbeat-loop!))
     (ec/shutdown-executor!)

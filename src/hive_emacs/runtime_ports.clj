@@ -18,6 +18,7 @@
    :report-daemon-error-fn nil
    :terminal-dispatch-fn nil
    :resolve-agent-context-fn nil
+   :current-dir-fn nil
    :capability-fn nil})
 
 (defonce ^:private ports (atom empty-ports))
@@ -109,6 +110,13 @@
   [agent-id]
   (when-let [f (:resolve-agent-context-fn @ports)]
     (f agent-id)))
+
+(defn current-directory
+  "The caller's working directory, as reported by the host's request context.
+   Nil when no host configured the port — a bare REPL or test has no request."
+  []
+  (when-let [f (:current-dir-fn @ports)]
+    (f)))
 
 (defn capability
   [capability-key]

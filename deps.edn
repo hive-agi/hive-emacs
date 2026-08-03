@@ -23,7 +23,7 @@
         io.github.hive-agi/hive-addon {:mvn/version "0.3.4"}
 
         ;; SPI ports (ICiderPort) — the contract the addon reifies.
-        io.github.hive-agi/hive-spi {:mvn/version "0.1.13"}
+        io.github.hive-agi/hive-spi {:mvn/version "0.1.14"}
 
         ;; hive-di — typed env var resolution with ADT backing (defconfig)
         io.github.hive-agi/hive-di {:mvn/version "0.3.2"}

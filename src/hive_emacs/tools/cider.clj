@@ -14,7 +14,8 @@
             [hive-emacs.client :as ec]
             [hive-emacs.elisp :as el]
             [hive-emacs.tools.support :as tool]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-emacs.runtime-ports :as rt-ports]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -76,12 +77,14 @@
   (when-not (str/blank? session-name) session-name))
 
 (defn- current-directory
-  "The MCP request-context caller cwd, when a hive-mcp host binds one.
-   Soft-resolved — nil in a bare REPL/test."
+  "The caller's working directory, from the injected runtime port. Nil when no
+   host configured one — a bare REPL or test has no request context. The port
+   is the only seam: this addon never names a host namespace.
+
+   Aliased rt-ports, not runtime-ports: contribute!/retract! bind a local of
+   that name for the host's injected port vocabulary."
   []
-  (result/rescue nil
-    (when-let [f (resolve 'hive-mcp.agent.context/current-directory)]
-      (f))))
+  (result/rescue nil (rt-ports/current-directory)))
 
 ;;; =============================================================================
 ;;; Auto-connect helpers

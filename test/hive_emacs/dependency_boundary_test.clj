@@ -6,7 +6,12 @@
             [clojure.test :refer [deftest is testing]]))
 
 (def ^:private forbidden-host-api
-  #"hive-mcp\.(?:swarm|tools|protocols|addons|extensions|multi)")
+  ;; ANY hive-mcp namespace, not a hand-listed subset: the leak that survived
+  ;; the old (?:swarm|tools|protocols|addons|extensions|multi) list was
+  ;; hive-mcp.agent.context, soft-resolved from the cider tool. The lookahead
+  ;; spares "hive-mcp.el" and friends — those are elisp FILENAMES the bridge
+  ;; loads, not host namespaces.
+  #"hive-mcp\.(?!el\b)[a-z]")
 
 (defn- clojure-sources
   []

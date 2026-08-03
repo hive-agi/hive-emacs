@@ -17,6 +17,14 @@
 ;;
 ;; SPDX-License-Identifier: MIT
 
+(def ^:dynamic *eval-fn*
+  "Elisp evaluation boundary (DIP): (f code) or (f code timeout-ms) ->
+   {:success bool :result any :error any}. Tests bind a stub recording calls;
+   mirrors hive-emacs.tools.cider/*eval-fn*."
+  (fn
+    ([code] (ec/eval-elisp code))
+    ([code timeout-ms] (ec/eval-elisp-with-timeout code timeout-ms))))
+
 (defn- elisp->result
   "Convert emacs client response {:keys [success result error]} to Result."
   [resp]
@@ -27,17 +35,17 @@
 ;; ── logic* fns (pure Result-returning) ───────────────────────────────────────
 
 (defn- eval* [{:keys [code timeout_ms]}]
-  (elisp->result (ec/eval-elisp-with-timeout code (or timeout_ms ec/*default-timeout-ms*))))
+  (elisp->result (*eval-fn* code (or timeout_ms ec/*default-timeout-ms*))))
 
 (defn- buffers* [_]
   (let [elisp "(json-encode (mapcar (lambda (b) (list :name (buffer-name b) :file (buffer-file-name b))) (buffer-list)))"]
-    (result/map-ok (elisp->result (ec/eval-elisp elisp))
+    (result/map-ok (elisp->result (*eval-fn* elisp))
                    (fn [r] {:buffers r}))))
 
 (defn- notify* [{:keys [message level]}]
   (let [level-kw (or level "info")
         elisp (el/format-elisp "(message \"[%s] %s\")" level-kw message)]
-    (result/map-ok (elisp->result (ec/eval-elisp elisp))
+    (result/map-ok (elisp->result (*eval-fn* elisp))
                    (constantly "Notification sent"))))
 
 (defn- status* [_]
@@ -47,22 +55,22 @@
 
 (defn- switch-buffer* [{:keys [buffer]}]
   (let [elisp (el/format-elisp "(switch-to-buffer %s)" (pr-str buffer))]
-    (result/map-ok (elisp->result (ec/eval-elisp elisp))
+    (result/map-ok (elisp->result (*eval-fn* elisp))
                    (constantly (str "Switched to " buffer)))))
 
 (defn- find-file* [{:keys [file]}]
   (let [elisp (el/format-elisp "(find-file %s)" (pr-str file))]
-    (result/map-ok (elisp->result (ec/eval-elisp elisp))
+    (result/map-ok (elisp->result (*eval-fn* elisp))
                    (constantly (str "Opened " file)))))
 
 (defn- save* [{:keys [all]}]
   (let [elisp (if all "(save-some-buffers t)" "(save-buffer)")]
-    (result/map-ok (elisp->result (ec/eval-elisp elisp))
+    (result/map-ok (elisp->result (*eval-fn* elisp))
                    (constantly (if all "All buffers saved" "Buffer saved")))))
 
 (defn- current-buffer* [_]
   (let [elisp "(json-encode (list :name (buffer-name) :file (buffer-file-name) :modified (buffer-modified-p) :major-mode (symbol-name major-mode)))"]
-    (result/map-ok (elisp->result (ec/eval-elisp elisp))
+    (result/map-ok (elisp->result (*eval-fn* elisp))
                    (fn [r] {:buffer r}))))
 
 ;; ── public handlers (MCP boundary) ──────────────────────────────────────────
