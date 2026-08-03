@@ -107,6 +107,10 @@
 (defn ensure-loaded!
   "Ensure required bridge entrypoints are ready in Emacs.
 
+   Injects any classpath-resolved elisp dirs into load-path, then requires the
+   entrypoints. An empty dir set is NOT fatal: Emacs may already carry the
+   bridge on its own load-path, so the require is attempted regardless.
+
    EVAL-FN accepts Elisp plus timeout milliseconds and returns a map with
    :success."
   [eval-fn]
@@ -115,8 +119,8 @@
       true
       (let [dirs (resolve-elisp-dirs)]
         (boolean
-         (and (seq dirs)
-              (eval-success? (eval-fn (load-path-elisp dirs) 5000))
+         (and (or (empty? dirs)
+                  (eval-success? (eval-fn (load-path-elisp dirs) 5000)))
               (eval-success? (eval-fn (load-entrypoints-elisp) 15000))))))))
 
 (defn eval-with-bridge

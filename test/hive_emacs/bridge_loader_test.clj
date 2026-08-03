@@ -74,6 +74,16 @@
     (is (= [5000 5000 15000] (mapv second @calls)))
     (is (= (loader/load-entrypoints-elisp) (ffirst (drop 2 @calls))))))
 
+(deftest no-classpath-dirs-still-requires-entrypoints
+  (let [calls (atom [])
+        eval-fn (fn [code timeout]
+                  (swap! calls conj [code timeout])
+                  {:success (not= code (loader/bridge-ready-elisp))})]
+    (with-redefs [loader/resolve-elisp-dirs (constantly [])]
+      (is (true? (loader/ensure-loaded! eval-fn))))
+    (is (= [(loader/bridge-ready-elisp) (loader/load-entrypoints-elisp)]
+           (mapv first @calls)))))
+
 (deftest failed-load-remains-retryable
   (let [ready? (atom false)
         entry-attempts (atom 0)
