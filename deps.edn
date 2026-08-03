@@ -23,14 +23,13 @@
         io.github.hive-agi/hive-addon {:mvn/version "0.3.4"}
 
         ;; SPI ports (ICiderPort) — the contract the addon reifies.
-        io.github.hive-agi/hive-spi {:mvn/version "0.1.15"}
+        io.github.hive-agi/hive-spi {:mvn/version "0.1.17"}
 
         ;; hive-di — typed env var resolution with ADT backing (defconfig)
         io.github.hive-agi/hive-di {:mvn/version "0.3.2"}
 
         ;; Process execution for emacsclient subprocess
-        babashka/process {:mvn/version "0.6.25"}
-        io.github.hive-agi/hive-elisp {:mvn/version "0.1.0"}}
+        babashka/process {:mvn/version "0.6.25"}}
 
  :aliases
  {:test
