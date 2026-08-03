@@ -5,7 +5,8 @@
    a typo in this map is a NullPointerException in the host at runtime."
   (:require [clojure.test :refer [deftest is use-fixtures]]
             [hive-emacs.editor.services :as services]
-            [hive-spi.editor.services :as svc]))
+            [hive-spi.editor.services :as svc]
+            [hive-emacs.client]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -47,3 +48,16 @@
 (deftest default-timeout-is-a-thunk-not-a-captured-value
   (services/register!)
   (is (pos? (svc/invoke-default :default-timeout-ms))))
+
+(deftest ceiling-raising-eval-honours-a-timeout-above-the-cap
+  (services/register!)
+  (let [seen (atom nil)]
+    (with-redefs [hive-emacs.client/eval-elisp-with-timeout
+                  (fn [_code timeout-ms]
+                    (reset! seen {:ceiling hive-emacs.client/*max-timeout-ms*
+                                  :timeout timeout-ms})
+                    {:success true :result "t"})]
+      (svc/invoke-default :eval-elisp-raising-ceiling "(sleep-for 60)" 90000)
+      (is (= 90000 (:timeout @seen)))
+      (is (>= (:ceiling @seen) 90000)
+          "a caller asking for 90s must not be clamped to the 30s default"))))

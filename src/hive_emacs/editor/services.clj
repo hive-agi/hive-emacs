@@ -28,7 +28,12 @@
    :eval-elisp              ec/eval-elisp
    :eval-elisp!             ec/eval-elisp!
    :eval-elisp-with-timeout ec/eval-elisp-with-timeout
+   :eval-elisp-raising-ceiling
+   (fn [code timeout-ms]
+     (binding [ec/*max-timeout-ms* (max ec/*max-timeout-ms* (or timeout-ms 0))]
+       (ec/eval-elisp-with-timeout code timeout-ms)))
    :default-timeout-ms      (fn [] ec/*default-timeout-ms*)
+   :max-timeout-ms          (fn [] ec/*max-timeout-ms*)
 
    ;; editor state
    :emacs-running?          ec/emacs-running?
