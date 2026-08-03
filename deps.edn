@@ -29,7 +29,8 @@
         io.github.hive-agi/hive-di {:mvn/version "0.3.2"}
 
         ;; Process execution for emacsclient subprocess
-        babashka/process {:mvn/version "0.6.25"}}
+        babashka/process {:mvn/version "0.6.25"}
+        io.github.hive-agi/hive-elisp {:mvn/version "0.1.0"}}
 
  :aliases
  {:test
