@@ -48,7 +48,7 @@
   {:extra-paths ["test-ansatz"]
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
-                org.replikativ/ansatz {:mvn/version "0.2.75"}
+                org.replikativ/ansatz {:mvn/version "0.2.79"}
                 io.github.hive-agi/hive-test {:mvn/version "0.3.11"}}
    :main-opts ["-m" "cognitect.test-runner" "-d" "test-ansatz"]}
 
