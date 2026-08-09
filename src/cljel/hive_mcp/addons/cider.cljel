@@ -143,6 +143,8 @@ built-in list."
        :repl-type rtype
        :status 'starting
        :timer timer))
+    ;; Registered first: the sentinel writes onto the session it watches.
+    (hive-mcp-cider-connection-watch-spawn-process name process)
     (message "hive-mcp-cider: Spawning %s session '%s' on port %d..."
              (symbol-name rtype) name the-port)
     (list :name name :port the-port :repl-type (symbol-name rtype) :status "starting")))

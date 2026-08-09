@@ -13,6 +13,8 @@ Design principles (SOLID/CLARITY):
 - FP: Closure-local mutable cells for async state (no global defvars)")
 
 (require 'cl-lib)
+;; string-trim, used to normalize sentinel events and process output lines.
+(require 'subr-x)
 
 ;; Dependencies on sibling modules
 (declare-function hive-mcp-cider-sessions-lookup "hive-mcp-cider-sessions")
@@ -149,6 +151,20 @@ needs one."
      (if (memq repl-type '(cljs cljel))
          hive-mcp-cider-connection-upgrade-timeout
        0)))
+
+(defn spawn-death-reason [exit-desc tail]
+  "Explain a spawn whose nREPL process died before its port ever opened.
+EXIT-DESC is the trimmed process sentinel event; TAIL is the last of the
+process buffer's output, or nil. Pure."
+  (if (and tail (not (string= "" tail)))
+      (format "nREPL process %s; last output: %s" exit-desc tail)
+    (format "nREPL process %s before opening its port (no output)" exit-desc)))
+
+(defn unsettled-status-p [status]
+  "Return non-nil when STATUS means a spawned session never reached a REPL.
+These are the states a dying nREPL process may still fail out of; a session
+already 'connected (or explicitly reaped) is not the sentinel's business."
+  (memq status '(starting connecting)))
 
 (defn connectivity-failure-reason [port port-open-p]
   "Explain why no usable CIDER connection exists on PORT.
@@ -380,6 +396,46 @@ unconfirmed REPL upgrade is visible instead of silent."
                (symbol-name (or (plist-get props :status) 'unknown))
                (symbol-name (or (plist-get props :repl-type) 'clj))
                (if reason (format " — %s" reason) "")))))
+
+(defn- -process-output-tail [buffer-name max-lines]
+  "Return the last MAX-LINES non-blank lines of BUFFER-NAME as one string.
+Nil when the buffer is gone or produced nothing."
+  (when-let* [buf (get-buffer buffer-name)]
+    (with-current-buffer buf
+      (let* [text (buffer-substring-no-properties (point-min) (point-max))
+             lines (delq nil (mapcar (lambda (l)
+                                       (let [s (string-trim l)]
+                                         (unless (string= "" s) s)))
+                                     (split-string text "\n")))
+             start (max 0 (- (length lines) max-lines))
+             tail (cl-subseq lines start)]
+        (when tail (mapconcat #'identity tail " | "))))))
+
+(defn watch-spawn-process [name process]
+  "Fail session NAME fast if PROCESS dies before its nREPL port opens.
+
+Without this the retry timer polls a port that nobody will ever open and
+reports a 30-attempt timeout, hiding the real cause — a bad classpath, a
+missing alias, or an alias whose :main-opts hijacked the -m. The sentinel
+cancels the timer and records 'error with the process's own last output as
+:reason. A session that already settled 'connected is left alone."
+  (when (processp process)
+    (set-process-sentinel
+      process
+      (lambda (proc event)
+        (when (not (process-live-p proc))
+          (let [status (and (hive-mcp-cider-sessions-exists-p name)
+                            (hive-mcp-cider-sessions-get-prop name :status))]
+            (when (unsettled-status-p status)
+              (let [reason (spawn-death-reason
+                             (string-trim (or event "exited"))
+                             (-process-output-tail (format "*nREPL-%s*" name) 4))]
+                (-cancel-session-timer name)
+                (hive-mcp-cider-sessions-update-props name
+                  :status 'error
+                  :reason reason)
+                (message "hive-mcp-cider: Session '%s' spawn failed — %s"
+                         name reason)))))))))
 
 (defn try-connect-session [name]
   "Try to connect CIDER to session NAME.

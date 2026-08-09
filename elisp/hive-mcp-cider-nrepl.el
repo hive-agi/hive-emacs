@@ -69,14 +69,25 @@
 (defvar hive-mcp-cider-nrepl--default-process nil
   "Process object for the auto-started default nREPL server.")
 
-(defun hive-mcp-cider-nrepl-launch-flag (aliases)
-  "Return the clojure CLI main flag for ALIASES, a list of bare alias names.\nNil or empty ALIASES yields \"-M\"; '(\"dev\" \"test\") yields \"-M:dev:test\".\nA leading colon on an alias name is tolerated. This is a pure function."
-  (let* ((names (delq nil (mapcar (lambda (a)
+(defun hive-mcp-cider-nrepl-alias-names (aliases)
+  "Normalize ALIASES to a list of bare alias name strings.\nNil and empty entries are dropped; a leading colon is stripped. Pure."
+  (delq nil (mapcar (lambda (a)
     (let* ((s (format "%s" (or a ""))))
     (unless (string= "" s)
-    (if (string-prefix-p ":" s) (substring s 1) s)))) aliases))))
+    (if (string-prefix-p ":" s) (substring s 1) s)))) aliases)))
+
+(defun hive-mcp-cider-nrepl-launch-flag (aliases)
+  "Return the clojure CLI main flag for ALIASES, a list of bare alias names.\nNil or empty ALIASES yields \"-M\"; '(\"dev\" \"test\") yields \"-M:dev:test\".\nA leading colon on an alias name is tolerated. This is a pure function."
+  (let* ((names (hive-mcp-cider-nrepl-alias-names aliases)))
     (if names (concat "-M" (mapconcat (lambda (n)
     (concat ":" n)) names "")) "-M")))
+
+(defun hive-mcp-cider-nrepl-main-opts-neutralizer (aliases)
+  "Return a deps EDN string blanking `:main-opts' for each of ALIASES, or nil.\n\nThe clojure CLI prepends an alias's `:main-opts' to the command-line args\nrather than letting the args win: `-M:test -m nrepl.cmdline' on a `:test'\nalias carrying `:main-opts [\"-m\" \"cognitect.test-runner\"]' runs the test\nrunner and hands it `-m nrepl.cmdline --port ...' as unknown options. Merging\nthis map in via -Sdeps (the last deps source, and alias maps merge key-wise)\nclears only `:main-opts' — `:extra-paths', `:extra-deps' and `:jvm-opts' of\nthe selected aliases still apply. Pure."
+  (let* ((names (hive-mcp-cider-nrepl-alias-names aliases)))
+    (when names
+    (format "{:aliases {%s}}" (mapconcat (lambda (n)
+    (format ":%s {:main-opts []}" n)) names " ")))))
 
 (defun hive-mcp-cider-nrepl-local-deps-contents (dir)
   "Return the contents of `hive-mcp-cider-nrepl-local-deps-files' present in\nDIR, in probe order. Nil when none exist or detection is off."
@@ -104,13 +115,15 @@
     (parseedn-print-str merged)))
 
 (defun hive-mcp-cider-nrepl-build-command (repl-type port &optional extra-args aliases extra-deps middleware)
-  "Build the nREPL start command for REPL-TYPE on PORT.\nReturns a list of (program . args) for `start-process'; the caller owns the\nworking directory. REPL-TYPE is one of 'clj, 'cljs, 'cljel, 'cljw, or 'cljrs.\nUses inline -Sdeps plus ALIASES (default `hive-mcp-cider-nrepl-launch-aliases')\nso spawn works in any project without requiring a :nrepl or :dev alias.\nEXTRA-DEPS is a list of deps EDN strings (e.g. local.deps.edn contents)\nmerged into the built-in -Sdeps map via `merge-deps-edn' — the CLI keeps\nonly the last -Sdeps, so layering must merge, not repeat the flag.\nMIDDLEWARE is a list of nREPL middleware symbol strings appended to the\nbuilt-in list for REPL-TYPE.\nEXTRA-ARGS is a list of raw CLI args spliced after -Sdeps and before the -M\nmain flag (e.g. '(\"-Srepro\") or JVM opts); everything after -M is\nmain-opts, so CLI opts must precede it.\nThe native runtimes 'cljw (ClojureWasm) and 'cljrs (clojurust) launch their\nown binary's `nrepl --port' subcommand; the JVM-only options (-Sdeps,\nALIASES, EXTRA-DEPS, MIDDLEWARE) do not apply and are ignored.\nThis is a pure function — no side effects."
+  "Build the nREPL start command for REPL-TYPE on PORT.\nReturns a list of (program . args) for `start-process'; the caller owns the\nworking directory. REPL-TYPE is one of 'clj, 'cljs, 'cljel, 'cljw, or 'cljrs.\nUses inline -Sdeps plus ALIASES (default `hive-mcp-cider-nrepl-launch-aliases')\nso spawn works in any project without requiring a :nrepl or :dev alias.\nThe selected aliases' `:main-opts' are blanked through the same -Sdeps map\n(see `main-opts-neutralizer') — an alias that names its own -m would otherwise\nrun instead of nrepl.cmdline and the spawn would never open a port.\nEXTRA-DEPS is a list of deps EDN strings (e.g. local.deps.edn contents)\nmerged into the built-in -Sdeps map via `merge-deps-edn' — the CLI keeps\nonly the last -Sdeps, so layering must merge, not repeat the flag.\nMIDDLEWARE is a list of nREPL middleware symbol strings appended to the\nbuilt-in list for REPL-TYPE.\nEXTRA-ARGS is a list of raw CLI args spliced after -Sdeps and before the -M\nmain flag (e.g. '(\"-Srepro\") or JVM opts); everything after -M is\nmain-opts, so CLI opts must precede it.\nThe native runtimes 'cljw (ClojureWasm) and 'cljrs (clojurust) launch their\nown binary's `nrepl --port' subcommand; the JVM-only options (-Sdeps,\nALIASES, EXTRA-DEPS, MIDDLEWARE) do not apply and are ignored.\nThis is a pure function — no side effects."
   (let* ((port-str (number-to-string port))
-        (main-flag (hive-mcp-cider-nrepl-launch-flag (or aliases hive-mcp-cider-nrepl-launch-aliases)))
+        (effective-aliases (or aliases hive-mcp-cider-nrepl-launch-aliases))
+        (main-flag (hive-mcp-cider-nrepl-launch-flag effective-aliases))
+        (overrides (append extra-deps (delq nil (list (hive-mcp-cider-nrepl-main-opts-neutralizer effective-aliases)))))
         (clj-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"}}}" hive-mcp-cider-nrepl-version hive-mcp-cider-nrepl-cider-nrepl-version))
         (cljel-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"} io.github.BuddhiLW/clojure-elisp {:local/root \"%s\"}}}" hive-mcp-cider-nrepl-version hive-mcp-cider-nrepl-cider-nrepl-version (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir)))
         (sdeps-for (lambda (base)
-    (if extra-deps (hive-mcp-cider-nrepl-merge-deps-edn base extra-deps) base)))
+    (if overrides (hive-mcp-cider-nrepl-merge-deps-edn base overrides) base)))
         (mw-for (lambda (built-ins)
     (concat "[" (mapconcat (lambda (m)
     (format "%s" m)) (append built-ins middleware) ",") "]"))))

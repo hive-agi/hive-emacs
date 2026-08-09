@@ -72,6 +72,33 @@
     (should (eq 'starting (hive-mcp-cider-sessions-get-prop "forever" :status)))))
   (hive-mcp-cider-sessions-clear-all)))
 
+(ert-deftest hive-mcp-cider-connection-test-unsettled-status-p nil "Only a session that never reached a REPL is the sentinel's business." (should (hive-mcp-cider-connection-unsettled-status-p 'starting)) (should (hive-mcp-cider-connection-unsettled-status-p 'connecting)) (should-not (hive-mcp-cider-connection-unsettled-status-p 'connected)) (should-not (hive-mcp-cider-connection-unsettled-status-p 'stale)) (should-not (hive-mcp-cider-connection-unsettled-status-p nil)))
+
+(ert-deftest hive-mcp-cider-connection-test-spawn-death-reason nil "The reason carries the process's own last output, or says there was none." (should (equal "nREPL process exited abnormally with code 1; last output: Unknown option: \"-m\"" (hive-mcp-cider-connection-spawn-death-reason "exited abnormally with code 1" "Unknown option: \"-m\""))) (should (equal "nREPL process killed before opening its port (no output)" (hive-mcp-cider-connection-spawn-death-reason "killed" nil))) (should (equal "nREPL process killed before opening its port (no output)" (hive-mcp-cider-connection-spawn-death-reason "killed" ""))))
+
+(ert-deftest hive-mcp-cider-connection-test-dead-spawn-fails-fast nil "A spawn whose process dies is marked 'error with the process output as the\nreason — not left to the retry timer to report a 30-attempt port timeout." (hive-mcp-cider-sessions-clear-all) (unwind-protect
+    (let* ((proc (start-process "hive-mcp-cider-death-test" "*nREPL-dead*" "sh" "-c" "echo 'Unknown option: -m' >&2; exit 1")))
+    (hive-mcp-cider-sessions-register "dead" (hive-mcp-cider-sessions-make-session 7930 :status 'starting))
+    (hive-mcp-cider-connection-watch-spawn-process "dead" proc)
+    (should (hive-mcp-cider-connection-test--drive (lambda ()
+    (eq 'error (hive-mcp-cider-sessions-get-prop "dead" :status))) 5))
+    (should (string-match-p "Unknown option" (hive-mcp-cider-sessions-get-prop "dead" :reason))))
+  (when-let* ((buf (get-buffer "*nREPL-dead*")))
+    (kill-buffer buf))
+  (hive-mcp-cider-sessions-clear-all)))
+
+(ert-deftest hive-mcp-cider-connection-test-dead-process-spares-connected nil "A session that already settled 'connected is left alone when its process\nlater exits — the sentinel only rescues spawns that never came up." (hive-mcp-cider-sessions-clear-all) (unwind-protect
+    (let* ((proc (start-process "hive-mcp-cider-death-test2" "*nREPL-live*" "sh" "-c" "exit 0")))
+    (hive-mcp-cider-sessions-register "live" (hive-mcp-cider-sessions-make-session 7931 :status 'connected))
+    (hive-mcp-cider-connection-watch-spawn-process "live" proc)
+    (hive-mcp-cider-connection-test--drive (lambda ()
+    (not (process-live-p proc))) 5)
+    (sit-for 0.2)
+    (should (eq 'connected (hive-mcp-cider-sessions-get-prop "live" :status))))
+  (when-let* ((buf (get-buffer "*nREPL-live*")))
+    (kill-buffer buf))
+  (hive-mcp-cider-sessions-clear-all)))
+
 (ert-deftest hive-mcp-cider-connection-test-open-socket-is-not-connected nil "An open port moves the session to 'connecting; only the handshake settles it." (hive-mcp-cider-sessions-clear-all) (let* ((buf (generate-new-buffer " *test-conn-handshake*"))
         (handshook (list nil)))
     (unwind-protect

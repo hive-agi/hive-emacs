@@ -79,6 +79,7 @@
     (hive-mcp-cider-connection-try-connect-session name)
   (error (message "[cider] Timer error connecting session %s: %s" name (error-message-string err))))))))
     (hive-mcp-cider-sessions-register name (hive-mcp-cider-sessions-make-session the-port :process process :buffer (format "*nREPL-%s*" name) :agent-id agent-id :project-dir dir :repl-type rtype :status 'starting :timer timer))
+    (hive-mcp-cider-connection-watch-spawn-process name process)
     (message "hive-mcp-cider: Spawning %s session '%s' on port %d..." (symbol-name rtype) name the-port)
     (list :name name :port the-port :repl-type (symbol-name rtype) :status "starting")))
 

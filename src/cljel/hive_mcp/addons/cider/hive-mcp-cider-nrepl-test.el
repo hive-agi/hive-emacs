@@ -200,8 +200,39 @@
 (ert-deftest hive-mcp-cider-nrepl-test-build-command-extra-args-exact-argv nil "EXTRA-ARGS splice raw after -Sdeps and before the -M flag. A raw -Sdeps\nthere REPLACES the built-in one (the CLI keeps only the last) — merge-style\nlayering belongs in EXTRA-DEPS, not EXTRA-ARGS." (let* ((cmd (let* ((hive-mcp-cider-nrepl-launch-aliases nil)
         (hive-mcp-cider-nrepl-version "1.7.0")
         (hive-mcp-cider-nrepl-cider-nrepl-version "0.62.2"))
-    (hive-mcp-cider-nrepl-build-command 'clj 7999 '("-Sdeps" "{:deps {my/lib {:local/root \"../lib\"}}}") '("test")))))
-    (should (equal cmd '("clojure" "-Sdeps" "{:deps {nrepl/nrepl {:mvn/version \"1.7.0\"} cider/cider-nrepl {:mvn/version \"0.62.2\"}}}" "-Sdeps" "{:deps {my/lib {:local/root \"../lib\"}}}" "-M:test" "-m" "nrepl.cmdline" "--port" "7999" "--middleware" "[cider.nrepl/cider-middleware]")))))
+    (hive-mcp-cider-nrepl-build-command 'clj 7999 '("-Sdeps" "{:deps {my/lib {:local/root \"../lib\"}}}") '("test"))))
+        (sdeps (clel-nth cmd 2)))
+    (should (string-match-p "nrepl/nrepl" sdeps))
+    (should (string-match-p "cider/cider-nrepl" sdeps))
+    (should (equal (cdr (cdr (cdr cmd))) '("-Sdeps" "{:deps {my/lib {:local/root \"../lib\"}}}" "-M:test" "-m" "nrepl.cmdline" "--port" "7999" "--middleware" "[cider.nrepl/cider-middleware]")))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-neutralizer-nil-without-aliases nil "No aliases means no override map at all — the bare -M path is untouched." (should-not (hive-mcp-cider-nrepl-main-opts-neutralizer nil)) (should-not (hive-mcp-cider-nrepl-main-opts-neutralizer '("" nil))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-neutralizer-blanks-each-alias nil "Every selected alias gets :main-opts [], colon-prefixed names tolerated." (should (equal "{:aliases {:test {:main-opts []}}}" (hive-mcp-cider-nrepl-main-opts-neutralizer '("test")))) (should (equal "{:aliases {:dev {:main-opts []} :test {:main-opts []}}}" (hive-mcp-cider-nrepl-main-opts-neutralizer '(":dev" "test")))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-blanks-alias-main-opts nil "The spawn -Sdeps blanks the selected alias's :main-opts. Without this a\n:test alias carrying :main-opts [\"-m\" \"cognitect.test-runner\"] runs the\ntest runner, chokes on --port/--middleware, and no nREPL ever listens." (let* ((cmd (let* ((hive-mcp-cider-nrepl-launch-aliases nil))
+    (hive-mcp-cider-nrepl-build-command 'clj 7999 nil '("test"))))
+        (sdeps (clel-nth cmd 2)))
+    (should (member "-M:test" cmd))
+    (should (string-match-p ":aliases" sdeps))
+    (should (string-match-p ":main-opts" sdeps))
+    (should (string-match-p "nrepl/nrepl" sdeps))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-no-aliases-no-override nil "Without aliases the -Sdeps map carries deps only — no :aliases key." (let* ((cmd (let* ((hive-mcp-cider-nrepl-launch-aliases nil))
+    (hive-mcp-cider-nrepl-build-command 'clj 7999)))
+        (sdeps (clel-nth cmd 2)))
+    (should-not (string-match-p ":aliases" sdeps))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-neutralizer-wins-over-extra-deps nil "The blank is merged LAST, so EXTRA-DEPS cannot re-arm the alias's :main-opts." (let* ((cmd (let* ((hive-mcp-cider-nrepl-launch-aliases nil))
+    (hive-mcp-cider-nrepl-build-command 'clj 7999 nil '("test") '("{:aliases {:test {:main-opts [\"-m\" \"cognitect.test-runner\"]}}}"))))
+        (sdeps (clel-nth cmd 2)))
+    (should-not (string-match-p "cognitect.test-runner" sdeps))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-cljel-blanks-alias-main-opts nil "The cljel branch shares the neutralizer — it too runs through -M:alias." (let* ((cmd (let* ((hive-mcp-cider-nrepl-cljel-project-dir "/tmp/clojure-elisp"))
+    (hive-mcp-cider-nrepl-build-command 'cljel 7999 nil '("dev"))))
+        (sdeps (clel-nth cmd 2)))
+    (should (member "-M:dev" cmd))
+    (should (string-match-p ":main-opts" sdeps))))
 
 (ert-deftest hive-mcp-cider-nrepl-test-build-command-per-spawn-aliases-override nil "A per-spawn ALIASES argument overrides the launch-aliases defcustom." (let* ((cmd (let* ((hive-mcp-cider-nrepl-launch-aliases nil))
     (hive-mcp-cider-nrepl-build-command 'clj 7999 nil '("test")))))

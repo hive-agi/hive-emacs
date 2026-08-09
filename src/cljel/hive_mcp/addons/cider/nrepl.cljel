@@ -99,19 +99,39 @@ Each existing file's contents splice into the spawn command as an extra
 ;; Pure Functions
 ;; ============================================================================
 
+(defn alias-names [aliases]
+  "Normalize ALIASES to a list of bare alias name strings.
+Nil and empty entries are dropped; a leading colon is stripped. Pure."
+  (delq nil
+        (mapcar (lambda (a)
+                  (let [s (format "%s" (or a ""))]
+                    (unless (string= "" s)
+                      (if (string-prefix-p ":" s) (substring s 1) s))))
+                aliases)))
+
 (defn launch-flag [aliases]
   "Return the clojure CLI main flag for ALIASES, a list of bare alias names.
 Nil or empty ALIASES yields \"-M\"; '(\"dev\" \"test\") yields \"-M:dev:test\".
 A leading colon on an alias name is tolerated. This is a pure function."
-  (let [names (delq nil
-                    (mapcar (lambda (a)
-                              (let [s (format "%s" (or a ""))]
-                                (unless (string= "" s)
-                                  (if (string-prefix-p ":" s) (substring s 1) s))))
-                            aliases))]
+  (let [names (alias-names aliases)]
     (if names
         (elisp-concat "-M" (mapconcat (lambda (n) (elisp-concat ":" n)) names ""))
       "-M")))
+
+(defn main-opts-neutralizer [aliases]
+  "Return a deps EDN string blanking `:main-opts' for each of ALIASES, or nil.
+
+The clojure CLI prepends an alias's `:main-opts' to the command-line args
+rather than letting the args win: `-M:test -m nrepl.cmdline' on a `:test'
+alias carrying `:main-opts [\"-m\" \"cognitect.test-runner\"]' runs the test
+runner and hands it `-m nrepl.cmdline --port ...' as unknown options. Merging
+this map in via -Sdeps (the last deps source, and alias maps merge key-wise)
+clears only `:main-opts' — `:extra-paths', `:extra-deps' and `:jvm-opts' of
+the selected aliases still apply. Pure."
+  (let [names (alias-names aliases)]
+    (when names
+      (format "{:aliases {%s}}"
+              (mapconcat (lambda (n) (format ":%s {:main-opts []}" n)) names " ")))))
 
 (defn local-deps-contents [dir]
   "Return the contents of `hive-mcp-cider-nrepl-local-deps-files' present in
@@ -155,6 +175,9 @@ Returns a list of (program . args) for `start-process'; the caller owns the
 working directory. REPL-TYPE is one of 'clj, 'cljs, 'cljel, 'cljw, or 'cljrs.
 Uses inline -Sdeps plus ALIASES (default `hive-mcp-cider-nrepl-launch-aliases')
 so spawn works in any project without requiring a :nrepl or :dev alias.
+The selected aliases' `:main-opts' are blanked through the same -Sdeps map
+(see `main-opts-neutralizer') — an alias that names its own -m would otherwise
+run instead of nrepl.cmdline and the spawn would never open a port.
 EXTRA-DEPS is a list of deps EDN strings (e.g. local.deps.edn contents)
 merged into the built-in -Sdeps map via `merge-deps-edn' — the CLI keeps
 only the last -Sdeps, so layering must merge, not repeat the flag.
@@ -168,7 +191,12 @@ own binary's `nrepl --port' subcommand; the JVM-only options (-Sdeps,
 ALIASES, EXTRA-DEPS, MIDDLEWARE) do not apply and are ignored.
 This is a pure function — no side effects."
   (let [port-str (number-to-string port)
-        main-flag (launch-flag (or aliases hive-mcp-cider-nrepl-launch-aliases))
+        effective-aliases (or aliases hive-mcp-cider-nrepl-launch-aliases)
+        main-flag (launch-flag effective-aliases)
+        ;; Blanking the selected aliases' :main-opts must be the LAST override
+        ;; merged, so a caller-supplied EXTRA-DEPS can never re-arm them.
+        overrides (append extra-deps
+                          (delq nil (list (main-opts-neutralizer effective-aliases))))
         clj-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"}}}"
                          hive-mcp-cider-nrepl-version
                          hive-mcp-cider-nrepl-cider-nrepl-version)
@@ -177,8 +205,8 @@ This is a pure function — no side effects."
                            hive-mcp-cider-nrepl-cider-nrepl-version
                            (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir))
         sdeps-for (lambda (base)
-                    (if extra-deps
-                        (merge-deps-edn base extra-deps)
+                    (if overrides
+                        (merge-deps-edn base overrides)
                       base))
         mw-for (lambda (built-ins)
                  (elisp-concat "["
