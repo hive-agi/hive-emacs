@@ -324,8 +324,8 @@
    "agent_id" {:type "string"
                :description "spawn/connect: agent ID to link the session"}
    "repl_type" {:type "string"
-                :enum ["clj" "cljs" "cljel"]
-                :description "spawn/connect: REPL type: clj (default), cljs (shadow-cljs), or cljel (ClojureElisp)"}
+                :enum ["clj" "cljs" "cljel" "cljw" "cljrs"]
+                :description "spawn/connect: REPL type: clj (default), cljs (shadow-cljs), cljel (ClojureElisp), cljw (ClojureWasm native binary), or cljrs (clojurust native binary). cljw/cljrs launch their own `<bin> nrepl --port N' and connect as a plain clj-protocol nREPL (no upgrade); the JVM-only spawn options (extra_args/aliases/extra_deps/middleware) do not apply."}
    "extra_args" {:type "array"
                  :items {:type "string"}
                  :description "spawn only: raw clojure CLI args spliced after -Sdeps and before the -M flag (e.g. [\"-Srepro\"] or JVM opts like [\"-J-Xmx4g\"]). A raw -Sdeps here REPLACES the merged one — use extra_deps to layer instead. Everything after -M is main-opts, so CLI opts must go here."}

@@ -294,6 +294,8 @@ is current at connect time."
              (pcase repl-type
                ('cljs (-upgrade-cljs conn old-name port on-settled))
                ('cljel (-upgrade-cljel conn port on-settled))
+               ('cljw (-settle on-settled (settled-props (buffer-name conn) 'cljw)))
+               ('cljrs (-settle on-settled (settled-props (buffer-name conn) 'cljrs)))
                (_ (-settle on-settled
                            (settled-props (buffer-name conn) 'clj))))))]
     (-poll-async ready-p
@@ -415,11 +417,11 @@ The no-socket-yet branch is capped by `hive-mcp-cider-connection-max-retries'
                             (let [default-directory (or expanded-dir default-directory)]
                               (connect-by-repl-type repl-type port expanded-dir settle)))]
                 (-cancel-session-timer name)
-                (hive-mcp-cider-sessions-update-props name
-                  :status 'connecting
-                  :cider-buffer (buffer-name conn))
-                (message "hive-mcp-cider: Session '%s' (%s) socket open on port %d, awaiting nREPL handshake"
-                         name (symbol-name repl-type) port))
+                (hive-mcp-cider-sessions-update-prop name :cider-buffer (buffer-name conn))
+                (when (eq (hive-mcp-cider-sessions-get-prop name :status) 'starting)
+                  (hive-mcp-cider-sessions-update-prop name :status 'connecting)
+                  (message "hive-mcp-cider: Session '%s' (%s) socket open on port %d, awaiting nREPL handshake"
+                           name (symbol-name repl-type) port)))
             (error
              (-cancel-session-timer name)
              (hive-mcp-cider-sessions-update-props name

@@ -44,6 +44,20 @@ containing the compiler and nREPL middleware."
   :type 'directory
   :group 'hive-mcp-cider)
 
+(defcustom hive-mcp-cider-nrepl-cljw-binary "~/PP/hive/clones-ref/ClojureWasm/zig-out/bin/cljw"
+  "Path to the ClojureWasm (cljw) binary used to start a 'cljw nREPL session.
+Launched as `cljw nrepl --port N'. Overridable per machine; the default
+points at the local build output."
+  :type 'string
+  :group 'hive-mcp-cider)
+
+(defcustom hive-mcp-cider-nrepl-cljrs-binary "~/PP/hive/clones-ref/clojurust/target/debug/cljrs"
+  "Path to the clojurust (cljrs) binary used to start a 'cljrs nREPL session.
+Launched as `cljrs nrepl --port N'. Overridable per machine; the default
+points at the local debug build output."
+  :type 'string
+  :group 'hive-mcp-cider)
+
 (defcustom hive-mcp-cider-nrepl-shadow-build ":app"
   "Default shadow-cljs build ID."
   :type 'string
@@ -138,7 +152,7 @@ bash script assigns one var), so layered deps must be merged into one map:
 (defn build-command [repl-type port &optional extra-args aliases extra-deps middleware]
   "Build the nREPL start command for REPL-TYPE on PORT.
 Returns a list of (program . args) for `start-process'; the caller owns the
-working directory. REPL-TYPE is one of 'clj, 'cljs, or 'cljel.
+working directory. REPL-TYPE is one of 'clj, 'cljs, 'cljel, 'cljw, or 'cljrs.
 Uses inline -Sdeps plus ALIASES (default `hive-mcp-cider-nrepl-launch-aliases')
 so spawn works in any project without requiring a :nrepl or :dev alias.
 EXTRA-DEPS is a list of deps EDN strings (e.g. local.deps.edn contents)
@@ -149,6 +163,9 @@ built-in list for REPL-TYPE.
 EXTRA-ARGS is a list of raw CLI args spliced after -Sdeps and before the -M
 main flag (e.g. '(\"-Srepro\") or JVM opts); everything after -M is
 main-opts, so CLI opts must precede it.
+The native runtimes 'cljw (ClojureWasm) and 'cljrs (clojurust) launch their
+own binary's `nrepl --port' subcommand; the JVM-only options (-Sdeps,
+ALIASES, EXTRA-DEPS, MIDDLEWARE) do not apply and are ignored.
 This is a pure function — no side effects."
   (let [port-str (number-to-string port)
         main-flag (launch-flag (or aliases hive-mcp-cider-nrepl-launch-aliases))
@@ -171,6 +188,12 @@ This is a pure function — no side effects."
     (pcase repl-type
       ('cljs
        (list "npx" "shadow-cljs" "watch" hive-mcp-cider-nrepl-shadow-build))
+      ('cljw
+       (list (expand-file-name hive-mcp-cider-nrepl-cljw-binary)
+             "nrepl" "--port" port-str))
+      ('cljrs
+       (list (expand-file-name hive-mcp-cider-nrepl-cljrs-binary)
+             "nrepl" "--port" port-str))
       ('cljel
        (append (list "clojure" "-Sdeps" (funcall sdeps-for cljel-deps))
                extra-args
@@ -194,13 +217,17 @@ Returns absolute path string, or nil if no explicit dir is configured.
 For 'cljel — falls back to `hive-mcp-cider-nrepl-cljel-project-dir'
 defcustom (the cljel toolchain has a single canonical project).
 
+For 'cljw/'cljrs — the native runtimes need no deps project, only a cwd;
+falls back to `temporary-file-directory' (cljrs writes .nrepl-port there).
+
 For 'clj/'cljs — returns nil if `hive-mcp-cider-nrepl-project-dir' is
 unset. Callers must supply project-dir explicitly. The Emacs daemon's
 current buffer is NOT a reliable proxy when spawn is triggered from an
 MCP tool boundary — it leaks hive-mcp into every other project's REPL."
   (or hive-mcp-cider-nrepl-project-dir
-      (when (eq repl-type 'cljel)
-        (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir))))
+      (pcase repl-type
+        ('cljel (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir))
+        ((or 'cljw 'cljrs) temporary-file-directory))))
 
 (defn default-project-dir [dir]
   "Resolve the working directory for the default nREPL server.
