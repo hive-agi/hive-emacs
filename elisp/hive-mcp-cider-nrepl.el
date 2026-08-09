@@ -31,6 +31,16 @@
   :group 'hive-mcp-cider
   :type 'directory)
 
+(defcustom hive-mcp-cider-nrepl-cljw-binary "~/PP/hive/clones-ref/ClojureWasm/zig-out/bin/cljw"
+  "Path to the ClojureWasm (cljw) binary used to start a 'cljw nREPL session.\nLaunched as `cljw nrepl --port N'. Overridable per machine; the default\npoints at the local build output."
+  :group 'hive-mcp-cider
+  :type 'string)
+
+(defcustom hive-mcp-cider-nrepl-cljrs-binary "~/PP/hive/clones-ref/clojurust/target/debug/cljrs"
+  "Path to the clojurust (cljrs) binary used to start a 'cljrs nREPL session.\nLaunched as `cljrs nrepl --port N'. Overridable per machine; the default\npoints at the local debug build output."
+  :group 'hive-mcp-cider
+  :type 'string)
+
 (defcustom hive-mcp-cider-nrepl-shadow-build ":app"
   "Default shadow-cljs build ID."
   :group 'hive-mcp-cider
@@ -94,7 +104,7 @@
     (parseedn-print-str merged)))
 
 (defun hive-mcp-cider-nrepl-build-command (repl-type port &optional extra-args aliases extra-deps middleware)
-  "Build the nREPL start command for REPL-TYPE on PORT.\nReturns a list of (program . args) for `start-process'; the caller owns the\nworking directory. REPL-TYPE is one of 'clj, 'cljs, or 'cljel.\nUses inline -Sdeps plus ALIASES (default `hive-mcp-cider-nrepl-launch-aliases')\nso spawn works in any project without requiring a :nrepl or :dev alias.\nEXTRA-DEPS is a list of deps EDN strings (e.g. local.deps.edn contents)\nmerged into the built-in -Sdeps map via `merge-deps-edn' — the CLI keeps\nonly the last -Sdeps, so layering must merge, not repeat the flag.\nMIDDLEWARE is a list of nREPL middleware symbol strings appended to the\nbuilt-in list for REPL-TYPE.\nEXTRA-ARGS is a list of raw CLI args spliced after -Sdeps and before the -M\nmain flag (e.g. '(\"-Srepro\") or JVM opts); everything after -M is\nmain-opts, so CLI opts must precede it.\nThis is a pure function — no side effects."
+  "Build the nREPL start command for REPL-TYPE on PORT.\nReturns a list of (program . args) for `start-process'; the caller owns the\nworking directory. REPL-TYPE is one of 'clj, 'cljs, 'cljel, 'cljw, or 'cljrs.\nUses inline -Sdeps plus ALIASES (default `hive-mcp-cider-nrepl-launch-aliases')\nso spawn works in any project without requiring a :nrepl or :dev alias.\nEXTRA-DEPS is a list of deps EDN strings (e.g. local.deps.edn contents)\nmerged into the built-in -Sdeps map via `merge-deps-edn' — the CLI keeps\nonly the last -Sdeps, so layering must merge, not repeat the flag.\nMIDDLEWARE is a list of nREPL middleware symbol strings appended to the\nbuilt-in list for REPL-TYPE.\nEXTRA-ARGS is a list of raw CLI args spliced after -Sdeps and before the -M\nmain flag (e.g. '(\"-Srepro\") or JVM opts); everything after -M is\nmain-opts, so CLI opts must precede it.\nThe native runtimes 'cljw (ClojureWasm) and 'cljrs (clojurust) launch their\nown binary's `nrepl --port' subcommand; the JVM-only options (-Sdeps,\nALIASES, EXTRA-DEPS, MIDDLEWARE) do not apply and are ignored.\nThis is a pure function — no side effects."
   (let* ((port-str (number-to-string port))
         (main-flag (hive-mcp-cider-nrepl-launch-flag (or aliases hive-mcp-cider-nrepl-launch-aliases)))
         (clj-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"}}}" hive-mcp-cider-nrepl-version hive-mcp-cider-nrepl-cider-nrepl-version))
@@ -106,13 +116,16 @@
     (format "%s" m)) (append built-ins middleware) ",") "]"))))
     (pcase repl-type
   ((quote cljs) (list "npx" "shadow-cljs" "watch" hive-mcp-cider-nrepl-shadow-build))
+  ((quote cljw) (list (expand-file-name hive-mcp-cider-nrepl-cljw-binary) "nrepl" "--port" port-str))
+  ((quote cljrs) (list (expand-file-name hive-mcp-cider-nrepl-cljrs-binary) "nrepl" "--port" port-str))
   ((quote cljel) (append (list "clojure" "-Sdeps" (funcall sdeps-for cljel-deps)) extra-args (list main-flag "-m" "nrepl.cmdline" "--port" port-str "--middleware" (funcall mw-for '("cider.nrepl/cider-middleware" "clojure-elisp.nrepl/wrap-cljel")))))
   (_ (append (list "clojure" "-Sdeps" (funcall sdeps-for clj-deps)) extra-args (list main-flag "-m" "nrepl.cmdline" "--port" port-str "--middleware" (funcall mw-for '("cider.nrepl/cider-middleware"))))))))
 
 (defun hive-mcp-cider-nrepl-project-dir (repl-type)
-  "Resolve the project directory for REPL-TYPE.\nReturns absolute path string, or nil if no explicit dir is configured.\n\nFor 'cljel — falls back to `hive-mcp-cider-nrepl-cljel-project-dir'\ndefcustom (the cljel toolchain has a single canonical project).\n\nFor 'clj/'cljs — returns nil if `hive-mcp-cider-nrepl-project-dir' is\nunset. Callers must supply project-dir explicitly. The Emacs daemon's\ncurrent buffer is NOT a reliable proxy when spawn is triggered from an\nMCP tool boundary — it leaks hive-mcp into every other project's REPL."
-  (or hive-mcp-cider-nrepl-project-dir (when (eq repl-type 'cljel)
-    (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir))))
+  "Resolve the project directory for REPL-TYPE.\nReturns absolute path string, or nil if no explicit dir is configured.\n\nFor 'cljel — falls back to `hive-mcp-cider-nrepl-cljel-project-dir'\ndefcustom (the cljel toolchain has a single canonical project).\n\nFor 'cljw/'cljrs — the native runtimes need no deps project, only a cwd;\nfalls back to `temporary-file-directory' (cljrs writes .nrepl-port there).\n\nFor 'clj/'cljs — returns nil if `hive-mcp-cider-nrepl-project-dir' is\nunset. Callers must supply project-dir explicitly. The Emacs daemon's\ncurrent buffer is NOT a reliable proxy when spawn is triggered from an\nMCP tool boundary — it leaks hive-mcp into every other project's REPL."
+  (or hive-mcp-cider-nrepl-project-dir (pcase repl-type
+  ((quote cljel) (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir))
+  ((or (quote cljw) (quote cljrs)) temporary-file-directory))))
 
 (defun hive-mcp-cider-nrepl-default-project-dir (dir)
   "Resolve the working directory for the default nREPL server.\nDIR wins, then `hive-mcp-cider-nrepl-project-dir', then\n`hive-mcp-cider-nrepl-default-project-dir'. Returns an absolute path\nstring, or nil when none of the three is a non-empty string."
