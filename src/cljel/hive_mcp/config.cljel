@@ -1,0 +1,155 @@
+(ns hive-mcp-config
+  "Declarative resolution of a setting from its possible origins.
+
+A SOURCE is a plist naming one origin. `resolve-source' turns a source into a
+value or nil; sources compose through `coalesce', which yields the first
+non-nil resolution in declaration order.
+
+  (custom 'SYM)             value of the bound variable SYM
+  (env \"VAR\")               `getenv' VAR
+  (edn-file PATH KEY-PATH)  KEY-PATH looked up in PATH parsed as EDN
+  (literal VALUE)           a constant
+  (probe CAPABILITY)        CAPABILITY asked of the injected probe reader
+  (coalesce SOURCES)        first non-nil resolution among SOURCES
+
+Resolution takes a READERS plist (:custom-fn :env-fn :file-fn :probe-fn). A
+reader absent from READERS makes its source kind resolve to nil, so a caller
+consults exactly the origins it opts into and a test supplies literals for
+all of them.
+
+Layer: Collect (source constructors) + Promote (`resolve-source',
+`config-lookup'). The single I/O function is `read-edn-file', reached only
+through the :file-fn a caller injects.")
+
+(require 'seq)
+(require 'parseedn)
+
+;; ============================================================================
+;; Collect — source constructors
+;; ============================================================================
+
+(defcustom hive-mcp-config-file "~/.config/hive-mcp/config.edn"
+  "EDN file consulted for per-host hive settings.
+Read by `edn-file' sources under whatever key-path each setting declares.
+Nil disables every file source, leaving variables, the environment and
+defaults."
+  :type '(choice (const :tag "No file source" nil) file)
+  :group 'hive-mcp)
+
+(defn custom [symbol]
+  "A source reading the value of variable SYMBOL."
+  (list :source :custom :symbol symbol))
+
+(defn env [var]
+  "A source reading environment variable VAR."
+  (list :source :env :var var))
+
+(defn edn-file [path key-path]
+  "A source reading KEY-PATH out of the EDN file at PATH.
+KEY-PATH is a list of keys walked through nested maps."
+  (list :source :file :path path :key-path key-path))
+
+(defn literal [value]
+  "A source resolving to the constant VALUE."
+  (list :source :literal :value value))
+
+(defn probe [capability]
+  "A source resolving CAPABILITY through the injected :probe-fn.
+Used for a setting only the subject itself can answer."
+  (list :source :probe :capability capability))
+
+(defn coalesce [sources]
+  "A source resolving to the first non-nil resolution among SOURCES."
+  (list :source :coalesce :sources sources))
+
+;; ============================================================================
+;; Promote — pure resolution
+;; ============================================================================
+
+(defn- -nil-if-blank [value]
+  "Return VALUE, or nil when it is a whitespace-only string.
+An exported-but-empty variable counts as unset and falls through to the next
+source rather than winning with an empty string."
+  (if (and (stringp value) (string-match-p "\\`[ \t\n\r]*\\'" value))
+      nil
+    value))
+
+(defn config-lookup [table key-path]
+  "Walk KEY-PATH through nested hash-tables from TABLE and return the value.
+Returns nil at the first key that is missing or whose parent is not a
+hash-table. Pure."
+  (seq-reduce (lambda (cursor k)
+                (when (hash-table-p cursor) (gethash k cursor)))
+              key-path
+              table))
+
+(defn resolve-source [source readers]
+  "Resolve SOURCE to a value using READERS, or nil.
+READERS is a plist of :custom-fn :env-fn :file-fn :probe-fn; a kind whose
+reader is absent resolves to nil. Whitespace-only strings resolve to nil.
+Pure given READERS."
+  (let [kind (plist-get source :source)]
+    (-nil-if-blank
+     (cond
+       (eq kind :custom)
+       (let [f (plist-get readers :custom-fn)]
+         (when f (funcall f (plist-get source :symbol))))
+
+       (eq kind :env)
+       (let [f (plist-get readers :env-fn)]
+         (when f (funcall f (plist-get source :var))))
+
+       (eq kind :file)
+       (let [f (plist-get readers :file-fn)]
+         (when f
+           (config-lookup (funcall f (plist-get source :path))
+                          (plist-get source :key-path))))
+
+       (eq kind :literal)
+       (plist-get source :value)
+
+       (eq kind :probe)
+       (let [f (plist-get readers :probe-fn)]
+         (when f (funcall f (plist-get source :capability))))
+
+       (eq kind :coalesce)
+       (seq-some (lambda (s) (resolve-source s readers))
+                 (plist-get source :sources))
+
+       :else nil))))
+
+;; ============================================================================
+;; Boundary — the real readers
+;; ============================================================================
+
+(defn read-edn-file [path]
+  "Parse PATH as EDN and return the value, or nil.
+Returns nil when PATH is absent, unreadable or malformed: a broken config
+file resolves as unset rather than signalling at launch time. I/O."
+  (let [expanded (expand-file-name path)]
+    (when (file-readable-p expanded)
+      (condition-case nil
+          (with-temp-buffer
+            (insert-file-contents expanded)
+            (parseedn-read-str (buffer-string)))
+        (error nil)))))
+
+(defn default-readers [&optional probe-fn]
+  "Return the production READERS plist.
+Reads bound variables, the process environment, and EDN files from disk;
+PROBE-FN answers :source/probe capabilities and defaults to none. Each file
+is read at most once per returned plist. I/O."
+  (let [cache (make-hash-table :test 'equal)]
+    (list :custom-fn (lambda (sym) (when (boundp sym) (symbol-value sym)))
+          :env-fn #'getenv
+          :file-fn (lambda (path)
+                     (let* [missing (make-symbol "config-miss")
+                            hit (gethash path cache missing)]
+                       (if (eq hit missing)
+                           (puthash path (read-edn-file path) cache)
+                         hit)))
+          :probe-fn probe-fn)))
+
+(defn resolve-setting [source &optional readers]
+  "Resolve SOURCE with READERS, defaulting to a fresh `default-readers'."
+  (resolve-source source (or readers (default-readers))))

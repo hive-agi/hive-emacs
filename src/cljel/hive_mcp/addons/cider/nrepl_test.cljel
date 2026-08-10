@@ -234,10 +234,13 @@ signalling `stringp, nil' from start-process."
                    (cdr (cdr (cdr (cdr cmd))))))))
 
 (ert-deftest hive-mcp-cider-nrepl-test-build-command-cljw-classpath nil
-  "The cljw branch passes the native source roots as one colon-joined -cp.
-cljw's nrepl subcommand takes a single -cp of colon-separated dirs, unlike
-cljrs's repeated --src-path — same configuration, each runtime's own spelling."
+  "A cljw resolved as accepting -cp receives the roots colon-joined.
+The transport is resolved rather than assumed: setting
+`hive-mcp-cider-runtime-cljw-classpath' answers the top rung of the chain,
+so no binary is probed. cljw's nrepl subcommand takes a single -cp of
+colon-separated dirs, unlike cljrs's repeated --src-path."
   (let [cmd (let [hive-mcp-cider-nrepl-cljw-binary "/tmp/cljw"
+                  hive-mcp-cider-runtime-cljw-classpath :cp
                   hive-mcp-cider-nrepl-native-source-roots '("src" "test")]
               (hive-mcp-cider-nrepl-build-command 'cljw 7920))]
     (should (equal "nrepl" (car (cdr cmd))))
@@ -246,15 +249,34 @@ cljrs's repeated --src-path — same configuration, each runtime's own spelling.
     ;; The repeated --src-path spelling is cljrs's, never cljw's.
     (should-not (member "--src-path" cmd))))
 
+(ert-deftest hive-mcp-cider-nrepl-test-cljw-classpath-unsupported-warns nil
+  "A cljw with no classpath mechanism drops the roots and says so.
+The argv carries no -cp — a build without the fix exits 1 on one — and the
+plan carries a :classpath-unsupported diagnostic naming the roots, so a
+classpath-less launch is announced rather than silently accepted."
+  (let [plan (let [hive-mcp-cider-nrepl-cljw-binary "/tmp/cljw"
+                   hive-mcp-cider-runtime-cljw-classpath :none
+                   hive-mcp-cider-nrepl-native-source-roots '("src" "test")]
+               (hive-mcp-cider-nrepl-launch-plan 'cljw 7920))]
+    (should (equal 4 (length (plist-get plan :command))))
+    (should-not (member "-cp" (plist-get plan :command)))
+    (let [diag (car (plist-get plan :diagnostics))]
+      (should (eq :warn (plist-get diag :level)))
+      (should (eq :classpath-unsupported (plist-get diag :code)))
+      (should (string-match-p "src test" (plist-get diag :message))))))
+
 (ert-deftest hive-mcp-cider-nrepl-test-build-command-cljw-no-roots-no-cp nil
   "With no configured source roots the cljw branch emits no -cp at all.
 An empty -cp would otherwise shadow $CLJW_PATH and the ./deps.edn :paths
-fallback, which are the other two rungs of cljw's classpath resolution."
-  (let [cmd (let [hive-mcp-cider-nrepl-cljw-binary "/tmp/cljw"
-                  hive-mcp-cider-nrepl-native-source-roots nil]
-              (hive-mcp-cider-nrepl-build-command 'cljw 7920))]
-    (should (equal 4 (length cmd)))
-    (should-not (member "-cp" cmd))))
+fallback, which are the other two rungs of cljw's own classpath resolution.
+Nothing is reported either — there were no roots to drop."
+  (let [plan (let [hive-mcp-cider-nrepl-cljw-binary "/tmp/cljw"
+                   hive-mcp-cider-runtime-cljw-classpath :cp
+                   hive-mcp-cider-nrepl-native-source-roots nil]
+               (hive-mcp-cider-nrepl-launch-plan 'cljw 7920))]
+    (should (equal 4 (length (plist-get plan :command))))
+    (should-not (member "-cp" (plist-get plan :command)))
+    (should-not (plist-get plan :diagnostics))))
 
 (ert-deftest hive-mcp-cider-nrepl-test-build-command-appends-middleware nil
   "MIDDLEWARE strings append to the built-in list for the repl type."

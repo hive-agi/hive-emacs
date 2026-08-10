@@ -1,0 +1,277 @@
+(ns hive-mcp-cider-runtime
+  "Launch profiles for the native Clojure runtimes cljw and cljrs.
+
+How a runtime accepts a classpath is DATA, not a branch. A TRANSPORT is a
+plist:
+
+  (:transport :argv-repeat :flag F)               one F per root
+  (:transport :argv-joined :flag F :separator S)  roots joined by S
+  (:transport :env-var :var V :separator S)       exported as V
+  (:transport :none :reason R)                    no classpath mechanism
+
+`transport-argv', `transport-env' and `transport-diagnostics' project a
+transport and a list of source roots onto the three channels a launch has.
+A :none transport with roots to deliver yields a diagnostic; the roots are
+never dropped silently.
+
+Settings resolve through `hive-mcp-config' source chains: a defcustom, then
+the environment, then `:runtimes' in `hive-mcp-config-file', then a probe or
+a default.
+
+Layer: Collect (transport constructors) + Promote (the projections,
+`parse-transport', `cljw-help-supports-classpath-p'). The only I/O is
+`cljw-probe-classpath', which runs the binary's --help.")
+
+(require 'subr-x)
+(require 'hive-mcp-config)
+
+;; ============================================================================
+;; Configuration
+;; ============================================================================
+
+(defcustom hive-mcp-cider-runtime-cljw-classpath nil
+  "How this machine's cljw accepts an nREPL classpath, or nil to resolve it.
+Highest-precedence rung of the cljw classpath chain. Accepts a transport
+plist, or the shorthand :cp (a `-cp' argument, which requires the
+ClojureWasm carrying the D-322 nREPL classpath fix) or :none (no classpath
+mechanism). Nil is unset, not :none — resolution falls through to
+HIVE_CLJW_CLASSPATH, then `hive-mcp-config-file', then a probe of the
+binary."
+  :type '(choice (const :tag "Resolve automatically" nil)
+                 (const :tag "Accepts -cp" :cp)
+                 (const :tag "No classpath mechanism" :none)
+                 (sexp :tag "Transport plist"))
+  :group 'hive-mcp-cider)
+
+;; ============================================================================
+;; Internal State
+;; ============================================================================
+
+(defvar hive-mcp-cider-runtime--capability-cache (make-hash-table :test 'equal)
+  "Probed runtime capabilities, keyed by binary path and modification time.")
+
+;; ============================================================================
+;; Collect — transport constructors
+;; ============================================================================
+
+(defn transport-argv-repeat [flag]
+  "A transport emitting FLAG once per source root."
+  (list :transport :argv-repeat :flag flag))
+
+(defn transport-argv-joined [flag separator]
+  "A transport emitting FLAG once, followed by the roots joined by SEPARATOR."
+  (list :transport :argv-joined :flag flag :separator separator))
+
+(defn transport-env-var [var separator]
+  "A transport exporting the roots joined by SEPARATOR as environment VAR."
+  (list :transport :env-var :var var :separator separator))
+
+(defn transport-none [reason]
+  "A transport carrying no classpath, explained by REASON."
+  (list :transport :none :reason reason))
+
+;; ============================================================================
+;; Promote — projections onto the launch channels
+;; ============================================================================
+
+(defn transport-argv [transport roots]
+  "Return the argv fragment delivering ROOTS through TRANSPORT, or nil.
+Nil for an empty ROOTS and for any transport with no argv channel. Pure."
+  (let [kind (plist-get transport :transport)]
+    (when roots
+      (cond
+        (eq kind :argv-repeat)
+        (apply #'append
+               (mapcar (lambda (r) (list (plist-get transport :flag) r)) roots))
+
+        (eq kind :argv-joined)
+        (list (plist-get transport :flag)
+              (mapconcat #'identity roots (plist-get transport :separator)))
+
+        :else nil))))
+
+(defn transport-env [transport roots]
+  "Return the `process-environment' entries delivering ROOTS through
+TRANSPORT, or nil. Each entry is a \"VAR=VALUE\" string. Nil for an empty
+ROOTS and for any transport with no environment channel. Pure."
+  (let [kind (plist-get transport :transport)]
+    (when (and roots (eq kind :env-var))
+      (list (format "%s=%s"
+                    (plist-get transport :var)
+                    (mapconcat #'identity roots (plist-get transport :separator)))))))
+
+(defn transport-diagnostics [transport roots &optional subject]
+  "Return diagnostics for delivering ROOTS through TRANSPORT, or nil.
+A :none transport with roots to deliver yields one (:level :warn :code
+:classpath-unsupported :message S); SUBJECT names the runtime in S. Pure."
+  (when (and roots (eq (plist-get transport :transport) :none))
+    (list (list :level :warn
+                :code :classpath-unsupported
+                :message (format "%s: source roots %s not delivered — %s"
+                                 (or subject "native runtime")
+                                 (mapconcat #'identity roots " ")
+                                 (or (plist-get transport :reason)
+                                     "no classpath mechanism"))))))
+
+(defn- -as-keyword [value]
+  "Return VALUE as a keyword when it is a keyword or non-empty string, else nil."
+  (if (keywordp value)
+      value
+    (when (and (stringp value) (not (string= "" value)))
+      (intern (elisp-concat ":" (string-remove-prefix ":" value))))))
+
+(defn parse-transport [value]
+  "Coerce VALUE, as written in a defcustom or config file, to a transport.
+A transport plist passes through. The shorthands :cp and :classpath mean a
+`-cp' argument, :src-path means one `--src-path' per root, and :none means
+no mechanism; each is also accepted as a string. Any other value, nil
+included, yields nil — \"unset\", which lets a source chain keep looking.
+Pure."
+  (if (and (listp value) (plist-get value :transport))
+      value
+    (let [kw (-as-keyword value)]
+      (if (memq kw '(:cp :classpath))
+          (transport-argv-joined "-cp" ":")
+        (if (eq kw :src-path)
+            (transport-argv-repeat "--src-path")
+          (when (memq kw '(:none :unsupported))
+            (transport-none "configured as having no classpath mechanism")))))))
+
+;; ============================================================================
+;; Promote — the capability decision
+;; ============================================================================
+
+(defn cljw-help-supports-classpath-p [help-text]
+  "Return non-nil when HELP-TEXT documents a classpath argument for nrepl.
+The ClojureWasm carrying the D-322 nREPL classpath fix documents
+`nrepl [--port N] [-cp <dirs>] [-A:alias…]'; a stock build documents
+`nrepl [--port N]' and exits 1 on -cp. Pure — this is the decision, and
+`cljw-probe-classpath' is the subprocess that produces HELP-TEXT."
+  (and (stringp help-text)
+       (string-match-p "nrepl[^\n]*-cp" help-text)
+       t))
+
+;; ============================================================================
+;; Boundary — the capability probe
+;; ============================================================================
+
+(defn cljw-probe-classpath [binary]
+  "Probe the cljw at BINARY for nREPL classpath support, returning a transport.
+Runs `--help' only: no port is bound and no session is started. Returns nil
+when BINARY is missing or not executable, so a source chain falls through
+rather than concluding anything about a binary it never reached. I/O."
+  (let [path (expand-file-name (or binary ""))]
+    (when (file-executable-p path)
+      (let [help (condition-case nil
+                     (with-temp-buffer
+                       (call-process path nil t nil "--help")
+                       (buffer-string))
+                   (error nil))]
+        (when help
+          (if (cljw-help-supports-classpath-p help)
+              (transport-argv-joined "-cp" ":")
+            (transport-none
+             "this cljw build's nrepl accepts no classpath; needs the ClojureWasm carrying the D-322 nREPL classpath fix")))))))
+
+(defn cljw-classpath-capability [binary]
+  "Return the probed classpath transport for BINARY, cached on path and mtime.
+A rebuilt binary is probed again; repeated launches of one build are not.
+I/O on a cache miss."
+  (when binary
+    (let* [path (expand-file-name binary)
+           attrs (file-attributes path)
+           key (cons path (format "%s" (when attrs
+                                         (file-attribute-modification-time attrs))))
+           missing (make-symbol "capability-miss")
+           hit (gethash key hive-mcp-cider-runtime--capability-cache missing)]
+      (if (eq hit missing)
+          (puthash key (cljw-probe-classpath path)
+                   hive-mcp-cider-runtime--capability-cache)
+        hit))))
+
+;; ============================================================================
+;; Promote — source chains
+;; ============================================================================
+
+(defn setting-source [custom-symbol env-var key-path default]
+  "Return the standard source chain for one native-runtime setting.
+Precedence, highest first: CUSTOM-SYMBOL, ENV-VAR, KEY-PATH under `:runtimes'
+in `hive-mcp-config-file', then DEFAULT. A nil rung is omitted. Pure."
+  (hive-mcp-config-coalesce
+   (delq nil
+         (list (when custom-symbol (hive-mcp-config-custom custom-symbol))
+               (when env-var (hive-mcp-config-env env-var))
+               (when (and key-path hive-mcp-config-file)
+                 (hive-mcp-config-edn-file hive-mcp-config-file
+                                           (cons :runtimes key-path)))
+               (when default (hive-mcp-config-literal default))))))
+
+(defn cljw-classpath-source []
+  "Return the source chain for the cljw nREPL classpath transport.
+Precedence: `hive-mcp-cider-runtime-cljw-classpath', HIVE_CLJW_CLASSPATH,
+`(:runtimes :cljw :classpath)' in `hive-mcp-config-file', a probe of the
+configured binary, then :none. The terminal default is :none — an
+unconfigured, unprobeable cljw is assumed to accept no classpath. Pure."
+  (hive-mcp-config-coalesce
+   (delq nil
+         (list (hive-mcp-config-custom 'hive-mcp-cider-runtime-cljw-classpath)
+               (hive-mcp-config-env "HIVE_CLJW_CLASSPATH")
+               (when hive-mcp-config-file
+                 (hive-mcp-config-edn-file hive-mcp-config-file
+                                           '(:runtimes :cljw :classpath)))
+               (hive-mcp-config-probe :cljw-classpath)
+               (hive-mcp-config-literal :none)))))
+
+(defn binary-source [repl-type]
+  "Return the source chain for REPL-TYPE's executable path, or nil.
+The terminal default is the bare command name, resolved through PATH by
+`binary'. A checkout-specific path belongs in `hive-mcp-config-file' or in
+the defcustom, never in this default. Nil for a REPL-TYPE that is not a
+native runtime. Pure."
+  (pcase repl-type
+    ('cljw (setting-source 'hive-mcp-cider-nrepl-cljw-binary
+                           "HIVE_CLJW_BINARY" '(:cljw :binary) "cljw"))
+    ('cljrs (setting-source 'hive-mcp-cider-nrepl-cljrs-binary
+                            "HIVE_CLJRS_BINARY" '(:cljrs :binary) "cljrs"))
+    (_ nil)))
+
+;; ============================================================================
+;; Boundary — resolution against the live machine
+;; ============================================================================
+
+(defn binary [repl-type &optional readers]
+  "Resolve the executable path for native REPL-TYPE, or nil.
+A resolved value naming no directory is looked up on PATH, so \"cljw\" means
+the installed cljw and never a file of that name in the working directory.
+READERS defaults to probe-less readers: a binary path never needs a probe,
+and resolving it without one is what keeps `default-readers' from recurring
+through the capability it depends on."
+  (let [source (binary-source repl-type)]
+    (when source
+      (let [path (hive-mcp-config-resolve-source
+                  source (or readers (hive-mcp-config-default-readers)))]
+        (when path
+          (if (file-name-directory path)
+              (expand-file-name path)
+            (or (executable-find path) path)))))))
+
+(defn default-readers []
+  "Return production readers with the cljw capability probe wired in. I/O."
+  (hive-mcp-config-default-readers
+   (lambda (capability)
+     (when (eq capability :cljw-classpath)
+       (cljw-classpath-capability (binary 'cljw))))))
+
+(defn classpath-transport [repl-type &optional readers]
+  "Resolve the classpath transport for REPL-TYPE.
+'cljrs is fixed: `--src-path' per root is its only spelling and every build
+accepts it. 'cljw resolves through `cljw-classpath-source'. Any other
+REPL-TYPE has no classpath transport and yields nil."
+  (pcase repl-type
+    ('cljrs (transport-argv-repeat "--src-path"))
+    ('cljw (or (parse-transport
+                (hive-mcp-config-resolve-source
+                 (cljw-classpath-source)
+                 (or readers (default-readers))))
+               (transport-none "classpath transport unresolved")))
+    (_ nil)))

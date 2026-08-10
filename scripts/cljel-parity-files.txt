@@ -13,6 +13,8 @@ hive_mcp/addons/cider/memory.cljel
 hive_mcp/addons/cider/memory_test.cljel
 hive_mcp/addons/cider/nrepl.cljel
 hive_mcp/addons/cider/nrepl_test.cljel
+hive_mcp/addons/cider/runtime.cljel
+hive_mcp/addons/cider/runtime_test.cljel
 hive_mcp/addons/cider/sessions.cljel
 hive_mcp/addons/cider/sessions_test.cljel
 hive_mcp/addons/cider/ui.cljel
@@ -51,6 +53,8 @@ hive_mcp/ai_bridge.cljel
 hive_mcp/api.cljel
 hive_mcp/channel.cljel
 hive_mcp/channel_ws.cljel
+hive_mcp/config.cljel
+hive_mcp/config_test.cljel
 hive_mcp/context.cljel
 hive_mcp/graceful.cljel
 hive_mcp/hive_mcp.cljel
