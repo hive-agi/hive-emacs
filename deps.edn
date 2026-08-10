@@ -9,7 +9,7 @@
         org.replikativ/persistent-sorted-set {:mvn/version "0.4.126"}
 
         ;; hive-dsl — Result monad, rescue/guard DSL
-        io.github.hive-agi/hive-dsl {:mvn/version "0.5.9"}
+        io.github.hive-agi/hive-dsl {:mvn/version "0.5.10"}
 
         ;; Malli schemas are the contract/type/proof source of truth.
         metosin/malli {:mvn/version "0.20.1"}
@@ -23,10 +23,10 @@
         io.github.hive-agi/hive-addon {:mvn/version "0.3.4"}
 
         ;; SPI ports (ICiderPort) — the contract the addon reifies.
-        io.github.hive-agi/hive-spi {:mvn/version "0.1.17"}
+        io.github.hive-agi/hive-spi {:mvn/version "0.1.18"}
 
         ;; hive-di — typed env var resolution with ADT backing (defconfig)
-        io.github.hive-agi/hive-di {:mvn/version "0.3.2"}
+        io.github.hive-agi/hive-di {:mvn/version "0.4.1"}
 
         ;; Process execution for emacsclient subprocess
         babashka/process {:mvn/version "0.6.25"}}
@@ -37,7 +37,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.1"}
-                io.github.hive-agi/hive-test {:mvn/version "0.3.11"}}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.12"}}
    :main-opts ["-m" "cognitect.test-runner"]}
 
   :typed
@@ -49,7 +49,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.replikativ/ansatz {:mvn/version "0.2.79"}
-                io.github.hive-agi/hive-test {:mvn/version "0.3.11"}}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.12"}}
    :main-opts ["-m" "cognitect.test-runner" "-d" "test-ansatz"]}
 
   :build
