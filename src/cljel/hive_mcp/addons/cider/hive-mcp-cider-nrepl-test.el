@@ -137,6 +137,20 @@
   (interactive)
   (ert-run-tests-batch-and-exit "^hive-mcp-cider-nrepl-test-"))
 
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-cljrs-src-paths nil "The cljrs branch passes one --src-path per configured native source root." (let* ((cmd (let* ((hive-mcp-cider-nrepl-cljrs-binary "/tmp/cljrs")
+        (hive-mcp-cider-nrepl-native-source-roots '("src" "test")))
+    (hive-mcp-cider-nrepl-build-command 'cljrs 7921))))
+    (should (equal "nrepl" (car (cdr cmd))))
+    (should (member "7921" cmd))
+    (should (equal '("--src-path" "src" "--src-path" "test") (cdr (cdr (cdr (cdr cmd))))))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-cljw-takes-no-classpath nil "The cljw nrepl subcommand accepts no classpath argument, so none is emitted." (let* ((cmd (let* ((hive-mcp-cider-nrepl-cljw-binary "/tmp/cljw")
+        (hive-mcp-cider-nrepl-native-source-roots '("src" "test")))
+    (hive-mcp-cider-nrepl-build-command 'cljw 7920))))
+    (should (equal 4 (length cmd)))
+    (should-not (member "--src-path" cmd))
+    (should-not (member "-cp" cmd))))
+
 (ert-deftest hive-mcp-cider-nrepl-test-build-command-appends-middleware nil "MIDDLEWARE strings append to the built-in list for the repl type." (let* ((cmd (let* ((hive-mcp-cider-nrepl-launch-aliases nil))
     (hive-mcp-cider-nrepl-build-command 'clj 7999 nil nil nil '("refactor-nrepl.middleware/wrap-refactor")))))
     (should (member "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]" cmd))) (let* ((cmd (let* ((hive-mcp-cider-nrepl-cljel-project-dir "/tmp/clojure-elisp"))

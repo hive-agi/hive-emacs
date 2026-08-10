@@ -58,6 +58,14 @@ points at the local debug build output."
   :type 'string
   :group 'hive-mcp-cider)
 
+(defcustom hive-mcp-cider-nrepl-native-source-roots '("src" "test")
+  "Project-relative source roots handed to a native-runtime nREPL.
+Each entry becomes one `--src-path' argument to `cljrs nrepl'; without them
+the server resolves no project namespace. Has no effect on 'cljw, whose
+nrepl subcommand accepts neither -cp nor $CLJW_PATH."
+  :type '(repeat string)
+  :group 'hive-mcp-cider)
+
 (defcustom hive-mcp-cider-nrepl-shadow-build ":app"
   "Default shadow-cljs build ID."
   :type 'string
@@ -188,7 +196,9 @@ main flag (e.g. '(\"-Srepro\") or JVM opts); everything after -M is
 main-opts, so CLI opts must precede it.
 The native runtimes 'cljw (ClojureWasm) and 'cljrs (clojurust) launch their
 own binary's `nrepl --port' subcommand; the JVM-only options (-Sdeps,
-ALIASES, EXTRA-DEPS, MIDDLEWARE) do not apply and are ignored.
+ALIASES, EXTRA-DEPS, MIDDLEWARE) do not apply and are ignored. 'cljrs also
+receives one `--src-path' per `hive-mcp-cider-nrepl-native-source-roots'
+entry; 'cljw takes no classpath argument on this subcommand.
 This is a pure function — no side effects."
   (let [port-str (number-to-string port)
         effective-aliases (or aliases hive-mcp-cider-nrepl-launch-aliases)
@@ -208,6 +218,9 @@ This is a pure function — no side effects."
                     (if overrides
                         (merge-deps-edn base overrides)
                       base))
+        src-path-args (apply #'append
+                             (mapcar (lambda (root) (list "--src-path" root))
+                                     hive-mcp-cider-nrepl-native-source-roots))
         mw-for (lambda (built-ins)
                  (elisp-concat "["
                                (mapconcat (lambda (m) (format "%s" m))
@@ -220,8 +233,9 @@ This is a pure function — no side effects."
        (list (expand-file-name hive-mcp-cider-nrepl-cljw-binary)
              "nrepl" "--port" port-str))
       ('cljrs
-       (list (expand-file-name hive-mcp-cider-nrepl-cljrs-binary)
-             "nrepl" "--port" port-str))
+       (append (list (expand-file-name hive-mcp-cider-nrepl-cljrs-binary)
+                     "nrepl" "--port" port-str)
+               src-path-args))
       ('cljel
        (append (list "clojure" "-Sdeps" (funcall sdeps-for cljel-deps))
                extra-args
