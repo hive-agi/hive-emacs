@@ -60,9 +60,11 @@ points at the local debug build output."
 
 (defcustom hive-mcp-cider-nrepl-native-source-roots '("src" "test")
   "Project-relative source roots handed to a native-runtime nREPL.
-Each entry becomes one `--src-path' argument to `cljrs nrepl'; without them
-the server resolves no project namespace. Has no effect on 'cljw, whose
-nrepl subcommand accepts neither -cp nor $CLJW_PATH."
+Each entry becomes one `--src-path' argument to `cljrs nrepl', and the
+entries joined by \":\" become the `-cp' argument to `cljw nrepl'; without
+them the server resolves no project namespace.
+`cljw nrepl' only accepts -cp from ClojureWasm carrying the D-322 nREPL
+classpath fix; a stock build rejects it with \"unknown argument\"."
   :type '(repeat string)
   :group 'hive-mcp-cider)
 
@@ -196,9 +198,10 @@ main flag (e.g. '(\"-Srepro\") or JVM opts); everything after -M is
 main-opts, so CLI opts must precede it.
 The native runtimes 'cljw (ClojureWasm) and 'cljrs (clojurust) launch their
 own binary's `nrepl --port' subcommand; the JVM-only options (-Sdeps,
-ALIASES, EXTRA-DEPS, MIDDLEWARE) do not apply and are ignored. 'cljrs also
-receives one `--src-path' per `hive-mcp-cider-nrepl-native-source-roots'
-entry; 'cljw takes no classpath argument on this subcommand.
+ALIASES, EXTRA-DEPS, MIDDLEWARE) do not apply and are ignored. Both receive
+`hive-mcp-cider-nrepl-native-source-roots' as a classpath, in each one's own
+spelling: 'cljrs takes one `--src-path' per root, 'cljw takes a single `-cp'
+of the roots joined by \":\".
 This is a pure function — no side effects."
   (let [port-str (number-to-string port)
         effective-aliases (or aliases hive-mcp-cider-nrepl-launch-aliases)
@@ -221,6 +224,11 @@ This is a pure function — no side effects."
         src-path-args (apply #'append
                              (mapcar (lambda (root) (list "--src-path" root))
                                      hive-mcp-cider-nrepl-native-source-roots))
+        cljw-cp-args (if hive-mcp-cider-nrepl-native-source-roots
+                         (list "-cp" (mapconcat #'identity
+                                                hive-mcp-cider-nrepl-native-source-roots
+                                                ":"))
+                       nil)
         mw-for (lambda (built-ins)
                  (elisp-concat "["
                                (mapconcat (lambda (m) (format "%s" m))
@@ -230,8 +238,9 @@ This is a pure function — no side effects."
       ('cljs
        (list "npx" "shadow-cljs" "watch" hive-mcp-cider-nrepl-shadow-build))
       ('cljw
-       (list (expand-file-name hive-mcp-cider-nrepl-cljw-binary)
-             "nrepl" "--port" port-str))
+       (append (list (expand-file-name hive-mcp-cider-nrepl-cljw-binary)
+                     "nrepl" "--port" port-str)
+               cljw-cp-args))
       ('cljrs
        (append (list (expand-file-name hive-mcp-cider-nrepl-cljrs-binary)
                      "nrepl" "--port" port-str)

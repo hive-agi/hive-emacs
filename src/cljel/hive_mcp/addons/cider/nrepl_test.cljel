@@ -233,13 +233,27 @@ signalling `stringp, nil' from start-process."
     (should (equal '("--src-path" "src" "--src-path" "test")
                    (cdr (cdr (cdr (cdr cmd))))))))
 
-(ert-deftest hive-mcp-cider-nrepl-test-build-command-cljw-takes-no-classpath nil
-  "The cljw nrepl subcommand accepts no classpath argument, so none is emitted."
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-cljw-classpath nil
+  "The cljw branch passes the native source roots as one colon-joined -cp.
+cljw's nrepl subcommand takes a single -cp of colon-separated dirs, unlike
+cljrs's repeated --src-path — same configuration, each runtime's own spelling."
   (let [cmd (let [hive-mcp-cider-nrepl-cljw-binary "/tmp/cljw"
                   hive-mcp-cider-nrepl-native-source-roots '("src" "test")]
               (hive-mcp-cider-nrepl-build-command 'cljw 7920))]
+    (should (equal "nrepl" (car (cdr cmd))))
+    (should (member "7920" cmd))
+    (should (equal '("-cp" "src:test") (cdr (cdr (cdr (cdr cmd))))))
+    ;; The repeated --src-path spelling is cljrs's, never cljw's.
+    (should-not (member "--src-path" cmd))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-build-command-cljw-no-roots-no-cp nil
+  "With no configured source roots the cljw branch emits no -cp at all.
+An empty -cp would otherwise shadow $CLJW_PATH and the ./deps.edn :paths
+fallback, which are the other two rungs of cljw's classpath resolution."
+  (let [cmd (let [hive-mcp-cider-nrepl-cljw-binary "/tmp/cljw"
+                  hive-mcp-cider-nrepl-native-source-roots nil]
+              (hive-mcp-cider-nrepl-build-command 'cljw 7920))]
     (should (equal 4 (length cmd)))
-    (should-not (member "--src-path" cmd))
     (should-not (member "-cp" cmd))))
 
 (ert-deftest hive-mcp-cider-nrepl-test-build-command-appends-middleware nil

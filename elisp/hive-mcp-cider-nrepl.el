@@ -42,7 +42,7 @@
   :type 'string)
 
 (defcustom hive-mcp-cider-nrepl-native-source-roots '("src" "test")
-  "Project-relative source roots handed to a native-runtime nREPL.\nEach entry becomes one `--src-path' argument to `cljrs nrepl'; without them\nthe server resolves no project namespace. Has no effect on 'cljw, whose\nnrepl subcommand accepts neither -cp nor $CLJW_PATH."
+  "Project-relative source roots handed to a native-runtime nREPL.\nEach entry becomes one `--src-path' argument to `cljrs nrepl', and the\nentries joined by \":\" become the `-cp' argument to `cljw nrepl'; without\nthem the server resolves no project namespace.\n`cljw nrepl' only accepts -cp from ClojureWasm carrying the D-322 nREPL\nclasspath fix; a stock build rejects it with \"unknown argument\"."
   :group 'hive-mcp-cider
   :type '(repeat string))
 
@@ -120,7 +120,7 @@
     (parseedn-print-str merged)))
 
 (defun hive-mcp-cider-nrepl-build-command (repl-type port &optional extra-args aliases extra-deps middleware)
-  "Build the nREPL start command for REPL-TYPE on PORT.\nReturns a list of (program . args) for `start-process'; the caller owns the\nworking directory. REPL-TYPE is one of 'clj, 'cljs, 'cljel, 'cljw, or 'cljrs.\nUses inline -Sdeps plus ALIASES (default `hive-mcp-cider-nrepl-launch-aliases')\nso spawn works in any project without requiring a :nrepl or :dev alias.\nThe selected aliases' `:main-opts' are blanked through the same -Sdeps map\n(see `main-opts-neutralizer') — an alias that names its own -m would otherwise\nrun instead of nrepl.cmdline and the spawn would never open a port.\nEXTRA-DEPS is a list of deps EDN strings (e.g. local.deps.edn contents)\nmerged into the built-in -Sdeps map via `merge-deps-edn' — the CLI keeps\nonly the last -Sdeps, so layering must merge, not repeat the flag.\nMIDDLEWARE is a list of nREPL middleware symbol strings appended to the\nbuilt-in list for REPL-TYPE.\nEXTRA-ARGS is a list of raw CLI args spliced after -Sdeps and before the -M\nmain flag (e.g. '(\"-Srepro\") or JVM opts); everything after -M is\nmain-opts, so CLI opts must precede it.\nThe native runtimes 'cljw (ClojureWasm) and 'cljrs (clojurust) launch their\nown binary's `nrepl --port' subcommand; the JVM-only options (-Sdeps,\nALIASES, EXTRA-DEPS, MIDDLEWARE) do not apply and are ignored. 'cljrs also\nreceives one `--src-path' per `hive-mcp-cider-nrepl-native-source-roots'\nentry; 'cljw takes no classpath argument on this subcommand.\nThis is a pure function — no side effects."
+  "Build the nREPL start command for REPL-TYPE on PORT.\nReturns a list of (program . args) for `start-process'; the caller owns the\nworking directory. REPL-TYPE is one of 'clj, 'cljs, 'cljel, 'cljw, or 'cljrs.\nUses inline -Sdeps plus ALIASES (default `hive-mcp-cider-nrepl-launch-aliases')\nso spawn works in any project without requiring a :nrepl or :dev alias.\nThe selected aliases' `:main-opts' are blanked through the same -Sdeps map\n(see `main-opts-neutralizer') — an alias that names its own -m would otherwise\nrun instead of nrepl.cmdline and the spawn would never open a port.\nEXTRA-DEPS is a list of deps EDN strings (e.g. local.deps.edn contents)\nmerged into the built-in -Sdeps map via `merge-deps-edn' — the CLI keeps\nonly the last -Sdeps, so layering must merge, not repeat the flag.\nMIDDLEWARE is a list of nREPL middleware symbol strings appended to the\nbuilt-in list for REPL-TYPE.\nEXTRA-ARGS is a list of raw CLI args spliced after -Sdeps and before the -M\nmain flag (e.g. '(\"-Srepro\") or JVM opts); everything after -M is\nmain-opts, so CLI opts must precede it.\nThe native runtimes 'cljw (ClojureWasm) and 'cljrs (clojurust) launch their\nown binary's `nrepl --port' subcommand; the JVM-only options (-Sdeps,\nALIASES, EXTRA-DEPS, MIDDLEWARE) do not apply and are ignored. Both receive\n`hive-mcp-cider-nrepl-native-source-roots' as a classpath, in each one's own\nspelling: 'cljrs takes one `--src-path' per root, 'cljw takes a single `-cp'\nof the roots joined by \":\".\nThis is a pure function — no side effects."
   (let* ((port-str (number-to-string port))
         (effective-aliases (or aliases hive-mcp-cider-nrepl-launch-aliases))
         (main-flag (hive-mcp-cider-nrepl-launch-flag effective-aliases))
@@ -131,12 +131,13 @@
     (if overrides (hive-mcp-cider-nrepl-merge-deps-edn base overrides) base)))
         (src-path-args (apply #'append (mapcar (lambda (root)
     (list "--src-path" root)) hive-mcp-cider-nrepl-native-source-roots)))
+        (cljw-cp-args (if hive-mcp-cider-nrepl-native-source-roots (list "-cp" (mapconcat #'identity hive-mcp-cider-nrepl-native-source-roots ":")) nil))
         (mw-for (lambda (built-ins)
     (concat "[" (mapconcat (lambda (m)
     (format "%s" m)) (append built-ins middleware) ",") "]"))))
     (pcase repl-type
   ((quote cljs) (list "npx" "shadow-cljs" "watch" hive-mcp-cider-nrepl-shadow-build))
-  ((quote cljw) (list (expand-file-name hive-mcp-cider-nrepl-cljw-binary) "nrepl" "--port" port-str))
+  ((quote cljw) (append (list (expand-file-name hive-mcp-cider-nrepl-cljw-binary) "nrepl" "--port" port-str) cljw-cp-args))
   ((quote cljrs) (append (list (expand-file-name hive-mcp-cider-nrepl-cljrs-binary) "nrepl" "--port" port-str) src-path-args))
   ((quote cljel) (append (list "clojure" "-Sdeps" (funcall sdeps-for cljel-deps)) extra-args (list main-flag "-m" "nrepl.cmdline" "--port" port-str "--middleware" (funcall mw-for '("cider.nrepl/cider-middleware" "clojure-elisp.nrepl/wrap-cljel")))))
   (_ (append (list "clojure" "-Sdeps" (funcall sdeps-for clj-deps)) extra-args (list main-flag "-m" "nrepl.cmdline" "--port" port-str "--middleware" (funcall mw-for '("cider.nrepl/cider-middleware"))))))))
