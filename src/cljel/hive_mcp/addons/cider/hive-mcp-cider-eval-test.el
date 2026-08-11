@@ -272,6 +272,24 @@
     (should (equal "42" result))
     (should (equal 0 interrupts))))
 
+(ert-deftest hive-mcp-cider-eval-test-splice-cljw-do nil "A cljw session's top-level `do' is split into one string per child.\ncljw analyses a whole form before running any of it, so a `require' and its\nfirst use inside one `do' fail there while working via `cljw -e'." (let* ((spliced (hive-mcp-cider-eval-splice-forms "(do (require 'x) (f 1))" 'cljw)))
+    (should (equal 2 (length spliced)))
+    (should (equal "(require 'x)" (clel-nth spliced 0)))
+    (should (equal "(f 1)" (clel-nth spliced 1)))))
+
+(ert-deftest hive-mcp-cider-eval-test-splice-leaves-other-runtimes-alone nil "Only cljw is spliced; every other runtime evaluates the `do' as written." (let* ((code "(do (setq a 1) (+ a 1))"))
+    (dolist (rt (list 'clj 'cljs 'cljel 'cljrs nil))
+    (should (equal (list code) (hive-mcp-cider-eval-splice-forms code rt))))))
+
+(ert-deftest hive-mcp-cider-eval-test-splice-leaves-non-do-alone nil "A cljw session splices only a top-level `do'; anything else is untouched." (dolist (code (list "(+ 1 2)" "(let ((x 1)) x)" "(do)"))
+    (should (equal (list code) (hive-mcp-cider-eval-splice-forms code 'cljw)))))
+
+(ert-deftest hive-mcp-cider-eval-test-splice-refuses-trailing-forms nil "Several top-level forms are not one `do' — splicing them would drop code." (let* ((code "(do (setq a 1)) (+ 1 2)"))
+    (should (equal (list code) (hive-mcp-cider-eval-splice-forms code 'cljw)))))
+
+(ert-deftest hive-mcp-cider-eval-test-splice-survives-unreadable-code nil "Unbalanced input is sent as-is so the runtime reports the read error." (let* ((code "(do (foo"))
+    (should (equal (list code) (hive-mcp-cider-eval-splice-forms code 'cljw)))))
+
 (defun hive-mcp-cider-eval-test-run-tests ()
   "Run all hive-mcp-cider-eval ERT tests in batch."
   (interactive)

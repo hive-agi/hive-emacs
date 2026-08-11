@@ -249,12 +249,44 @@ Asserts the recorded :cljel-upgrade instead of trusting :repl-type alone."
        (eq (plist-get session :cljel-upgrade) 'failed)
        t))
 
+(defn top-level-do-children [code]
+  "Return CODE's children as a list when it is exactly one top-level `(do ...)'.
+Nil for anything else: a non-`do' form, several top-level forms, or an
+unreadable string. Pure - the reader runs, nothing is evaluated.
+`read-from-string' returns (OBJECT . INDEX), so the two are taken apart by
+hand; `let*' here binds pairs, it does not destructure."
+  (ignore-errors
+    (let* [parsed (read-from-string code)
+           form (car parsed)
+           end (cdr parsed)]
+      (when (and (consp form)
+                 (eq (car form) 'do)
+                 (cdr form)
+                 (string-blank-p (substring code end)))
+        (cdr form)))))
+
+(defn splice-forms [code repl-type]
+  "Forms to send for CODE, as a list of strings.
+A cljw session evaluating a single top-level `(do ...)' gets one string per
+child; everything else gets CODE unchanged. cljw's shared eval engine analyses
+a whole form before running any of it, so a `require' and its first use inside
+one `do' fail with a name error there while working via `cljw -e' and on every
+other runtime. Sending the children separately is what cljw's own script path
+does (`driver.evalTopLevelForm'), so the value of the last child is the value
+of the `do'."
+  (or (and (eq repl-type 'cljw)
+           (let [children (top-level-do-children code)]
+             (when children (mapcar (lambda (f) (format "%S" f)) children))))
+      (list code)))
+
 (defn eval-in-session [name code &optional timeout]
   "Evaluate CODE in the CIDER session NAME.
 Optional TIMEOUT in seconds (default: `hive-mcp-cider-eval-timeout').
 Uses the synchronous heartbeat poll of `eval-with-heartbeat'.
 Refuses any session that is not 'connected (surfacing its registry :reason)
-and any cljel session whose upgrade did not confirm."
+and any cljel session whose upgrade did not confirm.
+A cljw session's top-level `(do ...)' is sent child by child per
+`splice-forms'; the last child's value is the result, as `do' requires."
   (let* [session (hive-mcp-cider-sessions-lookup name)
          cider-buf (plist-get session :cider-buffer)]
     (unless session
@@ -269,7 +301,9 @@ and any cljel session whose upgrade did not confirm."
         (hive-mcp-cider-sessions-update-prop name :status 'stale))
       (error "Session '%s' REPL buffer is gone" name))
     (with-current-buffer cider-buf
-      (eval-with-heartbeat code timeout))))
+      (let [result nil]
+        (dolist (form (splice-forms code (plist-get session :repl-type)) result)
+          (setq result (eval-with-heartbeat form timeout)))))))
 
 ;; ============================================================================
 ;; MCP API Eval Functions
