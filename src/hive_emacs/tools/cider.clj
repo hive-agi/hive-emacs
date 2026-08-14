@@ -15,7 +15,9 @@
             [hive-emacs.elisp :as el]
             [hive-emacs.tools.support :as tool]
             [taoensso.timbre :as log]
-            [hive-emacs.runtime-ports :as rt-ports]))
+            [hive-emacs.runtime-ports :as rt-ports]
+            [hive-emacs.repl.boundary :as repl]
+            [hive-emacs.repl.profile :as repl-profile]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -339,6 +341,84 @@
                  :items {:type "string"}
                  :description "spawn only: nREPL middleware symbol strings appended to the built-in list (e.g. [\"refactor-nrepl.middleware/wrap-refactor\"])."}})
 
+(def repl-schema-params
+  "Params the backend-translation layer adds to the :cider subtree.
+
+   Kept separate from `schema-params` so the CIDER surface and the
+   transport-agnostic surface stay legible apart."
+  {"backend" {:type "string"
+              :description "Transport to serve this verb: 'cider' (default, nREPL) or 'slynk' (a Common Lisp image over SLY). Registered backends beyond these two are served too."}
+   "lang" {:type "string"
+           :enum ["cl" "clojure"]
+           :description "eval on a slynk backend: 'cl' (default) evaluates the form as Common Lisp; 'clojure' evaluates Clojure source, binding the Cloture readtable and compiling."}
+   "package" {:type "string"
+              :description "complete on a slynk backend: package to complete in (default COMMON-LISP-USER)."}
+   "form" {:type "string"
+           :description "inspect on a slynk backend: source of the form to inspect."}
+   "level" {:type "integer"
+            :description "restart on a slynk backend: the debugger level to act on."}
+   "n" {:type "integer"
+        :description "restart on a slynk backend: index of the restart to invoke."}
+   "filename" {:type "string"
+               :description "load-file: path of the file to load."}})
+
+(def ^:private repl-param-keys
+  "MCP param name -> the translation layer's param key."
+  {:code :code :symbol :symbol :prefix :prefix :pattern :pattern
+   :package :package :form :form :level :level :n :n :filename :filename})
+
+(defn- repl-request-params
+  "PARAMS projected onto the translation layer's vocabulary, dropping blanks so
+   an omitted MCP string does not shadow an op's default."
+  [params]
+  (reduce-kv (fn [acc mcp-key repl-key]
+               (let [v (get params mcp-key)]
+                 (if (or (nil? v) (and (string? v) (str/blank? v)))
+                   acc
+                   (assoc acc repl-key v))))
+             {}
+             repl-param-keys))
+
+(defn- via-backend
+  "Wrap CIDER-HANDLER so a non-cider :backend is served by the translation
+   layer instead.
+
+   The elisp boundary is injected rather than referenced, so the translation
+   layer never names this namespace."
+  [verb cider-handler]
+  (fn [params]
+    (let [backend (some-> params :backend not-empty keyword)]
+      (if (or (nil? backend) (= :cider backend))
+        (cider-handler params)
+        (result->mcp
+         (try-result :cider/backend-failed
+                     (fn []
+                       (binding [repl/*eval-fn* (fn [elisp timeout-ms]
+                                                  (*eval-fn* elisp timeout-ms))]
+                         (repl/run
+                          (cond-> {:req/verb verb
+                                   :req/backend backend
+                                   :req/params (repl-request-params params)}
+                            (not-empty (:lang params))
+                            (assoc :req/lang (keyword (:lang params)))))))))))))
+
+(defn- backend-only
+  "A verb CIDER does not serve. Names the backends that do, rather than
+   reporting only that this one will not."
+  [verb]
+  (fn [_params]
+    (let [serving (->> (repl-profile/backends)
+                       (remove #{:cider})
+                       (filter #(repl-profile/supports? % verb))
+                       sort
+                       (map name))]
+      (tool/mcp-error
+       (str "Error: :cider does not serve " verb
+            (if (seq serving)
+              (str "; backends that do: " (str/join ", " serving)
+                   " (pass backend=" (first serving) ")")
+              "; no registered backend serves it"))))))
+
 (defn handle-spawn
   "Spawn a new named CIDER session with its own nREPL server.
    Full CLI surface: extra_args (raw, pre--M), aliases (-M selection),
@@ -412,21 +492,32 @@
 ;;; =============================================================================
 
 (def handlers
-  "The addon-owned :cider verb tree for the `code` composite tool."
-  {:eval          handle-eval
-   :doc           handle-doc
-   :info          handle-info
-   :complete      handle-complete
-   :apropos       handle-apropos
-   :status        handle-status
-   :spawn         handle-spawn
-   :connect       handle-connect
-   :sessions      handle-sessions
-   :kill-session  handle-kill-session
-   :kill-all      handle-kill-all
+  "The addon-owned :cider verb tree for the `code` composite tool.
+
+   Verbs in the first group belong to the transport-agnostic vocabulary: a
+   :backend param selects which registered transport serves them, defaulting to
+   CIDER. Session lifecycle stays CIDER-only — an nREPL session and a SLY
+   connection are not the same object."
+  (merge
+   (into {}
+         (map (fn [[verb h]] [verb (via-backend verb h)]))
+         {:eval     handle-eval
+          :doc      handle-doc
+          :info     handle-info
+          :complete handle-complete
+          :apropos  handle-apropos
+          :status   handle-status})
+   {:load-file (via-backend :load-file (backend-only :load-file))
+    :inspect   (via-backend :inspect (backend-only :inspect))
+    :restart   (via-backend :restart (backend-only :restart))}
+   {:spawn        handle-spawn
+    :connect      handle-connect
+    :sessions     handle-sessions
+    :kill-session handle-kill-session
+    :kill-all     handle-kill-all}
    ;; deprecated aliases (core parity)
-   :eval-explicit (fn [params] (handle-eval (assoc params :mode "explicit")))
-   :eval-session  handle-eval})
+   {:eval-explicit (fn [params] (handle-eval (assoc params :mode "explicit")))
+    :eval-session  handle-eval}))
 
 (defn- subdomain-handler
   "Strip the \"<subdomain> \" prefix off :command before calling INNER."
@@ -447,8 +538,14 @@
   "Command contribution map for the host's :extension/contribute-commands!
    runtime port."
   {"cider" {:handler     handle-cider-subdomain
-            :params      schema-params
-            :description "CIDER REPL operations (hive.emacs addon): eval (silent|explicit), doc, info, complete, apropos, status, spawn (extra_args/aliases/extra_deps/middleware; local.deps.edn auto-detected), connect, sessions, kill-session, kill-all."}})
+            :params      (merge schema-params repl-schema-params)
+            :description (str "REPL operations (hive.emacs addon). Verbs: eval (silent|explicit), doc, info, "
+                              "complete, apropos, status, load-file, inspect, restart, spawn "
+                              "(extra_args/aliases/extra_deps/middleware; local.deps.edn auto-detected), "
+                              "connect, sessions, kill-session, kill-all. "
+                              "backend selects the transport for the verb group above: cider (default, nREPL) "
+                              "or slynk (a Common Lisp image over SLY); inspect and restart are slynk-only, "
+                              "and session lifecycle is cider-only.")}})
 
 (defn contribute!
   "Register the :cider subtree into the host's `code` composite tool and the
