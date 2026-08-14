@@ -98,6 +98,22 @@
 
 (ert-deftest hive-mcp-cider-runtime-test-binary-non-native-is-nil nil "A JVM repl type has no native binary to resolve." (should-not (hive-mcp-cider-runtime-binary 'clj nil)) (should-not (hive-mcp-cider-runtime-binary 'cljel nil)))
 
+(ert-deftest hive-mcp-cider-runtime-test-source-extensions-cover-both-runtimes nil "Each native runtime's own extension maps to clojure-mode.\nWithout these, a `.cljw'/`.cljrs' buffer opens in fundamental-mode: no\nparedit, no font-lock, no structural editing." (should (equal 'clojure-mode (cdr (assoc "\\.cljw\\'" hive-mcp-cider-runtime-source-extension-modes)))) (should (equal 'clojure-mode (cdr (assoc "\\.cljrs\\'" hive-mcp-cider-runtime-source-extension-modes)))))
+
+(ert-deftest hive-mcp-cider-runtime-test-source-extensions-match-real-names nil "The patterns match a real filename, and only at the end of it.\nA regexp is data here, so a typo would register silently and the file would\nstill open in fundamental-mode. `.cljw' must also not swallow `.clj'." (let* ((cljw (car (assoc "\\.cljw\\'" hive-mcp-cider-runtime-source-extension-modes)))
+        (cljrs (car (assoc "\\.cljrs\\'" hive-mcp-cider-runtime-source-extension-modes))))
+    (should (string-match-p cljw "src/demo/native.cljw"))
+    (should (string-match-p cljrs "src/demo/native.cljrs"))
+    (should-not (string-match-p cljw "src/demo/native.cljw.bak"))
+    (should-not (string-match-p cljw "src/demo/native.clj"))
+    (should-not (string-match-p cljrs "src/demo/native.cljr"))))
+
+(ert-deftest hive-mcp-cider-runtime-test-install-source-extensions-is-idempotent nil "Installing twice leaves one entry per extension in `auto-mode-alist'." (let* ((auto-mode-alist nil))
+    (hive-mcp-cider-runtime-install-source-extensions)
+    (hive-mcp-cider-runtime-install-source-extensions)
+    (should (equal (length hive-mcp-cider-runtime-source-extension-modes) (length auto-mode-alist)))
+    (should (equal 'clojure-mode (cdr (assoc "\\.cljw\\'" auto-mode-alist))))))
+
 (defun hive-mcp-cider-runtime-test-run-tests ()
   "Run this namespace's ERT tests in batch and exit."
   (ert-run-tests-batch-and-exit "^hive-mcp-cider-runtime-test-"))

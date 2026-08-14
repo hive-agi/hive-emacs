@@ -51,6 +51,18 @@ binary."
   "Probed runtime capabilities, keyed by binary path and modification time.")
 
 ;; ============================================================================
+;; Collect — source extensions
+;; ============================================================================
+
+(defconst hive-mcp-cider-runtime-source-extension-modes
+  '(("\\.cljw\\'" . clojure-mode)
+    ("\\.cljrs\\'" . clojure-mode))
+  "`auto-mode-alist' entries for the extensions the native runtimes own.
+One entry per extension: `.cljw' is ClojureWasm's and `.cljrs' is clojurust's.
+`.clj', `.cljc' and `.cljs' are clojure-mode's own and are never restated
+here.")
+
+;; ============================================================================
 ;; Collect — transport constructors
 ;; ============================================================================
 
@@ -275,3 +287,9 @@ REPL-TYPE has no classpath transport and yields nil."
                  (or readers (default-readers))))
                (transport-none "classpath transport unresolved")))
     (_ nil)))
+
+(defn install-source-extensions []
+  "Register `hive-mcp-cider-runtime-source-extension-modes' in `auto-mode-alist'.
+Idempotent. I/O."
+  (dolist [entry hive-mcp-cider-runtime-source-extension-modes]
+    (add-to-list 'auto-mode-alist entry)))

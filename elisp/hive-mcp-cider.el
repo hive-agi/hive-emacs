@@ -6,6 +6,7 @@
     (add-to-list 'load-path (expand-file-name "cider" this-dir)))
 (require 'hive-mcp-api)
 (require 'hive-mcp-cider-sessions)
+(require 'hive-mcp-cider-runtime)
 (require 'hive-mcp-cider-nrepl)
 (require 'hive-mcp-cider-connection)
 (require 'hive-mcp-cider-eval)
@@ -131,7 +132,8 @@
   (message "hive-mcp-cider: All sessions killed"))
 
 (defun hive-mcp-cider--addon-init ()
-  "Synchronous init for cider addon."
+  "Synchronous init for cider addon.\nThe native runtimes' source extensions register ahead of the cider check —\n`.cljw'/`.cljrs' need clojure-mode, not a REPL."
+  (hive-mcp-cider-runtime-install-source-extensions)
   (if (not (featurep 'cider)) (message "hive-mcp-cider: cider package not found, addon disabled") (progn
   (require 'hive-mcp-api nil t)
   (message "hive-mcp-cider: initialized"))))

@@ -19,6 +19,8 @@
 (defvar hive-mcp-cider-runtime--capability-cache (make-hash-table :test 'equal)
   "Probed runtime capabilities, keyed by binary path and modification time.")
 
+(defconst hive-mcp-cider-runtime-source-extension-modes '(("\\.cljw\\'" . clojure-mode) ("\\.cljrs\\'" . clojure-mode)) "`auto-mode-alist' entries for the extensions the native runtimes own.\nOne entry per extension: `.cljw' is ClojureWasm's and `.cljrs' is clojurust's.\n`.clj', `.cljc' and `.cljs' are clojure-mode's own and are never restated\nhere.")
+
 (defun hive-mcp-cider-runtime-transport-argv-repeat (flag)
   "A transport emitting FLAG once per source root."
   (list :transport :argv-repeat :flag flag))
@@ -134,6 +136,11 @@
   ((quote cljrs) (hive-mcp-cider-runtime-transport-argv-repeat "--src-path"))
   ((quote cljw) (or (hive-mcp-cider-runtime-parse-transport (hive-mcp-config-resolve-source (hive-mcp-cider-runtime-cljw-classpath-source) (or readers (hive-mcp-cider-runtime-default-readers)))) (hive-mcp-cider-runtime-transport-none "classpath transport unresolved")))
   (_ nil)))
+
+(defun hive-mcp-cider-runtime-install-source-extensions ()
+  "Register `hive-mcp-cider-runtime-source-extension-modes' in `auto-mode-alist'.\nIdempotent. I/O."
+  (dolist (entry hive-mcp-cider-runtime-source-extension-modes)
+    (add-to-list 'auto-mode-alist entry)))
 
 (provide 'hive-mcp-cider-runtime)
 ;;; hive-mcp-cider-runtime.el ends here

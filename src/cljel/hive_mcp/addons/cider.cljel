@@ -19,6 +19,7 @@ Architecture: Facade pattern — delegates to sub-modules:
   (:load-path ["cider"])
   (:require [hive-mcp-api :as api]
             [hive-mcp-cider-sessions]
+            [hive-mcp-cider-runtime]
             [hive-mcp-cider-nrepl]
             [hive-mcp-cider-connection]
             [hive-mcp-cider-eval]
@@ -243,7 +244,10 @@ Signals an error when NAME is blank or names no registered session."
 ;; ============================================================================
 
 (defn- -addon-init []
-  "Synchronous init for cider addon."
+  "Synchronous init for cider addon.
+The native runtimes' source extensions register ahead of the cider check —
+`.cljw'/`.cljrs' need clojure-mode, not a REPL."
+  (hive-mcp-cider-runtime-install-source-extensions)
   (if (not (featurep 'cider))
       (message "hive-mcp-cider: cider package not found, addon disabled")
     (require 'hive-mcp-api nil t)
