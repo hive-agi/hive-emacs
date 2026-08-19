@@ -1,11 +1,8 @@
-{:lint-as
- {hive-di.core/defconfig clojure.core/def
-  hive-di.testing/defconfig-tests clojure.test/deftest
-  hive-dsl.result/let-ok clojure.core/let
-  hive-schemas.test/deftrifecta-from-schema clojure.test/deftest
-  hive-spi.schema.typed-ann/defalias-schema clojure.core/def}
-
- :config-in-call
+;; Macro configs for hive-di / hive-dsl / hive-schemas / hive-spi are NOT
+;; declared here — those libraries export their own, and CI imports them with
+;; `--dependencies --copy-configs`. A local :lint-as would shadow the richer
+;; exported hook and reintroduce the findings the hook exists to prevent.
+{:config-in-call
  {ansatz.core/theorem
   {:linters {:unresolved-symbol {:level :off}
              :invalid-arity {:level :off}}}
