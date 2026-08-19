@@ -397,11 +397,11 @@ Returns the result from Clojure or nil on failure."
 Maps elisp operations to the Clojure consolidated memory tool commands."
   (pcase op
     ('add
-     (let [type (nth 0 args)
-           content (nth 1 args)
-           tags (nth 2 args)
-           project-id (nth 3 args)
-           duration (nth 4 args)]
+     (let [type (nth args 0)
+           content (nth args 1)
+           tags (nth args 2)
+           project-id (nth args 3)
+           duration (nth args 4)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"add\" :type %S :content %S :tags %s :directory %s :duration %s})"
                (symbol-name type)
                (if (stringp content) content (prin1-to-string content))
@@ -409,18 +409,18 @@ Maps elisp operations to the Clojure consolidated memory tool commands."
                (if project-id (format "\"%s\"" project-id) "nil")
                (if duration (format "\"%s\"" (symbol-name duration)) "nil"))))
     ('get
-     (let [id (nth 0 args)
-           project-id (nth 1 args)]
+     (let [id (nth args 0)
+           project-id (nth args 1)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"get\" :id %S :directory %s})"
                id
                (if project-id (format "\"%s\"" project-id) "nil"))))
     ('query
-     (let [type (nth 0 args)
-           tags (nth 1 args)
-           project-id (nth 2 args)
-           limit (nth 3 args)
-           duration (nth 4 args)
-           scope-filter (nth 5 args)]
+     (let [type (nth args 0)
+           tags (nth args 1)
+           project-id (nth args 2)
+           limit (nth args 3)
+           duration (nth args 4)
+           scope-filter (nth args 5)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"query\" :type %S :tags %s :directory %s :limit %s :duration %s :scope %s})"
                (when type (symbol-name type))
                (if tags (format "[%s]" (mapconcat (lambda (tag) (format "%S" tag)) tags " ")) "nil")
@@ -429,73 +429,73 @@ Maps elisp operations to the Clojure consolidated memory tool commands."
                (if duration (format "\"%s\"" duration) "nil")
                (if scope-filter (format "\"%s\"" scope-filter) "nil"))))
     ('search
-     (let [query (nth 0 args)
-           project-id (nth 1 args)
-           limit (nth 2 args)]
+     (let [query (nth args 0)
+           project-id (nth args 1)
+           limit (nth args 2)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"search\" :query %S :directory %s :limit %s})"
                query
                (if project-id (format "\"%s\"" project-id) "nil")
                (or limit "10"))))
     ('metadata
-     (let [type (nth 0 args)
-           tags (nth 1 args)
-           project-id (nth 2 args)
-           limit (nth 3 args)]
+     (let [type (nth args 0)
+           tags (nth args 1)
+           project-id (nth args 2)
+           limit (nth args 3)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"metadata\" :type %S :tags %s :directory %s :limit %s :verbosity \"metadata\"})"
                (when type (symbol-name type))
                (if tags (format "[%s]" (mapconcat (lambda (tag) (format "%S" tag)) tags " ")) "nil")
                (if project-id (format "\"%s\"" project-id) "nil")
                (or limit "20"))))
     ('update
-     (let [id (nth 0 args)
-           updates (nth 1 args)
-           _project-id (nth 2 args)]
+     (let [id (nth args 0)
+           updates (nth args 1)
+           _project-id (nth args 2)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"tags\" :id %S :tags %s})"
                id
                (if updates (format "[%s]" (mapconcat (lambda (tag) (format "%S" tag)) updates " ")) "nil"))))
     ('delete
-     (let [id (nth 0 args)]
+     (let [id (nth args 0)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"expire\" :id %S})"
                id)))
     ('duration
-     (let [id (nth 0 args)
-           duration (nth 1 args)]
+     (let [id (nth args 0)
+           duration (nth args 1)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"duration\" :id %S :duration %S})"
                id (symbol-name duration))))
     ('promote
-     (let [id (nth 0 args)]
+     (let [id (nth args 0)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"promote\" :id %S})"
                id)))
     ('demote
-     (let [id (nth 0 args)]
+     (let [id (nth args 0)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"demote\" :id %S})"
                id)))
     ('feedback
-     (let [id (nth 0 args)
-           rating (nth 1 args)]
+     (let [id (nth args 0)
+           rating (nth args 1)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"feedback\" :id %S :feedback %S})"
                id rating)))
     ('log-access
-     (let [id (nth 0 args)]
+     (let [id (nth args 0)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"log_access\" :id %S})"
                id)))
     ('helpfulness
-     (let [id (nth 0 args)]
+     (let [id (nth args 0)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"helpfulness\" :id %S})"
                id)))
     ('cleanup
-     (let [project-id (nth 0 args)]
+     (let [project-id (nth args 0)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"cleanup\" :directory %s})"
                (if project-id (format "\"%s\"" project-id) "nil"))))
     ('expiring
-     (let [days (nth 0 args)
-           project-id (nth 1 args)]
+     (let [days (nth args 0)
+           project-id (nth args 1)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"expiring\" :days %d :directory %s})"
                (or days 7)
                (if project-id (format "\"%s\"" project-id) "nil"))))
     ('migrate
-     (let [old-project-id (nth 0 args)
-           new-project-id (nth 1 args)]
+     (let [old-project-id (nth args 0)
+           new-project-id (nth args 1)]
        (format "(hive-mcp.tools.memory/handle-memory {:command \"migrate\" :old-project-id %S :new-project-id %S})"
                old-project-id new-project-id)))
     (_

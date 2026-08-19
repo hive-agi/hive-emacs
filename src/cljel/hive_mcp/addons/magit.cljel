@@ -137,12 +137,12 @@ When Magit is not installed, falls back to shell git commands."
                  (format "git log -n%d --format='%s' 2>/dev/null" n format-str))]
     (mapcar (lambda (line)
               (let [parts (split-string line "\x00")]
-                (list :hash (nth 0 parts)
-                      :short-hash (nth 1 parts)
-                      :author (nth 2 parts)
-                      :email (nth 3 parts)
-                      :subject (nth 4 parts)
-                      :date (nth 5 parts))))
+                (list :hash (nth parts 0)
+                      :short-hash (nth parts 1)
+                      :author (nth parts 2)
+                      :email (nth parts 3)
+                      :subject (nth parts 4)
+                      :date (nth parts 5))))
             lines)))
 
 (defn- -get-ahead-behind []
@@ -152,8 +152,8 @@ When Magit is not installed, falls back to shell git commands."
     (if (string-empty-p result)
         (list :ahead 0 :behind 0)
       (let [parts (split-string result)]
-        (list :behind (string-to-number (or (nth 0 parts) "0"))
-              :ahead (string-to-number (or (nth 1 parts) "0")))))))
+        (list :behind (string-to-number (or (nth parts 0) "0"))
+              :ahead (string-to-number (or (nth parts 1) "0")))))))
 
 ;; ============================================================================
 ;; Branch Functions

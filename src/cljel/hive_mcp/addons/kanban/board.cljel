@@ -210,7 +210,7 @@
         (dolist [col columns]
           (let* [col-name (car col)
                  col-tasks (cdr (assoc col-name tasks-by-status))
-                 task (nth row col-tasks)]
+                 task (nth col-tasks row)]
             (if task
                 (let* [title (or (cdr (assoc 'title task)) "Untitled")
                        id (cdr (assoc 'id task))
@@ -392,7 +392,7 @@ Uses the addon's unified API for auto-sync and agent tracking."
     (let* [cols '("TODO" "IN-PROGRESS" "IN-REVIEW" "DONE")
            current-idx (cl-position current-col cols :test #'equal)
            new-idx (+ current-idx direction)
-           new-col (and (>= new-idx 0) (< new-idx 4) (nth new-idx cols))]
+           new-col (and (>= new-idx 0) (< new-idx 4) (nth cols new-idx))]
       (when new-col
         ;; Use addon API - handles auto-sync and agent tracking
         (let [vibe-status (hive-mcp-kanban-protocol--org-to-vibe-status new-col)]

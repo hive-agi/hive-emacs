@@ -34,6 +34,10 @@
   {:doc  "Fail if any committed .el artifact is stale w.r.t. its .cljel source."
    :task (shell {:dir repo-root} "bash" "scripts/check-cljel-parity.sh")}
 
+  lint:nth
+  {:doc  "Fail if a .cljel source calls nth with the index first (elisp order)."
+   :task (shell {:dir repo-root} "bash" "scripts/check-nth-arg-order.sh")}
+
   test
   {:doc  "Run the Clojure test suite (self-contained: published deps only)."
    :task (shell {:dir repo-root} "clojure" "-M:test")}
@@ -71,5 +75,5 @@
                           ["-f" "ert-run-tests-batch-and-exit"])))}
 
   test:all
-  {:doc     "Clojure suite + elisp parity + ERT suites."
-   :depends [test parity test:ert]}}}
+  {:doc     "Clojure suite + elisp parity + nth arg-order + ERT suites."
+   :depends [test parity lint:nth test:ert]}}}
