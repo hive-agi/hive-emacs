@@ -28,6 +28,15 @@ jobs:
           cli: latest
           clj-kondo: latest
 
+      # The macro configs kondo needs live in the dependency jars, and
+      # .clj-kondo/imports/ is gitignored, so a fresh checkout has none of
+      # them: every hive-dsl / ansatz / typed macro form reads as an
+      # unresolved symbol. Import them before linting anything.
+      - name: Import dependency lint configs
+        run: >-
+          clj-kondo --lint "$(clojure -Spath -M:test:typed:ansatz-test)"
+          --dependencies --parallel --copy-configs
+
       - name: Run static analysis
         run: clj-kondo --lint src test src-typed test-ansatz
 
