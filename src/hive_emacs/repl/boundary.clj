@@ -63,11 +63,17 @@
 (defn require-module-form
   "Source loading MODULE through the loader's one-argument require-module.
 
-   The loader is reached by string lookup rather than a qualified symbol: an
-   unresolvable symbol in a request form is precisely the condition that hangs
-   the connection."
+   The loader is reached by string lookup, never a qualified symbol. Every
+   condition the load signals is trapped: the form yields CL T on success, or
+   the condition's text as a string."
   [module]
-  (str "(cl:funcall (cl:find-symbol \"REQUIRE-MODULE\" \"SLYNK-LOADER\") :" module ")"))
+  (str "(cl:handler-case"
+       " (cl:handler-bind ((cl:warning (cl:lambda (c)"
+       " (cl:let ((r (cl:find-restart 'cl:muffle-warning c)))"
+       " (cl:when r (cl:invoke-restart r))))))"
+       " (cl:funcall (cl:find-symbol \"REQUIRE-MODULE\" \"SLYNK-LOADER\") :" module ")"
+       " cl:t)"
+       " (cl:condition (c) (cl:princ-to-string c)))"))
 
 ;;; =============================================================================
 ;;; Elisp emission — bounded await
