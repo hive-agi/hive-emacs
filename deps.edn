@@ -1,7 +1,7 @@
 {:paths ["src" "resources" "elisp"]
 
- :deps {org.clojure/clojure {:mvn/version "1.12.1"}
-        org.clojure/data.json {:mvn/version "2.5.1"}
+ :deps {org.clojure/clojure {:mvn/version "1.12.5"}
+        org.clojure/data.json {:mvn/version "2.5.2"}
         com.taoensso/timbre {:mvn/version "6.8.0"}
 
         ;; DataScript for daemon store (DaemonDS)
@@ -36,7 +36,7 @@
   {:extra-paths ["test"]
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
-                org.clojure/test.check {:mvn/version "1.1.1"}
+                org.clojure/test.check {:mvn/version "1.1.3"}
                 io.github.hive-agi/hive-test {:mvn/version "0.3.12"}}
    :main-opts ["-m" "cognitect.test-runner"]}
 
