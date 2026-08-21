@@ -9,11 +9,11 @@
         org.replikativ/persistent-sorted-set {:mvn/version "0.5.141"}
 
         ;; hive-dsl — Result monad, rescue/guard DSL
-        io.github.hive-agi/hive-dsl {:mvn/version "0.5.14"}
+        io.github.hive-agi/hive-dsl {:mvn/version "0.5.15"}
 
         ;; Malli schemas are the contract/type/proof source of truth.
         metosin/malli {:mvn/version "0.20.1"}
-        io.github.hive-agi/hive-schemas {:mvn/version "0.1.13"}
+        io.github.hive-agi/hive-schemas {:mvn/version "0.1.14"}
 
         ;; Bounded execution for emacsclient effects.
         io.github.hive-agi/hive-weave {:mvn/version "0.3.1"}
@@ -26,7 +26,7 @@
         io.github.hive-agi/hive-spi {:mvn/version "0.1.20"}
 
         ;; hive-di — typed env var resolution with ADT backing (defconfig)
-        io.github.hive-agi/hive-di {:mvn/version "0.4.2"}
+        io.github.hive-agi/hive-di {:mvn/version "0.4.3"}
 
         ;; Process execution for emacsclient subprocess
         babashka/process {:mvn/version "0.6.25"}}
@@ -53,5 +53,5 @@
    :main-opts ["-m" "cognitect.test-runner" "-d" "test-ansatz"]}
 
   :build
-  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.8"}}
+  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.9"}}
    :ns-default hive-build.api}}}
