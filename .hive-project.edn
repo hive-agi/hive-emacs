@@ -2,4 +2,4 @@
  :parent "hive"
  :description "Host-neutral Emacs addon for the hive ecosystem: nREPL/CIDER sessions, tool routing, UI, and ling orchestration. Clojure core plus cljel-generated Elisp."
  :language :clojure-elisp
- :tags ["hive-emacs" "emacs" "cljel" "client" "bridge" "nrepl" "cider" "ui" "ling"] :carto {:source-roots ["elisp" "resources" "src" "src-typed" "test" "test-ansatz"]}}
+ :tags ["hive-emacs" "emacs" "cljel" "client" "bridge" "nrepl" "cider" "ui" "ling"] :carto {:source-roots ["dev" "elisp" "resources" "src" "src-typed" "test" "test-ansatz"]}}
