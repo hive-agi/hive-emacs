@@ -94,8 +94,8 @@
                  (when (:emacs/start-heartbeat? config)
                    (daemon-store/start-heartbeat-loop!)
                    true))
+                _ (cider-tool/contribute! (:runtime/ports config))
                 bridge-ready? (ensure-elisp-loaded!)
-                _ (when bridge-ready? (cider-tool/contribute! (:runtime/ports config)))
                 editor-port (editor-port/register!)
                 editor-caps (editor-services/register!)
                 metadata {:bridge-ready? bridge-ready?

@@ -123,6 +123,25 @@
                   (eval-success? (eval-fn (load-path-elisp dirs) 5000)))
               (eval-success? (eval-fn (load-entrypoints-elisp) 15000))))))))
 
+(def ^:private ready-latch
+  "True once `ensure-loaded-once!` has observed a successful load."
+  (atom false))
+
+(defn invalidate-ready!
+  "Clear the ready latch. The next `ensure-loaded-once!` re-runs the load."
+  []
+  (reset! ready-latch false)
+  nil)
+
+(defn ensure-loaded-once!
+  "`ensure-loaded!` behind a success latch: the elisp round-trip is paid once
+   per process. A failed attempt is NOT latched — a later call retries."
+  [eval-fn]
+  (or @ready-latch
+      (let [loaded? (ensure-loaded! eval-fn)]
+        (when loaded? (reset! ready-latch true))
+        loaded?)))
+
 (defn eval-with-bridge
   "Ensure bridge entrypoints are loaded, then evaluate CODE with TIMEOUT-MS.
    Returns the evaluator result map."

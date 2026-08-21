@@ -154,3 +154,20 @@
       (is (= {:success true :result "ok"}
              (loader/eval-with-bridge eval-fn "second" 2000))))
     (is (= [["second" 2000]] @calls))))
+
+(deftest ensure-loaded-once-latches-success-and-retries-failure
+  (let [attempts (atom 0)
+        ready? (atom false)]
+    (loader/invalidate-ready!)
+    (with-redefs [loader/ensure-loaded! (fn [_] (swap! attempts inc) @ready?)]
+      (is (false? (loader/ensure-loaded-once! identity)))
+      (is (false? (loader/ensure-loaded-once! identity)))
+      (is (= 2 @attempts))
+      (reset! ready? true)
+      (is (true? (loader/ensure-loaded-once! identity)))
+      (is (true? (loader/ensure-loaded-once! identity)))
+      (is (= 3 @attempts))
+      (loader/invalidate-ready!)
+      (is (true? (loader/ensure-loaded-once! identity)))
+      (is (= 4 @attempts)))
+    (loader/invalidate-ready!)))

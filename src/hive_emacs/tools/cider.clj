@@ -17,7 +17,8 @@
             [taoensso.timbre :as log]
             [hive-emacs.runtime-ports :as rt-ports]
             [hive-emacs.repl.boundary :as repl]
-            [hive-emacs.repl.profile :as repl-profile]))
+            [hive-emacs.repl.profile :as repl-profile]
+            [hive-emacs.bridge-loader :as bridge]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -26,12 +27,28 @@
 ;;; Boundary seam (DIP): the only host effect is evaluating elisp
 ;;; =============================================================================
 
+(defn- eval-through-bridge
+  "Evaluate CODE in Emacs with the bridge loaded, TIMEOUT-MS nil meaning the
+   client default. Re-arms the bridge load when the evaluation fails or the
+   response reports the bridge missing. Returns the evaluator response map."
+  [code timeout-ms]
+  (bridge/ensure-loaded-once! ec/eval-elisp-with-timeout)
+  (let [{:keys [success result] :as response}
+        (if timeout-ms
+          (ec/eval-elisp-with-timeout code timeout-ms)
+          (ec/eval-elisp code))]
+    (when (or (not success)
+              (and (string? result) (str/includes? result "not loaded")))
+      (bridge/invalidate-ready!))
+    response))
+
 (def ^:dynamic *eval-fn*
   "Elisp evaluation boundary: (f code) or (f code timeout-ms) ->
-   {:success bool :result any :error any}. Tests bind a stub recording calls."
+   {:success bool :result any :error any}. The default loads the Emacs-side
+   bridge before evaluating. Tests bind a stub recording calls."
   (fn
-    ([code] (ec/eval-elisp code))
-    ([code timeout-ms] (ec/eval-elisp-with-timeout code timeout-ms))))
+    ([code] (eval-through-bridge code nil))
+    ([code timeout-ms] (eval-through-bridge code timeout-ms))))
 
 ;;; =============================================================================
 ;;; Result plumbing (local — support/try-result does not catch, core's does)

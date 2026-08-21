@@ -105,3 +105,20 @@
   (let [instance (emacs-addon/init-as-addon!)]
     (is (addon/addon? instance))
     (is (= :down (:status (addon/health instance))))))
+
+(deftest cider-subtree-is-contributed-even-when-the-bridge-is-unavailable
+  (let [contributions (atom [])
+        instance (emacs-addon/make-addon
+                  {:runtime/ports
+                   {:extension/contribute-commands!
+                    (fn [tool addon-id commands]
+                      (swap! contributions conj
+                             [tool addon-id (set (keys commands))]))}})]
+    (with-redefs [bridge/ensure-loaded! (constantly false)
+                  client/emacs-running? (constantly true)]
+      (let [initialized (addon/initialize! instance {})]
+        (is (:success? initialized))
+        (is (false? (get-in initialized [:metadata :bridge-ready?])))
+        (is (= [["code" "hive.emacs" #{"cider"}]] @contributions))
+        (is (nil? (addon/shutdown! instance)))
+        (is (ports-clear?))))))
