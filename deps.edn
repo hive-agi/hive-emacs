@@ -5,7 +5,7 @@
         com.taoensso/timbre {:mvn/version "6.8.0"}
 
         ;; DataScript for daemon store (DaemonDS)
-        datascript/datascript {:mvn/version "1.7.8"}
+        datascript/datascript {:mvn/version "1.8.1"}
         org.replikativ/persistent-sorted-set {:mvn/version "0.4.126"}
 
         ;; hive-dsl — Result monad, rescue/guard DSL
@@ -13,7 +13,7 @@
 
         ;; Malli schemas are the contract/type/proof source of truth.
         metosin/malli {:mvn/version "0.20.1"}
-        io.github.hive-agi/hive-schemas {:mvn/version "0.1.11"}
+        io.github.hive-agi/hive-schemas {:mvn/version "0.1.13"}
 
         ;; Bounded execution for emacsclient effects.
         io.github.hive-agi/hive-weave {:mvn/version "0.3.1"}
@@ -23,10 +23,10 @@
         io.github.hive-agi/hive-addon {:mvn/version "0.3.4"}
 
         ;; SPI ports (ICiderPort) — the contract the addon reifies.
-        io.github.hive-agi/hive-spi {:mvn/version "0.1.18"}
+        io.github.hive-agi/hive-spi {:mvn/version "0.1.20"}
 
         ;; hive-di — typed env var resolution with ADT backing (defconfig)
-        io.github.hive-agi/hive-di {:mvn/version "0.4.1"}
+        io.github.hive-agi/hive-di {:mvn/version "0.4.2"}
 
         ;; Process execution for emacsclient subprocess
         babashka/process {:mvn/version "0.6.25"}}
@@ -48,10 +48,10 @@
   {:extra-paths ["test-ansatz"]
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
-                org.replikativ/ansatz {:mvn/version "0.2.79"}
+                org.replikativ/ansatz {:mvn/version "0.2.84"}
                 io.github.hive-agi/hive-test {:mvn/version "0.3.12"}}
    :main-opts ["-m" "cognitect.test-runner" "-d" "test-ansatz"]}
 
   :build
-  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.0"}}
+  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.8"}}
    :ns-default hive-build.api}}}
