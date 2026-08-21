@@ -54,4 +54,7 @@
 
   :build
   {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.9"}}
-   :ns-default hive-build.api}}}
+   :ns-default hive-build.api}
+  :dev {:extra-paths ["dev"]
+        :extra-deps {rewrite-clj/rewrite-clj {:mvn/version "1.2.55"}
+                     io.github.hive-agi/hive-system {:mvn/version "0.3.5"}}}}}
