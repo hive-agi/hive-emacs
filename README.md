@@ -1,5 +1,14 @@
 # hive-emacs
 
+<!-- hive-badges -->
+
+[![Clojars Project](https://img.shields.io/clojars/v/io.github.hive-agi/hive-emacs.svg)](https://clojars.org/io.github.hive-agi/hive-emacs)
+[![cljdoc](https://cljdoc.org/badge/io.github.hive-agi/hive-emacs)](https://cljdoc.org/d/io.github.hive-agi/hive-emacs/CURRENT)
+[![verify](https://github.com/hive-agi/hive-emacs/actions/workflows/verify.yml/badge.svg)](https://github.com/hive-agi/hive-emacs/actions/workflows/verify.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
+<!-- /hive-badges -->
+
 Host-neutral Emacs integration packaged as a `hive-addon`.
 
 ## What it does
