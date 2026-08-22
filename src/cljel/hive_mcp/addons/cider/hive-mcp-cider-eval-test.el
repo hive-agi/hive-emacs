@@ -272,23 +272,28 @@
     (should (equal "42" result))
     (should (equal 0 interrupts))))
 
-(ert-deftest hive-mcp-cider-eval-test-splice-cljw-do nil "A cljw session's top-level `do' is split into one string per child.\ncljw analyses a whole form before running any of it, so a `require' and its\nfirst use inside one `do' fail there while working via `cljw -e'." (let* ((spliced (hive-mcp-cider-eval-splice-forms "(do (require 'x) (f 1))" 'cljw)))
-    (should (equal 2 (length spliced)))
-    (should (equal "(require 'x)" (clel-nth spliced 0)))
-    (should (equal "(f 1)" (clel-nth spliced 1)))))
+(ert-deftest hive-mcp-cider-eval-test-cljw-receives-source-verbatim nil "A cljw session receives CODE unchanged, in exactly ONE eval.\nThe bridge used to split a top-level `do' with the EMACS LISP reader and\nre-print each child. `{' is not a delimiter in Emacs Lisp, so a map literal\nshattered into the two symbols `{:control' and `zz}' and went out as two\nevals; cljw read `zz}' on its own and reported `Unexpected delimiter'.\nClojure text is not Emacs Lisp text - the runtime is the only reader." (let* ((buf (generate-new-buffer " *cljw-repl*"))
+        (sent nil)
+        (code "(do\n  (def zz 1)\n  {:control zz})"))
+    (unwind-protect
+    (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup) (lambda (_name)
+    (list :status 'connected :cider-buffer buf :repl-type 'cljw))) ((symbol-function 'hive-mcp-cider-eval-eval-with-heartbeat) (lambda (c _timeout)
+    (setq sent (cons c sent))
+    "ok"))) (should (equal "ok" (hive-mcp-cider-eval-eval-in-session "w" code))))
+  (kill-buffer buf))
+    (should (equal (list code) sent))))
 
-(ert-deftest hive-mcp-cider-eval-test-splice-leaves-other-runtimes-alone nil "Only cljw is spliced; every other runtime evaluates the `do' as written." (let* ((code "(do (setq a 1) (+ a 1))"))
-    (dolist (rt (list 'clj 'cljs 'cljel 'cljrs nil))
-    (should (equal (list code) (hive-mcp-cider-eval-splice-forms code rt))))))
-
-(ert-deftest hive-mcp-cider-eval-test-splice-leaves-non-do-alone nil "A cljw session splices only a top-level `do'; anything else is untouched." (dolist (code (list "(+ 1 2)" "(let ((x 1)) x)" "(do)"))
-    (should (equal (list code) (hive-mcp-cider-eval-splice-forms code 'cljw)))))
-
-(ert-deftest hive-mcp-cider-eval-test-splice-refuses-trailing-forms nil "Several top-level forms are not one `do' — splicing them would drop code." (let* ((code "(do (setq a 1)) (+ 1 2)"))
-    (should (equal (list code) (hive-mcp-cider-eval-splice-forms code 'cljw)))))
-
-(ert-deftest hive-mcp-cider-eval-test-splice-survives-unreadable-code nil "Unbalanced input is sent as-is so the runtime reports the read error." (let* ((code "(do (foo"))
-    (should (equal (list code) (hive-mcp-cider-eval-splice-forms code 'cljw)))))
+(ert-deftest hive-mcp-cider-eval-test-every-runtime-receives-source-verbatim nil "No repl-type re-parses CODE: a top-level `do' is one eval on every runtime.\ncljw's own top-level-`do' unroll landed upstream and ships in the pinned\nbinary, so the client-side splice that worked around it is gone." (dolist (rt (list 'clj 'cljs 'cljel 'cljrs 'cljw nil))
+    (let* ((buf (generate-new-buffer " *rt-repl*"))
+        (sent nil)
+        (code "(do (require '[clojure.string :as s]) (s/upper-case \"x\"))"))
+    (unwind-protect
+    (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup) (lambda (_name)
+    (list :status 'connected :cider-buffer buf :repl-type rt))) ((symbol-function 'hive-mcp-cider-eval-eval-with-heartbeat) (lambda (c _timeout)
+    (setq sent (cons c sent))
+    "ok"))) (hive-mcp-cider-eval-eval-in-session "s" code))
+  (kill-buffer buf))
+    (should (equal (list code) sent)))))
 
 (defun hive-mcp-cider-eval-test-run-tests ()
   "Run all hive-mcp-cider-eval ERT tests in batch."
