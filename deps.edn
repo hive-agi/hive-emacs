@@ -9,24 +9,24 @@
         org.replikativ/persistent-sorted-set {:mvn/version "0.5.141"}
 
         ;; hive-dsl — Result monad, rescue/guard DSL
-        io.github.hive-agi/hive-dsl {:mvn/version "0.5.16"}
+        io.github.hive-agi/hive-dsl {:mvn/version "0.5.17"}
 
         ;; Malli schemas are the contract/type/proof source of truth.
         metosin/malli {:mvn/version "0.20.1"}
-        io.github.hive-agi/hive-schemas {:mvn/version "0.1.15"}
+        io.github.hive-agi/hive-schemas {:mvn/version "0.1.26"}
 
         ;; Bounded execution for emacsclient effects.
-        io.github.hive-agi/hive-weave {:mvn/version "0.3.2"}
+        io.github.hive-agi/hive-weave {:mvn/version "0.3.3"}
 
         ;; Host-neutral IAddon contract. hive-mcp consumes the same protocol;
         ;; hive-emacs never needs to compile against the host registry.
-        io.github.hive-agi/hive-addon {:mvn/version "0.3.4"}
+        io.github.hive-agi/hive-addon {:mvn/version "0.3.7"}
 
         ;; SPI ports (ICiderPort) — the contract the addon reifies.
-        io.github.hive-agi/hive-spi {:mvn/version "0.1.20"}
+        io.github.hive-agi/hive-spi {:mvn/version "0.2.0"}
 
         ;; hive-di — typed env var resolution with ADT backing (defconfig)
-        io.github.hive-agi/hive-di {:mvn/version "0.4.4"}
+        io.github.hive-agi/hive-di {:mvn/version "0.4.5"}
 
         ;; Process execution for emacsclient subprocess
         babashka/process {:mvn/version "0.6.25"}}
@@ -37,7 +37,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.3"}
-                io.github.hive-agi/hive-test {:mvn/version "0.3.14"}}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.15"}}
    :main-opts ["-m" "cognitect.test-runner"]}
 
   :typed
@@ -49,7 +49,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.replikativ/ansatz {:mvn/version "0.2.84"}
-                io.github.hive-agi/hive-test {:mvn/version "0.3.14"}}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.15"}}
    :main-opts ["-m" "cognitect.test-runner" "-d" "test-ansatz"]}
 
   :build
@@ -57,4 +57,4 @@
    :ns-default hive-build.api}
   :dev {:extra-paths ["dev"]
         :extra-deps {rewrite-clj/rewrite-clj {:mvn/version "1.2.55"}
-                     io.github.hive-agi/hive-system {:mvn/version "0.3.6"}}}}}
+                     io.github.hive-agi/hive-system {:mvn/version "0.3.7"}}}}}
