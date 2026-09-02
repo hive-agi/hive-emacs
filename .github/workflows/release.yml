@@ -65,6 +65,13 @@ jobs:
           } > "$CLJ_CONFIG/deps.edn"
           clojure -Sforce -P
 
+      # A published pom is immutable, so the suite runs BEFORE the deploy.
+      # Without this step a red push straight to main still ships an
+      # artifact under a version number that can never be replaced.
+      - name: Run tests
+        if: steps.ver.outputs.fresh == 'true'
+        run: clojure -M:test
+
       - name: Deploy
         if: steps.ver.outputs.fresh == 'true'
         env:
