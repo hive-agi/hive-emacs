@@ -129,6 +129,16 @@
       (is (some #(str/includes? % "auto-") @calls)
           "spawn uses the auto-<hash> name"))))
 
+(deftest spawn-readiness-budget-covers-a-cold-jvm-boot
+  (let [poll     @#'cider/session-ready-poll-ms
+        attempts @#'cider/session-ready-max-attempts
+        budget-s (/ (* poll attempts) 1000)]
+    (is (>= budget-s 30)
+        (str "auto-spawn on eval boots a JVM nREPL and then waits this long for it to "
+             "report connected; a cold JVM takes 20-40s, so a budget under 30s reports "
+             ":cider/session-timeout for sessions that are merely still starting. "
+             "Budget is " budget-s "s."))))
+
 (deftest eval-reuses-connected-session
   (let [sessions-json "[{\"name\": \"auto-1\", \"status\": \"connected\", \"project-dir\": \"/proj\"}]"
         {:keys [calls eval-fn]}

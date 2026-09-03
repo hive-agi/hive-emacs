@@ -146,8 +146,18 @@
          {:keys [success]} (*eval-fn* elisp)]
      success)))
 
+(def ^:private session-ready-poll-ms
+  "Interval between readiness polls, in milliseconds."
+  500)
+
+(def ^:private session-ready-max-attempts
+  "Readiness polls allowed before a spawned session is reported not ready.
+   120 polls x 500ms = a 60s budget, which must cover a cold JVM nREPL boot."
+  120)
+
 (defn- wait-for-session-ready
-  "Poll until the named session reports connected. Returns true/false."
+  "Poll until the named session reports connected. Returns true/false.
+   Polls at `session-ready-poll-ms` intervals, at most `max-attempts` times."
   [session-name max-attempts]
   (loop [attempt 0]
     (if (>= attempt max-attempts)
@@ -159,17 +169,22 @@
                               (= "connected" (:status s))))
                        (:ok r)))
           true
-          (do (Thread/sleep 500)
+          (do (Thread/sleep session-ready-poll-ms)
               (recur (inc attempt))))))))
 
 (defn- spawn-and-wait*
-  "Spawn a session and wait for readiness. Returns Result with session name."
+  "Spawn a session and wait for readiness. Returns Result with session name.
+   Waits up to `session-ready-max-attempts` polls; a session that is still
+   coming up when the budget runs out yields :cider/session-timeout, not a
+   kill, so it may reach connected afterwards."
   [session-name project-dir]
   (if (spawn-session-internal session-name project-dir)
-    (if (wait-for-session-ready session-name 5)
+    (if (wait-for-session-ready session-name session-ready-max-attempts)
       (result/ok session-name)
       (result/err :cider/session-timeout
-                  {:message (str "Spawned session '" session-name "' but it didn't become ready in time")}))
+                  {:message (str "Spawned session '" session-name "' but it was not connected within "
+                                 (quot (* session-ready-poll-ms session-ready-max-attempts) 1000)
+                                 "s. It may still be starting; check with `code cider sessions`.")}))
     (result/err :cider/spawn-failed
                 {:message (str "Failed to spawn session '" session-name "'")})))
 
@@ -339,7 +354,7 @@
    "port" {:type "integer"
            :description "connect: nREPL port; spawn: explicit port"}
    "project_dir" {:type "string"
-                  :description "spawn: nREPL root. eval: routes to that project's nREPL session (spawning auto-<hash> if none). Defaults to the caller's cwd."}
+                  :description "spawn: nREPL root. connect: labels the REPL buffer, for a session whose project differs from the caller's. eval: routes to that project's nREPL session (spawning auto-<hash> if none). Defaults to the caller's cwd."}
    "agent_id" {:type "string"
                :description "spawn/connect: agent ID to link the session"}
    "repl_type" {:type "string"
