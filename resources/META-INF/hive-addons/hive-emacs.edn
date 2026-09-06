@@ -14,4 +14,6 @@
                                         "hive-mcp-cider"
                                         "hive-mcp-cider-eval"
                                         "hive-mcp-cider-sessions"}}
- :addon/description  "Host-neutral Emacs editor/vessel, daemon management, and tools"}
+ :addon/description  "Host-neutral Emacs editor/vessel, daemon management, and tools"
+ :addon/maturity :stable
+ :addon/trust-class :foss}
