@@ -134,8 +134,18 @@
     :else
     "Work waiting on it (a spawn, a connection, a load) cannot finish until it is answered."))
 
+(defn- question-kind
+  "What a prompt asks for, read from its text: :yes-or-no (typed word),
+   :y-or-n (one key) or :text. The keys to suggest follow from it: \"y\" is a
+   wrong answer to a completing-read such as \"REPL buffer to reuse:\"."
+  [prompt]
+  (cond
+    (re-find #"\((?:yes or no)\)" (or prompt "")) :yes-or-no
+    (re-find #"(?i)\(y or n\)|[\[(]y/n[\])]" (or prompt "")) :y-or-n
+    :else :text))
+
 (defn- action
-  [{:keys [id kind secret?]} status]
+  [{:keys [id kind secret? prompt]} status]
   (cond
     (= :frozen status) nil
     secret? "SECRET prompt (password): do not answer it. Ask the user to type it in Emacs."
@@ -143,8 +153,19 @@
     (format "Act: emacs command=\"answer\" id=\"%s\" keys=\"q\" quits the debugger, or ask the user."
             id)
     :else
-    (format "Act: emacs command=\"answer\" id=\"%s\" keys=\"y\" (kbd syntax: \"n\", \"RET\", \"C-g\" aborts), or ask the user."
-            id)))
+    (case (question-kind prompt)
+      :yes-or-no
+      (format "Act: emacs command=\"answer\" id=\"%s\" keys=\"yes RET\" (or \"no RET\"; \"C-g\" aborts), or ask the user."
+              id)
+      :y-or-n
+      (format "Act: emacs command=\"answer\" id=\"%s\" keys=\"y\" (or \"n\"; \"C-g\" aborts), or ask the user."
+              id)
+      :text
+      (if (= "read-event" kind)
+        (format "Act: emacs command=\"answer\" id=\"%s\" keys=\"<a key the prompt offers>\" (kbd syntax, \"C-g\" aborts), or ask the user."
+                id)
+        (format "Act: emacs command=\"answer\" id=\"%s\" keys=\"RET\" accepts the default, keys=\"<text> RET\" types a value (kbd syntax: SPC is a space, \"C-g\" aborts), or ask the user."
+                id)))))
 
 (defn describe
   "One paragraph for one waiting prompt."
@@ -316,22 +337,99 @@
                 (do (Thread/sleep 100) (recur))))))))))
 
 (defn enable-elisp
-  "Elisp that loads the Emacs half and starts it publishing under ROOT."
-  [^java.io.File root]
-  (format "(progn (require 'hive-mcp-attention) (hive-mcp-attention-enable %s))"
-          (pr-str (.getAbsolutePath root))))
+  "Elisp that loads the Emacs half, starts it publishing under ROOT and
+   answers the Emacs pid. LOAD-DIRS go on load-path first: an Emacs that was
+   restarted since the bridge loaded does not have them."
+  ([root] (enable-elisp root []))
+  ([^java.io.File root load-dirs]
+   (format "(progn %s(require 'hive-mcp-attention) (hive-mcp-attention-enable %s) (emacs-pid))"
+           (apply str (map #(format "(add-to-list 'load-path %s) " (pr-str %)) load-dirs))
+           (pr-str (.getAbsolutePath root)))))
+
+;; ── upkeep: keep the Emacs half publishing across Emacs restarts ────────────
+;;
+;; The publisher lives in Emacs, so an Emacs restart silently stops it and no
+;; block ever appears again. Asking Emacs on every tool call would put an
+;; emacsclient round-trip on every response, and would hang exactly when a
+;; prompt blocks emacsclient. Instead the enable form answers the Emacs pid,
+;; and each emitter call checks that pid locally. Only a pid that is gone (or
+;; was never learned) schedules a re-enable, in the background and at most
+;; once per `upkeep-retry-ms`.
+
+(def upkeep-retry-ms
+  "Minimum gap between two re-enable attempts."
+  60000)
+
+(defonce ^:private upkeep
+  (atom {:pid nil :last-attempt-ms nil :in-flight? false}))
+
+(defn upkeep-due?
+  "True when a re-enable should start now. PID-ALIVE is true, false, or nil
+   when the recorded pid is not visible from this process (another pid
+   namespace); nil is treated as alive, never as a restart."
+  [{:keys [pid last-attempt-ms in-flight?]} now-ms pid-alive]
+  (and (not in-flight?)
+       (or (nil? pid) (false? pid-alive))
+       (or (nil? last-attempt-ms)
+           (>= (- now-ms last-attempt-ms) upkeep-retry-ms))))
+
+(defn reset-upkeep!
+  "Forget the recorded publisher. For tests and addon shutdown."
+  []
+  (reset! upkeep {:pid nil :last-attempt-ms nil :in-flight? false})
+  nil)
+
+(defn- load-dirs
+  "Load-path directories for the Emacs half, resolved from the classpath.
+   Resolved lazily so this namespace does not load the bridge loader's jar
+   extraction at require time."
+  []
+  (try
+    ((requiring-resolve 'hive-emacs.bridge-loader/resolve-elisp-dirs))
+    (catch Exception _ [])))
 
 (defn enable-in-emacs!
   "Start the Emacs half. EVAL-FN is (fn [code timeout-ms] -> {:success ..}).
-   Returns true on success; a failure is logged, never thrown."
+   Returns true on success and records the Emacs pid for upkeep; a failure is
+   logged, never thrown."
   [eval-fn]
   (try
     (let [root (root-dir)
-          result (eval-fn (enable-elisp root) 5000)]
+          result (eval-fn (enable-elisp root (load-dirs)) 5000)]
       (if (:success result)
-        true
+        (do (swap! upkeep assoc :pid (some-> (:result result) str str/trim parse-long))
+            true)
         (do (log/warn "attention: enabling the Emacs half failed" {:error (:error result)})
             false)))
     (catch Exception e
       (log/warn "attention: enabling the Emacs half threw" {:error (ex-message e)})
       false)))
+
+(defn keep-publishing!
+  "Re-enable the Emacs half in the background when its Emacs is gone.
+   Returns true when an attempt was started. Never blocks, never throws."
+  [eval-fn]
+  (try
+    (let [now (System/currentTimeMillis)
+          before @upkeep]
+      (when (and (upkeep-due? before now (pid-alive (:pid before)))
+                 (compare-and-set! upkeep before
+                                   (assoc before :in-flight? true :last-attempt-ms now)))
+        (future
+          (try
+            (when-not (enable-in-emacs! eval-fn)
+              (swap! upkeep assoc :pid nil))
+            (finally
+              (swap! upkeep assoc :in-flight? false))))
+        true))
+    (catch Exception e
+      (log/debug e "attention: upkeep check failed")
+      false)))
+
+(defn emitter-with-upkeep
+  "The block emitter plus upkeep: every call also makes sure the Emacs half is
+   still publishing (see `keep-publishing!`)."
+  [eval-fn]
+  (fn [ctx]
+    (keep-publishing! eval-fn)
+    (emitter ctx)))

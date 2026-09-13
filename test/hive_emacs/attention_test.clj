@@ -193,10 +193,97 @@
       (is (= :attention/frozen (:error (attention/answer! {:keys "y"})))))))
 
 (deftest enable-elisp-hands-emacs-the-jvm-root
-  (is (= "(progn (require 'hive-mcp-attention) (hive-mcp-attention-enable \"/run/user/1000/hive-emacs\"))"
-         (attention/enable-elisp (io/file "/run/user/1000/hive-emacs")))))
+  (is (= "(progn (require 'hive-mcp-attention) (hive-mcp-attention-enable \"/run/user/1000/hive-emacs\") (emacs-pid))"
+         (attention/enable-elisp (io/file "/run/user/1000/hive-emacs"))))
+  (testing "a restarted Emacs gets the load-path back before the require"
+    (is (= "(progn (add-to-list 'load-path \"/x/elisp\") (require 'hive-mcp-attention) (hive-mcp-attention-enable \"/r\") (emacs-pid))"
+           (attention/enable-elisp (io/file "/r") ["/x/elisp"])))))
 
 (deftest enable-in-emacs-never-throws
-  (is (true? (attention/enable-in-emacs! (fn [_ _] {:success true}))))
-  (is (false? (attention/enable-in-emacs! (fn [_ _] {:success false :error "boom"}))))
-  (is (false? (attention/enable-in-emacs! (fn [_ _] (throw (ex-info "down" {})))))))
+  (try
+    (is (true? (attention/enable-in-emacs! (fn [_ _] {:success true}))))
+    (is (false? (attention/enable-in-emacs! (fn [_ _] {:success false :error "boom"}))))
+    (is (false? (attention/enable-in-emacs! (fn [_ _] (throw (ex-info "down" {}))))))
+    (finally (attention/reset-upkeep!))))
+
+;; ── upkeep across Emacs restarts ─────────────────────────────────────────────
+
+(deftest upkeep-is-due-only-when-the-publishing-emacs-is-gone
+  (let [t0 1000000
+        retry attention/upkeep-retry-ms]
+    (testing "never enabled: due"
+      (is (attention/upkeep-due? {:pid nil} t0 nil)))
+    (testing "the Emacs that answered the enable is alive: not due"
+      (is (not (attention/upkeep-due? {:pid 42 :last-attempt-ms t0} (+ t0 retry) true))))
+    (testing "that Emacs is gone (restarted): due"
+      (is (attention/upkeep-due? {:pid 42 :last-attempt-ms t0} (+ t0 retry) false)))
+    (testing "a pid this process cannot see is not taken for a restart"
+      (is (not (attention/upkeep-due? {:pid 42 :last-attempt-ms nil} t0 nil))))
+    (testing "rate limited between attempts"
+      (is (not (attention/upkeep-due? {:pid nil :last-attempt-ms t0} (+ t0 (dec retry)) nil))))
+    (testing "one attempt at a time"
+      (is (not (attention/upkeep-due? {:pid nil :in-flight? true} t0 nil))))))
+
+(defn- await-upkeep-idle []
+  (let [deadline (+ (System/currentTimeMillis) 3000)]
+    (while (and (:in-flight? @@#'attention/upkeep)
+                (< (System/currentTimeMillis) deadline))
+      (Thread/sleep 10))))
+
+(deftest a-restarted-emacs-is-re-enabled-in-the-background-once
+  (attention/reset-upkeep!)
+  (try
+    (let [calls (atom [])
+          eval-fn (fn [code _] (swap! calls conj code) {:success true :result "4242"})]
+      (testing "first emitter call with no known publisher starts one attempt"
+        (is (true? (attention/keep-publishing! eval-fn)))
+        (await-upkeep-idle)
+        (is (= 1 (count @calls)))
+        (is (str/includes? (first @calls) "(emacs-pid)"))
+        (is (= 4242 (:pid @@#'attention/upkeep)) "the pid Emacs answered is recorded"))
+      (testing "the recorded pid is dead (Emacs restarted) but the retry gap has not passed"
+        (with-redefs-fn {#'attention/pid-alive (constantly false)}
+          (fn []
+            (is (not (attention/keep-publishing! eval-fn)))
+            (is (= 1 (count @calls))))))
+      (testing "after the retry gap a dead pid schedules a re-enable"
+        (swap! @#'attention/upkeep assoc :last-attempt-ms 0)
+        (with-redefs-fn {#'attention/pid-alive (constantly false)}
+          (fn []
+            (is (true? (attention/keep-publishing! eval-fn)))
+            (await-upkeep-idle)
+            (is (= 2 (count @calls)))))))
+    (finally (attention/reset-upkeep!))))
+
+(deftest a-failed-re-enable-forgets-the-pid-and-never-throws
+  (attention/reset-upkeep!)
+  (try
+    (is (true? (attention/keep-publishing! (fn [_ _] (throw (ex-info "emacsclient down" {}))))))
+    (await-upkeep-idle)
+    (is (nil? (:pid @@#'attention/upkeep)))
+    (is (false? (:in-flight? @@#'attention/upkeep)))
+    (finally (attention/reset-upkeep!))))
+
+(deftest the-upkeep-emitter-still-renders-the-block
+  (attention/reset-upkeep!)
+  (try
+    (let [attempts (atom 0)]
+      (with-redefs [attention/keep-publishing! (fn [_] (swap! attempts inc) false)
+                    attention/emitter (constantly "BODY")]
+        (is (= "BODY" ((attention/emitter-with-upkeep (fn [_ _] nil)) {})))
+        (is (= 1 @attempts))))
+    (finally (attention/reset-upkeep!))))
+
+;; ── suggested keys follow the question ──────────────────────────────────────
+
+(deftest suggested-keys-follow-what-the-prompt-asks
+  (testing "y-or-n-p"
+    (is (str/includes? (attention/render-block [[(parsed {:prompt "Reuse dead REPL? (y or n) "}) :live]] now)
+                       "keys=\"y\"")))
+  (testing "yes-or-no-p needs the word and RET"
+    (is (str/includes? (attention/render-block [[(parsed {:prompt "Kill it? (yes or no) "}) :live]] now)
+                       "keys=\"yes RET\"")))
+  (testing "a completing-read is not answered with y"
+    (let [body (attention/render-block [[(parsed {:prompt "REPL buffer to reuse: " :origin "timer"}) :live]] now)]
+      (is (not (str/includes? body "keys=\"y\"")))
+      (is (str/includes? body "keys=\"RET\" accepts the default")))))

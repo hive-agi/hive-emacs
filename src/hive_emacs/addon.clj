@@ -81,11 +81,13 @@
 
 (defn- register-attention-block!
   "Offer the `:block/emacs-attention` emitter through the host's
-   :extension/register! port. nil outside a live host."
+   :extension/register! port. nil outside a live host. The emitter also keeps
+   the Emacs half publishing across Emacs restarts."
   [runtime-ports]
   (when-let [register (:extension/register! runtime-ports)]
     (try
-      (register attention/extension-key attention/emitter)
+      (register attention/extension-key
+                (attention/emitter-with-upkeep ec/eval-elisp-with-timeout))
       true
       (catch Exception e
         (log/warn "hive-emacs: attention block registration failed"
@@ -118,6 +120,7 @@
                    (daemon-store/start-heartbeat-loop!)
                    true))
                 _ (cider-tool/contribute! (:runtime/ports config))
+                _ (emacs-tool/contribute! (:runtime/ports config))
                 bridge-ready? (ensure-elisp-loaded!)
                 attention-block? (boolean
                                   (register-attention-block! (:runtime/ports config)))
@@ -156,6 +159,7 @@
   (locking state
     (cider-tool/retract! (:runtime/ports @state))
     (retract-attention-block! (:runtime/ports @state))
+    (attention/reset-upkeep!)
     (editor-port/unregister!)
     (editor-services/unregister!)
     (when (:heartbeat-started? @state)

@@ -167,6 +167,45 @@
   (tool/result->mcp
    (tool/try-result :emacs/current-buffer-failed #(current-buffer* params))))
 
+(def attention-params
+  "Schema params of the attention verbs."
+  {"keys" {:type "string"
+           :description "answer: keys in kbd syntax, e.g. \"y\", \"n\", \"RET\", \"C-g\""}
+   "id" {:type "string"
+         :description "answer: prompt id from the EMACS-ATTENTION block (required when several wait)"}
+   "daemon" {:type "string"
+             :description "answer: daemon (server-name) whose prompt to answer"}
+   "wait_ms" {:type "integer"
+              :description "answer: how long to wait for Emacs to close the prompt (default 3000)"}
+   "enable" {:type "boolean"
+             :description "attention: (re)start the Emacs publisher via emacsclient"}})
+
+(def commands
+  "Command contribution map for the host's `emacs` root, through the
+   :extension/contribute-commands! runtime port.
+
+   A contribution, not a tool: the host registry drops an addon tool named
+   like one of its own roots, so verbs placed only on `tool-def` below were
+   unreachable in hive-mcp while the EMACS-ATTENTION block told agents to call
+   them (measured 2026-09-13). `tool-def` derives its copies from this map."
+  {"attention" {:handler handle-attention
+                :params (select-keys attention-params ["enable"])
+                :description "Prompts Emacs is WAITING on, read without emacsclient; enable=true restarts publishing (hive.emacs addon)."}
+   "answer" {:handler handle-answer
+             :params (dissoc attention-params "enable")
+             :description "Answer a waiting prompt: keys in kbd syntax, id from the ---EMACS-ATTENTION--- block; works while emacsclient is blocked (hive.emacs addon)."}})
+
+(defn contribute!
+  "Register `commands` into the host's `emacs` root. RUNTIME-PORTS is the
+   host-injected port vocabulary; nil outside a live host, making this a
+   no-op. Retraction is the addon-wide :extension/retract-contributions!."
+  [runtime-ports]
+  (when-let [contribute (:extension/contribute-commands! runtime-ports)]
+    (contribute "emacs" "hive.emacs" commands)
+    (log/info "hive-emacs: contributed attention verbs to `emacs`"
+              {:verbs (keys commands)}))
+  nil)
+
 (def handlers
   {:eval            handle-eval
    :buffers         handle-buffers
@@ -176,8 +215,8 @@
    :find            handle-find-file
    :save            handle-save
    :current         handle-current-buffer
-   :attention       handle-attention
-   :answer          handle-answer
+   :attention       (get-in commands ["attention" :handler])
+   :answer          (get-in commands ["answer" :handler])
    ;; Absorbed from buffer.clj
    :goto-line       buffer/handle-goto-line
    :insert          buffer/handle-insert-text
@@ -214,7 +253,9 @@
                      "find-keybindings, package-commentary, list-packages). "
                      "Use command='help' to list all.")
    :inputSchema {:type "object"
-                 :properties {"command" {:type "string"
+                 :properties (merge
+                              attention-params
+                              {"command" {:type "string"
                                          :enum ["eval" "buffers" "notify" "status" "switch" "find" "save" "current"
                                                 "goto-line" "insert" "project-root" "recent"
                                                 "context" "capabilities" "workflows" "special-buffers" "buffer-info"
@@ -226,16 +267,6 @@
                                          :description "Emacs operation to perform"}
                               "code" {:type "string"
                                       :description "Elisp code to evaluate"}
-                              "keys" {:type "string"
-                                      :description "answer: keys in kbd syntax, e.g. \"y\", \"n\", \"RET\", \"C-g\""}
-                              "id" {:type "string"
-                                    :description "answer: prompt id from the EMACS-ATTENTION block (required when several wait)"}
-                              "daemon" {:type "string"
-                                        :description "answer: daemon (server-name) whose prompt to answer"}
-                              "wait_ms" {:type "integer"
-                                         :description "answer: how long to wait for Emacs to close the prompt (default 3000)"}
-                              "enable" {:type "boolean"
-                                        :description "attention: (re)start the Emacs publisher via emacsclient"}
                               "timeout_ms" {:type "integer"
                                             :description "Timeout in milliseconds for eval (default: 5000, max: 30000)"}
                               "message" {:type "string"
@@ -267,7 +298,7 @@
                               "package_or_prefix" {:type "string"
                                                    :description "Package/prefix for docs package-functions"}
                               "package_name" {:type "string"
-                                              :description "Package name for docs package-commentary"}}
+                                              :description "Package name for docs package-commentary"}})
                  :required ["command"]}
    :handler handle-emacs})
 

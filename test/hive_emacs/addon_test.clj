@@ -120,7 +120,10 @@
       (let [initialized (addon/initialize! instance {})]
         (is (:success? initialized))
         (is (false? (get-in initialized [:metadata :bridge-ready?])))
-        (is (= [["code" "hive.emacs" #{"cider"}]] @contributions))
+        (is (= [["code" "hive.emacs" #{"cider"}]
+                ["emacs" "hive.emacs" #{"attention" "answer"}]]
+               @contributions)
+            "attention verbs reach the host's `emacs` root as a contribution")
         (is (nil? (addon/shutdown! instance)))
         (is (ports-clear?))))))
 
@@ -139,8 +142,13 @@
         (is (= {:block? true :publishing? true}
                (get-in initialized [:metadata :attention])))
         (is (= 1 @enabled) "the Emacs half is started once the bridge is ready")
-        (is (identical? attention/emitter
-                        (get @registered :block/emacs-attention)))
+        (let [upkeep-calls (atom 0)]
+          (with-redefs [attention/keep-publishing! (fn [_] (swap! upkeep-calls inc) false)
+                        attention/emitter (constantly "BODY")]
+            (is (= "BODY" ((get @registered :block/emacs-attention) {}))
+                "the registered emitter renders the attention block")
+            (is (= 1 @upkeep-calls)
+                "and keeps the Emacs half publishing on the way")))
         (is (nil? (addon/shutdown! instance)))
         (is (nil? ((get @registered :block/emacs-attention) {}))
             "shutdown leaves an emitter that renders nothing")))))
