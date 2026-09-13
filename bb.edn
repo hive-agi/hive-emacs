@@ -38,6 +38,10 @@
   {:doc  "Fail if a .cljel source calls nth with the index first (elisp order)."
    :task (shell {:dir repo-root} "bash" "scripts/check-nth-arg-order.sh")}
 
+  lint:ert-defs
+  {:doc  "Fail if an ERT artifact defines a top-level symbol outside its own prefix."
+   :task (shell {:dir repo-root} "bash" "scripts/check-ert-definitions.sh")}
+
   test
   {:doc  "Run the Clojure test suite (self-contained: published deps only)."
    :task (shell {:dir repo-root} "clojure" "-M:test")}
@@ -79,5 +83,5 @@
    :task (shell {:dir repo-root} "bash" "scripts/check-build-publish.sh")}
 
   test:all
-  {:doc     "Clojure suite + elisp parity + nth arg-order + ERT suites."
-   :depends [test parity lint:nth test:ert]}}}
+  {:doc     "Clojure suite + elisp parity + nth arg-order + ERT definitions + ERT suites."
+   :depends [test parity lint:nth lint:ert-defs test:ert]}}}
