@@ -5,6 +5,7 @@
    adapt declarative tools, hooks, editor, and vessel descriptors through
    their own integration layer."
   (:require [hive-addon.protocol :as addon]
+            [hive-emacs.attention :as attention]
             [hive-emacs.bridge-loader :as bridge]
             [hive-emacs.client :as ec]
             [hive-emacs.daemon-store :as daemon-store]
@@ -78,6 +79,28 @@
       (log/warn "hive-emacs bridge load failed" {:error (ex-message e)})
       false)))
 
+(defn- register-attention-block!
+  "Offer the `:block/emacs-attention` emitter through the host's
+   :extension/register! port. nil outside a live host."
+  [runtime-ports]
+  (when-let [register (:extension/register! runtime-ports)]
+    (try
+      (register attention/extension-key attention/emitter)
+      true
+      (catch Exception e
+        (log/warn "hive-emacs: attention block registration failed"
+                  {:error (ex-message e)})
+        false))))
+
+(defn- retract-attention-block!
+  "The registry has no unregister port; an emitter that says nothing renders
+   no block, so that is the retraction."
+  [runtime-ports]
+  (when-let [register (:extension/register! runtime-ports)]
+    (try
+      (register attention/extension-key (constantly nil))
+      (catch Exception _ nil))))
+
 (defn- initialize-addon!
   [state seed runtime-config]
   (locking state
@@ -96,9 +119,16 @@
                    true))
                 _ (cider-tool/contribute! (:runtime/ports config))
                 bridge-ready? (ensure-elisp-loaded!)
+                attention-block? (boolean
+                                  (register-attention-block! (:runtime/ports config)))
+                attention-publishing? (and bridge-ready?
+                                           (attention/enable-in-emacs!
+                                            ec/eval-elisp-with-timeout))
                 editor-port (editor-port/register!)
                 editor-caps (editor-services/register!)
                 metadata {:bridge-ready? bridge-ready?
+                          :attention {:block? attention-block?
+                                      :publishing? (boolean attention-publishing?)}
                           :editor-id :emacsclient
                           :editor-surfaces (registry/surfaces editor-port)
                           :editor-capabilities (set (keys editor-caps))
@@ -125,6 +155,7 @@
   [state]
   (locking state
     (cider-tool/retract! (:runtime/ports @state))
+    (retract-attention-block! (:runtime/ports @state))
     (editor-port/unregister!)
     (editor-services/unregister!)
     (when (:heartbeat-started? @state)

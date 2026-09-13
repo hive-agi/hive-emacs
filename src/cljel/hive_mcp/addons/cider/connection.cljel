@@ -67,6 +67,11 @@ Design principles (SOLID/CLARITY):
   :type 'integer
   :group 'hive-mcp-cider)
 
+(defcustom hive-mcp-cider-connection-spawn-port-retries 5
+  "How many times a spawn that lost its port to another process retries on another port."
+  :type 'integer
+  :group 'hive-mcp-cider)
+
 (defcustom hive-mcp-cider-connection-cljs-repl-type "shadow"
   "ClojureScript REPL type for cider-connect-cljs."
   :type '(choice (const "shadow") (const "figwheel") (const "browser"))
@@ -159,6 +164,13 @@ process buffer's output, or nil. Pure."
   (if (and tail (not (string= "" tail)))
       (format "nREPL process %s; last output: %s" exit-desc tail)
     (format "nREPL process %s before opening its port (no output)" exit-desc)))
+
+(defn port-in-use-p [tail]
+  "True when a dead spawn's last output says its port was already bound.
+That is a race, not a broken launch: another JVM took the port between the
+free-port probe and this process's bind, so the spawn can simply try another
+port. TAIL is the process buffer's last output, or nil. Pure."
+  (and tail (string-match-p "Address already in use" tail) t))
 
 (defn unsettled-status-p [status]
   "Return non-nil when STATUS means a spawned session never reached a REPL.
@@ -411,14 +423,18 @@ Nil when the buffer is gone or produced nothing."
              tail (cl-subseq lines start)]
         (when tail (mapconcat #'identity tail " | "))))))
 
-(defn watch-spawn-process [name process]
+(defn watch-spawn-process [name process &optional on-port-in-use]
   "Fail session NAME fast if PROCESS dies before its nREPL port opens.
 
 Without this the retry timer polls a port that nobody will ever open and
 reports a 30-attempt timeout, hiding the real cause — a bad classpath, a
 missing alias, or an alias whose :main-opts hijacked the -m. The sentinel
 cancels the timer and records 'error with the process's own last output as
-:reason. A session that already settled 'connected is left alone."
+:reason. A session that already settled 'connected is left alone.
+
+ON-PORT-IN-USE, when given, is called with no arguments instead of recording
+'error when the process died because its port was already bound (see
+`hive-mcp-cider-connection-port-in-use-p'): the caller respawns elsewhere."
   (when (processp process)
     (set-process-sentinel
       process
@@ -427,15 +443,20 @@ cancels the timer and records 'error with the process's own last output as
           (let [status (and (hive-mcp-cider-sessions-exists-p name)
                             (hive-mcp-cider-sessions-get-prop name :status))]
             (when (unsettled-status-p status)
-              (let [reason (spawn-death-reason
-                             (string-trim (or event "exited"))
-                             (-process-output-tail (format "*nREPL-%s*" name) 4))]
+              (let [tail (-process-output-tail (format "*nREPL-%s*" name) 4)
+                    reason (spawn-death-reason (string-trim (or event "exited")) tail)]
                 (-cancel-session-timer name)
-                (hive-mcp-cider-sessions-update-props name
-                  :status 'error
-                  :reason reason)
-                (message "hive-mcp-cider: Session '%s' spawn failed — %s"
-                         name reason)))))))))
+                (if (and on-port-in-use (port-in-use-p tail))
+                    (do
+                      (message "hive-mcp-cider: Session '%s' lost its port to another process; retrying on another port"
+                               name)
+                      (funcall on-port-in-use))
+                  (do
+                    (hive-mcp-cider-sessions-update-props name
+                      :status 'error
+                      :reason reason)
+                    (message "hive-mcp-cider: Session '%s' spawn failed — %s"
+                             name reason)))))))))))
 
 (defn try-connect-session [name]
   "Try to connect CIDER to session NAME.

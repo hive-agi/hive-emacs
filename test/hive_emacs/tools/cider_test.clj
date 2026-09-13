@@ -129,6 +129,59 @@
       (is (some #(str/includes? % "auto-") @calls)
           "spawn uses the auto-<hash> name"))))
 
+;;; =============================================================================
+;;; Emacs waiting for input: spawn says so instead of hanging silently
+;;; =============================================================================
+
+(def ^:private prompt-paragraph
+  "Emacs daemon \"server\" is WAITING FOR INPUT (2s, live): a minibuffer prompt \"Reuse dead REPL? (y or n)\", opened by an emacsclient eval.")
+
+(deftest spawn-names-a-prompt-that-is-already-waiting
+  (let [{:keys [eval-fn]} (make-stub (fn [_] {:success true
+                                              :result "{\"name\":\"dev\",\"status\":\"starting\"}"}))]
+    (binding [cider/*eval-fn* eval-fn
+              cider/*attention-fn* (constantly prompt-paragraph)]
+      (let [resp (cider/handle-spawn {:name "dev"})]
+        (is (not (:isError resp)))
+        (is (str/includes? (:text resp) "\"status\":\"starting\""))
+        (is (str/includes? (:text resp) "\"attention\""))
+        (is (str/includes? (:text resp) "Reuse dead REPL"))))))
+
+(deftest spawn-reply-is-untouched-when-nothing-waits
+  (let [raw "{\"name\":\"dev\",\"status\":\"starting\"}"
+        {:keys [eval-fn]} (make-stub (fn [_] {:success true :result raw}))]
+    (binding [cider/*eval-fn* eval-fn
+              cider/*attention-fn* (constantly nil)]
+      (is (= raw (:text (cider/handle-spawn {:name "dev"})))))))
+
+(deftest a-timeout-that-already-names-the-prompt-is-not-repeated
+  (binding [cider/*attention-fn* (constantly prompt-paragraph)]
+    (let [err {:error :cider/elisp-failed
+               :message (str "Emacsclient call timed out after 5000ms\n"
+                             (str/replace prompt-paragraph "2s" "0s"))}
+          out (cider/with-waiting-prompt err)]
+      (is (= 1 (count (re-seq #"WAITING FOR INPUT" (:message out))))))
+    (let [out (cider/with-waiting-prompt {:error :cider/elisp-failed :message "boom"})]
+      (is (str/includes? (:message out) "WAITING FOR INPUT")))))
+
+(deftest auto-spawn-stops-waiting-when-jack-in-is-stuck-at-a-prompt
+  (let [{:keys [calls eval-fn]}
+        (make-stub (fn [code]
+                     (cond
+                       (str/includes? code "list-sessions") {:success true :result "[]"}
+                       (str/includes? code "spawn-session-from-plist") {:success true :result "\"{}\""}
+                       :else {:success true :result "\"3\""})))
+        started (System/currentTimeMillis)]
+    (binding [cider/*eval-fn* eval-fn
+              cider/*attention-fn* (constantly prompt-paragraph)]
+      (let [resp (cider/handle-eval {:code "(+ 1 2)" :project_dir "/proj"})]
+        (is (true? (:isError resp)))
+        (is (str/includes? (:text resp) "Emacs is waiting for input"))
+        (is (str/includes? (:text resp) "Reuse dead REPL"))
+        (is (< (count (filter #(str/includes? % "list-sessions") @calls)) 4)
+            "the readiness budget is not spent polling a session that cannot connect")
+        (is (< (- (System/currentTimeMillis) started) 5000))))))
+
 (deftest spawn-readiness-budget-covers-a-cold-jvm-boot
   (let [poll     @#'cider/session-ready-poll-ms
         attempts @#'cider/session-ready-max-attempts

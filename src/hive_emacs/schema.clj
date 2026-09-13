@@ -102,6 +102,26 @@
    [:ok [:map {:closed false} [:ok :any]]]
    [:error [:map {:closed false} [:error :qualified-keyword]]]])
 
+(def AttentionKind
+  "What Emacs waits on. Open-ended on purpose: the Emacs half may learn a new
+   reader before the JVM half does, and an unknown kind still renders."
+  [:string {:min 1}])
+
+(def AttentionState
+  "One published attention.json, as the JVM reads it (hive-emacs.attention)."
+  [:map {:closed true}
+   [:kind AttentionKind]
+   [:id [:string {:min 1}]]
+   [:origin [:enum "server" "timer" "command" "async" "unknown"]]
+   [:prompt :string]
+   [:secret? :boolean]
+   [:server [:string {:min 1}]]
+   [:heartbeat-ms [:maybe nat-int?]]
+   [:since-ms {:optional true} nat-int?]
+   [:input {:optional true} :string]
+   [:pid {:optional true} pos-int?]
+   [:depth {:optional true} nat-int?]])
+
 (def AddonInitResult
   [:map {:closed false}
    [:success? :boolean]
@@ -123,6 +143,7 @@
    :hive-emacs/heartbeat-report HeartbeatReport
    :hive-emacs/mcp-response McpResponse
    :hive-emacs/result Result
+   :hive-emacs/attention-state AttentionState
    :hive-emacs/addon-init-result AddonInitResult})
 
 (schemas/register-all! schema-bundle)

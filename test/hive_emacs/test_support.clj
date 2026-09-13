@@ -1,6 +1,7 @@
 (ns hive-emacs.test-support
   "Host-free test fixtures and an in-memory implementation of runtime ports."
   (:require [datascript.core :as d]
+            [hive-emacs.attention :as attention]
             [hive-emacs.client :as client]
             [hive-emacs.daemon-ds :as daemon-ds]
             [hive-emacs.daemon-store :as daemon-store]
@@ -89,7 +90,10 @@
       (reset-world! world)
       (install-world! world ports))
     (try
-      (test-fn)
+      ;; A test that stubs the bridge as ready must not start the attention
+      ;; publisher in whatever real Emacs answers emacsclient on this machine.
+      (with-redefs [attention/enable-in-emacs! (constantly false)]
+        (test-fn))
       (finally
         (daemon-store/stop-heartbeat-loop!)
         (client/shutdown-executor!)

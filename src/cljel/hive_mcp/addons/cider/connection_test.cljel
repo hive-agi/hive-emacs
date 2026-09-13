@@ -139,6 +139,48 @@ Returns PRED's final value. Timer callbacks (`run-at-time') fire during
   (should (equal "nREPL process killed before opening its port (no output)"
                  (hive-mcp-cider-connection-spawn-death-reason "killed" ""))))
 
+(ert-deftest hive-mcp-cider-connection-test-port-in-use-p nil
+  "Only a bind failure reads as a port another process took."
+  (should (hive-mcp-cider-connection-port-in-use-p
+           "Execution error (BindException) at sun.nio.ch.Net/bind0 (Net.java:-2). | Address already in use | Full report at:"))
+  (should-not (hive-mcp-cider-connection-port-in-use-p "Unknown option: \"-m\""))
+  (should-not (hive-mcp-cider-connection-port-in-use-p nil)))
+
+(ert-deftest hive-mcp-cider-connection-test-taken-port-retries nil
+  "A spawn that died because its port was taken calls the retry instead of
+recording 'error, so the caller can respawn on another port."
+  (hive-mcp-cider-sessions-clear-all)
+  (unwind-protect
+      (let [retried (list nil)
+            proc (start-process "hive-mcp-cider-bind-test" "*nREPL-bound*"
+                                "sh" "-c" "echo 'Address already in use' >&2; exit 1")]
+        (hive-mcp-cider-sessions-register
+         "bound" (hive-mcp-cider-sessions-make-session 7930 :status 'starting))
+        (hive-mcp-cider-connection-watch-spawn-process
+         "bound" proc (lambda () (setcar retried t)))
+        (should (drive (lambda () (car retried)) 5))
+        (should (eq 'starting (hive-mcp-cider-sessions-get-prop "bound" :status))))
+    (when-let* [buf (get-buffer "*nREPL-bound*")] (kill-buffer buf))
+    (hive-mcp-cider-sessions-clear-all)))
+
+(ert-deftest hive-mcp-cider-connection-test-other-death-ignores-retry nil
+  "Any other death still fails fast with 'error; the port retry is not called."
+  (hive-mcp-cider-sessions-clear-all)
+  (unwind-protect
+      (let [retried (list nil)
+            proc (start-process "hive-mcp-cider-death-test3" "*nREPL-broken*"
+                                "sh" "-c" "echo 'Unknown option: -m' >&2; exit 1")]
+        (hive-mcp-cider-sessions-register
+         "broken" (hive-mcp-cider-sessions-make-session 7930 :status 'starting))
+        (hive-mcp-cider-connection-watch-spawn-process
+         "broken" proc (lambda () (setcar retried t)))
+        (should (drive (lambda ()
+                         (eq 'error (hive-mcp-cider-sessions-get-prop "broken" :status)))
+                       5))
+        (should-not (car retried)))
+    (when-let* [buf (get-buffer "*nREPL-broken*")] (kill-buffer buf))
+    (hive-mcp-cider-sessions-clear-all)))
+
 (ert-deftest hive-mcp-cider-connection-test-dead-spawn-fails-fast nil
   "A spawn whose process dies is marked 'error with the process output as the
 reason — not left to the retry timer to report a 30-attempt port timeout."
