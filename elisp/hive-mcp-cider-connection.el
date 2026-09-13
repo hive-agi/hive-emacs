@@ -63,6 +63,8 @@
 
 (defvar cider-cljel-active)
 
+(defvar cider-reuse-dead-repls)
+
 (defcustom hive-mcp-cider-connection-auto-connect t
   "When non-nil, automatically connect CIDER when nREPL is available."
   :group 'hive-mcp-cider
@@ -189,9 +191,10 @@
     (funcall on-settled props)))
 
 (defun hive-mcp-cider-connection--connect-clj-no-prompt (port &optional project-dir)
-  "Connect CIDER CLJ to PORT, suppressing the duplicate session prompt.\nCIDER's y-or-n-p blocks forever in non-interactive (emacsclient) contexts.\nPROJECT-DIR (optional) is passed to cider-connect-clj so the resulting\nREPL buffer is labeled with the target project. Without it, CIDER infers\nthe project from the calling buffer's default-directory, which defaults\nto whatever Emacs buffer happens to be current when the timer fires —\ntypically wrong when the spawn was triggered by an MCP tool call."
+  "Connect CIDER CLJ to PORT without ever prompting.\nCIDER's y-or-n-p blocks forever in non-interactive (emacsclient) contexts.\nDead REPL buffers are never reused: with CIDER's `prompt' default and more\nthan one dead buffer, the stubbed y-or-n-p accepts reuse and CIDER then opens a\ncompleting-read that freezes Emacs from a timer. A spawn is a new session, so\nit always gets a new buffer.\nPROJECT-DIR (optional) is passed to cider-connect-clj so the resulting\nREPL buffer is labeled with the target project. Without it, CIDER infers\nthe project from the calling buffer's default-directory, which defaults\nto whatever Emacs buffer happens to be current when the timer fires —\ntypically wrong when the spawn was triggered by an MCP tool call."
   (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _)
-    t))) (let* ((args (list :host "localhost" :port port)))
+    t))) (let* ((cider-reuse-dead-repls nil)
+        (args (list :host "localhost" :port port)))
     (cider-connect-clj (if project-dir (append args (list :project-dir project-dir)) args)))))
 
 (defun hive-mcp-cider-connection--settle-once (cell on-settled props)

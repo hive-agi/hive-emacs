@@ -74,6 +74,10 @@
                           (mapcat (fn [f] ["-l" f]) files)
                           ["-f" "ert-run-tests-batch-and-exit"])))}
 
+  test:build
+  {:doc  "Check build.sh's publish contract against a fake compiler: a failed build changes nothing."
+   :task (shell {:dir repo-root} "bash" "scripts/check-build-publish.sh")}
+
   test:all
   {:doc     "Clojure suite + elisp parity + nth arg-order + ERT suites."
    :depends [test parity lint:nth test:ert]}}}

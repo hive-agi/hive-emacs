@@ -24,6 +24,9 @@
 
 (defvar-local cider-cljel-active nil "Test stand-in for the cider-clojure-elisp buffer-local upgrade flag.")
 
+(defvar cider-reuse-dead-repls nil
+  "Test stand-in for CIDER's dead REPL reuse policy.")
+
 (defun hive-mcp-cider-connection-test--drive (pred limit)
   "Pump the Emacs event loop until PRED holds or LIMIT seconds elapse.\nReturns PRED's final value. Timer callbacks (`run-at-time') fire during\n`sit-for', which is how the async settle paths make progress in batch."
   (let* ((deadline (+ (float-time) limit)))
@@ -254,6 +257,18 @@
     (should-not (member "live" demoted))) (should (eq 'stale (hive-mcp-cider-sessions-get-prop "dead" :status))) (should (eq 'connected (hive-mcp-cider-sessions-get-prop "live" :status))))
   (kill-buffer buf)
   (hive-mcp-cider-sessions-clear-all))))
+
+(ert-deftest hive-mcp-cider-connection-test-connect-never-reuses-dead-repls nil "The connect runs with dead-REPL reuse off, whatever the user's setting, so\nCIDER never reaches its completing-read over dead buffers." (let* ((cider-reuse-dead-repls 'prompt)
+        (seen (list 'unset))
+        (buf (generate-new-buffer " *test-conn-no-prompt*")))
+    (unwind-protect
+    (cl-letf (((symbol-function 'cider-connect-clj) (lambda (params)
+    (setcar seen cider-reuse-dead-repls)
+    (should (equal 7930 (plist-get params :port)))
+    (should (equal "/tmp/proj/" (plist-get params :project-dir)))
+    buf)) ((symbol-function 'completing-read) (lambda (&rest _)
+    (error "connect opened a completing-read")))) (should (eq buf (hive-mcp-cider-connection--connect-clj-no-prompt 7930 "/tmp/proj/"))) (should (null (car seen))) (should (eq 'prompt cider-reuse-dead-repls)))
+  (kill-buffer buf))))
 
 (defun hive-mcp-cider-connection-test-run-tests ()
   "Run all CIDER connection ERT tests in batch."

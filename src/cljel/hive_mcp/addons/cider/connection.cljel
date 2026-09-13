@@ -48,6 +48,10 @@ Design principles (SOLID/CLARITY):
 ;; cljel compilation session actually came up on a connection.
 (defvar cider-cljel-active)
 
+;; CIDER's policy for dead REPL buffers. Its `prompt' default asks which dead
+;; buffer to reuse with a completing-read, which no y-or-n-p stub can answer.
+(defvar cider-reuse-dead-repls)
+
 ;; ============================================================================
 ;; Configuration
 ;; ============================================================================
@@ -233,15 +237,20 @@ still run. For synchronous callers only — timers must use `-poll-async'."
 ;; ============================================================================
 
 (defn- -connect-clj-no-prompt [port &optional project-dir]
-  "Connect CIDER CLJ to PORT, suppressing the duplicate session prompt.
+  "Connect CIDER CLJ to PORT without ever prompting.
 CIDER's y-or-n-p blocks forever in non-interactive (emacsclient) contexts.
+Dead REPL buffers are never reused: with CIDER's `prompt' default and more
+than one dead buffer, the stubbed y-or-n-p accepts reuse and CIDER then opens a
+completing-read that freezes Emacs from a timer. A spawn is a new session, so
+it always gets a new buffer.
 PROJECT-DIR (optional) is passed to cider-connect-clj so the resulting
 REPL buffer is labeled with the target project. Without it, CIDER infers
 the project from the calling buffer's default-directory, which defaults
 to whatever Emacs buffer happens to be current when the timer fires —
 typically wrong when the spawn was triggered by an MCP tool call."
   (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
-    (let [args (list :host "localhost" :port port)]
+    (let [cider-reuse-dead-repls nil
+          args (list :host "localhost" :port port)]
       (cider-connect-clj
         (if project-dir
             (append args (list :project-dir project-dir))
