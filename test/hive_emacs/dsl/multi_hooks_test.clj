@@ -13,6 +13,18 @@
       (is (= "emacs" (:tool v)))
       (is (string? (:command v))))))
 
+(deftest the-emacs-tool-reaches-multi-dispatch
+  ;; The addon claims `emacs` over the host's core tool. tools/list follows the
+  ;; claim on its own; `multi tool=emacs` only follows a :multi/tool entry, so
+  ;; the commands the host seed never knew (attention, answer) need this hook.
+  (let [entries (:multi/tool mh/contributions)
+        entry (first entries)]
+    (is (= ["emacs"] (mapv :tool-name entries)))
+    (is (ifn? (:handler entry)))
+    (let [help (pr-str ((:handler entry) {:command "help"}))]
+      (doseq [command ["attention" "answer" "eval"]]
+        (is (.contains ^String help command) (str command " is dispatchable through multi"))))))
+
 (deftest no-duplicate-codes
   (let [codes (map :code mh/emacs-verbs)]
     (is (= (count codes) (count (distinct codes))))))

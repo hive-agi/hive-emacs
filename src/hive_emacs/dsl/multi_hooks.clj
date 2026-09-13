@@ -34,5 +34,16 @@
 (def contributions
   "Map returned by the addon's `(hooks [this])` method.
 
-   Vector values are stable, host-neutral registry-entry data."
-  {:multi/verb emacs-verbs})
+   Vector values are stable, host-neutral registry-entry data.
+
+   `:multi/tool` overrides the host's `:multi/core` seed for `emacs`, the way
+   hive-knowledge does for `kg`: the addon claims the `emacs` tool over the
+   host's copy (tool-claims), so tools/list already advertises the addon's
+   command set; without this entry `multi tool=emacs` kept dispatching the
+   host seed, which knows neither `attention` nor `answer`. The handler is
+   resolved lazily so this namespace stays free of the tool require."
+  {:multi/verb emacs-verbs
+   :multi/tool [{:tool-name "emacs"
+                 :handler   (fn [params]
+                              ((requiring-resolve 'hive-emacs.tools.emacs/handle-emacs) params))
+                 :batchable nil}]})
