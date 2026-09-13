@@ -103,5 +103,8 @@ jobs:
           CLEL_HOME: ${{ github.workspace }}/.cache/clojure-elisp
         run: bb build
 
+      - name: Check ERT artifacts define nothing outside their own prefix
+        run: bb lint:ert-defs
+
       - name: Run addon ERT suites
         run: bb test:ert

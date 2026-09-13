@@ -15,13 +15,14 @@ fractions of a second so the async settle paths finish inside the suite."
 (require 'hive-mcp-cider-nrepl)
 (require 'hive-mcp-cider-connection)
 
-;; The buffer-local flag cider-clojure-elisp sets when a CLJEL session comes up.
-(defvar-local cider-cljel-active nil
-  "Test stand-in for the cider-clojure-elisp buffer-local upgrade flag.")
+;; Both variables belong to CIDER / cider-clojure-elisp. This file is also
+;; loaded into live Emacs sessions, so it only DECLARES them: a valued defvar
+;; loaded before CIDER would pin the user's setting to the test's value.
+;; cider-cljel-active: buffer-local flag set when a CLJEL session comes up.
+(defvar cider-cljel-active)
 
 ;; CIDER's dead-REPL policy; the test binds it to CIDER's `prompt' default.
-(defvar cider-reuse-dead-repls nil
-  "Test stand-in for CIDER's dead REPL reuse policy.")
+(defvar cider-reuse-dead-repls)
 
 ;; ============================================================================
 ;; Helpers

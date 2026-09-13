@@ -22,10 +22,9 @@
 
 (require 'hive-mcp-cider-connection)
 
-(defvar-local cider-cljel-active nil "Test stand-in for the cider-clojure-elisp buffer-local upgrade flag.")
+(defvar cider-cljel-active)
 
-(defvar cider-reuse-dead-repls nil
-  "Test stand-in for CIDER's dead REPL reuse policy.")
+(defvar cider-reuse-dead-repls)
 
 (defun hive-mcp-cider-connection-test--drive (pred limit)
   "Pump the Emacs event loop until PRED holds or LIMIT seconds elapse.\nReturns PRED's final value. Timer callbacks (`run-at-time') fire during\n`sit-for', which is how the async settle paths make progress in batch."

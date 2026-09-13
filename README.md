@@ -93,7 +93,8 @@ bb build      # compile src/cljel/**/*.cljel
 bb parity     # committed .el artifacts match their .cljel sources
 bb test       # Clojure suite
 bb test:ert   # addon ERT suites in emacs -Q --batch (never touches a daemon)
-bb test:all   # all three
+bb lint:ert-defs  # ERT artifacts define no top-level symbol outside their own prefix
+bb test:all   # all of the above
 ```
 
 ### Elisp artifact layout
