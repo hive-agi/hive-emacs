@@ -9,8 +9,9 @@
 #   src/cljel/claude_code_ide/*.cljel  skipped, upstream package ships its own elisp
 #
 # Every compilation is emitted into a staging directory, so the only .el file this
-# script writes next to a source is that source's own ERT artifact. elisp/ is
-# replaced only after all sources compile, so a failed run leaves the tree untouched.
+# script writes next to a source is that source's own ERT artifact. elisp/ and the
+# ERT artifacts are published only after all sources compile, so a failed or killed
+# run leaves the tree untouched.
 # Re-runs are idempotent: unchanged sources produce byte-identical artifacts.
 #
 # Concurrency contract: the whole build holds an exclusive flock on .build.lock,
@@ -50,6 +51,8 @@ mkdir -p "$STAGE_UNITS" "$STAGE_OUT"
 
 compiled=0
 ert=0
+ert_units=()
+ert_dests=()
 failed=0
 skipped=0
 
@@ -84,7 +87,9 @@ while read -r cljel_file; do
 
   if [[ "$base" == *test* ]]; then
     # ERT artifact: stays beside its source, outside the shipped load-path.
-    cp "$staged" "$(dirname "$cljel_file")/${provide_name}.el"
+    # Queued, not copied: it is published with elisp/ once every source compiled.
+    ert_units+=("$staged")
+    ert_dests+=("$(dirname "$cljel_file")/${provide_name}.el")
     echo "  ERT $provide_name ← $rel"
     ert=$((ert + 1))
     continue
@@ -127,6 +132,14 @@ if [[ -d "$OUT_DIR" ]]; then
 fi
 mv "$STAGE_OUT" "$OUT_DIR"
 rm -rf "$RETIRED_DIR"
+
+# ERT artifacts publish with elisp/, never during the compile loop: an artifact
+# copied before a later source failed would come from a different build than
+# elisp/. Each lands by rename, so a reader never sees a half-written file.
+for i in "${!ert_units[@]}"; do
+  cp "${ert_units[$i]}" "${ert_dests[$i]}.build-tmp"
+  mv "${ert_dests[$i]}.build-tmp" "${ert_dests[$i]}"
+done
 
 total=$(find "$OUT_DIR" -name '*.el' | wc -l)
 echo ""

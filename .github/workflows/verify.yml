@@ -93,6 +93,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y emacs-nox
 
+      - name: Check the build publishes nothing on failure
+        run: bb test:build
+
       # Recompile every .cljel source; the ERT suites then load what this run
       # built, never whatever .el happened to be committed.
       - name: Compile .cljel sources to Elisp
