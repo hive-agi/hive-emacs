@@ -58,12 +58,23 @@ jobs:
       - name: Checkout hive-emacs
         uses: actions/checkout@v4
 
+      # The compiler follows clojure-elisp's latest release instead of a pinned
+      # tag: the .el artifacts are rebuilt from src/cljel on every run below, so
+      # a compiler bump never needs a hand-regenerated tree to get past CI.
       - name: Checkout clojure-elisp
         uses: actions/checkout@v4
         with:
           repository: BuddhiLW/clojure-elisp
-          ref: v0.6.2
+          fetch-depth: 0
           path: .cache/clojure-elisp
+
+      - name: Use the latest clojure-elisp release
+        working-directory: .cache/clojure-elisp
+        run: |
+          TAG=$(git tag --list 'v*' --sort=-v:refname | head -1)
+          test -n "$TAG" || { echo "no clojure-elisp release tag found" >&2; exit 1; }
+          git checkout --quiet "$TAG"
+          echo "clojure-elisp $TAG"
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -82,10 +93,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y emacs-nox
 
-      - name: Verify generated Elisp
+      # Recompile every .cljel source; the ERT suites then load what this run
+      # built, never whatever .el happened to be committed.
+      - name: Compile .cljel sources to Elisp
         env:
           CLEL_HOME: ${{ github.workspace }}/.cache/clojure-elisp
-        run: bb parity
+        run: bb build
 
       - name: Run addon ERT suites
         run: bb test:ert

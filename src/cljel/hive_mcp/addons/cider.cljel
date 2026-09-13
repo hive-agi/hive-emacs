@@ -102,27 +102,17 @@ Delegates to spawn-session after destructuring."
     (plist-get params :extra-deps)
     (plist-get params :middleware)))
 
-(defn spawn-session [name &optional repl-type port project-dir agent-id extra-args aliases extra-deps middleware]
-  "Spawn a new named CIDER session with its own nREPL server.
-NAME is the session identifier (e.g., \"agent-1\", \"task-render\").
-REPL-TYPE is one of 'clj (default), 'cljs, or 'cljel.
-PORT is the nREPL port (default: auto-assign from session range).
-PROJECT-DIR is the directory to start nREPL in (default: current project).
-AGENT-ID optionally links this session to a swarm agent.
-EXTRA-ARGS is a list of raw clojure CLI args spliced after -Sdeps and
-before the -M flag (a raw -Sdeps there REPLACES the built-in one — the CLI
-keeps only the last; merge-style layering is automatic via local.deps.edn
-detection in `hive-mcp-cider-nrepl-local-deps-files').
-ALIASES is a list of bare alias names (e.g. '(\"test\")) selecting the -M
-flag for this spawn, overriding `hive-mcp-cider-nrepl-launch-aliases'.
-EXTRA-DEPS is a list of deps EDN strings merged into the built-in -Sdeps,
-after any auto-detected local deps (later entries win key-wise).
-MIDDLEWARE is a list of nREPL middleware symbol strings appended to the
-built-in list."
-  (interactive "sSession name: ")
+(defn -spawn-attempt [attempt name repl-type port project-dir agent-id extra-args aliases extra-deps middleware]
+  "Launch one try of session NAME; see `hive-mcp-cider-spawn-session'.
+ATTEMPT counts the respawns so far. A requested PORT that is already open is
+not used: the next free port is. When the process dies because its port was
+bound first by another JVM, the spawn retries on another port, at most
+`hive-mcp-cider-connection-spawn-port-retries' times."
   (let* [rtype (or repl-type 'clj)
-         the-port (or port (hive-mcp-cider-sessions-find-available-port
-                             #'hive-mcp-cider-nrepl-port-open-p))
+         the-port (if (and port (not (hive-mcp-cider-nrepl-port-open-p port)))
+                      port
+                    (hive-mcp-cider-sessions-find-available-port
+                      #'hive-mcp-cider-nrepl-port-open-p))
          dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype))
          process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir extra-args aliases extra-deps middleware)
          timer (run-with-timer hive-mcp-cider-connection-spawn-initial-delay
@@ -145,10 +135,41 @@ built-in list."
        :status 'starting
        :timer timer))
     ;; Registered first: the sentinel writes onto the session it watches.
-    (hive-mcp-cider-connection-watch-spawn-process name process)
+    ;; The retry leaves PORT nil, and the registry still holds the lost port,
+    ;; so the free-port search skips it.
+    (hive-mcp-cider-connection-watch-spawn-process
+      name process
+      (when (< attempt hive-mcp-cider-connection-spawn-port-retries)
+        (lambda ()
+          (-spawn-attempt (+ attempt 1) name repl-type nil project-dir agent-id
+                          extra-args aliases extra-deps middleware))))
+    (when (and port (not (eql port the-port)))
+      (message "hive-mcp-cider: port %s taken; session '%s' uses %d" port name the-port))
     (message "hive-mcp-cider: Spawning %s session '%s' on port %d..."
              (symbol-name rtype) name the-port)
     (list :name name :port the-port :repl-type (symbol-name rtype) :status "starting")))
+
+(defn spawn-session [name &optional repl-type port project-dir agent-id extra-args aliases extra-deps middleware]
+  "Spawn a new named CIDER session with its own nREPL server.
+NAME is the session identifier (e.g., \"agent-1\", \"task-render\").
+REPL-TYPE is one of 'clj (default), 'cljs, or 'cljel.
+PORT is the nREPL port (default: auto-assign from session range). A PORT that
+is already taken is replaced by the next free one, and a spawn that loses its
+port to another process during startup retries on another port.
+PROJECT-DIR is the directory to start nREPL in (default: current project).
+AGENT-ID optionally links this session to a swarm agent.
+EXTRA-ARGS is a list of raw clojure CLI args spliced after -Sdeps and
+before the -M flag (a raw -Sdeps there REPLACES the built-in one — the CLI
+keeps only the last; merge-style layering is automatic via local.deps.edn
+detection in `hive-mcp-cider-nrepl-local-deps-files').
+ALIASES is a list of bare alias names (e.g. '(\"test\")) selecting the -M
+flag for this spawn, overriding `hive-mcp-cider-nrepl-launch-aliases'.
+EXTRA-DEPS is a list of deps EDN strings merged into the built-in -Sdeps,
+after any auto-detected local deps (later entries win key-wise).
+MIDDLEWARE is a list of nREPL middleware symbol strings appended to the
+built-in list."
+  (interactive "sSession name: ")
+  (-spawn-attempt 0 name repl-type port project-dir agent-id extra-args aliases extra-deps middleware))
 
 (defn connect-session [name host port &optional repl-type agent-id project-dir]
   "Connect to an existing nREPL server as a named session.
