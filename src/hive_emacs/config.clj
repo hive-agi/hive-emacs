@@ -28,7 +28,15 @@
   :socket-name      (env "EMACS_SOCKET_NAME"
                          :type :string
                          :required false
-                         :doc "Emacs daemon socket name. nil = default daemon (no -s flag)."))
+                         :doc "Emacs daemon socket name. nil = default daemon (no -s flag).")
+  :attention-dir    (env "HIVE_EMACS_ATTENTION_DIR"
+                         :type :string
+                         :required false
+                         :doc "Root for Emacs attention state (hive-emacs.attention). nil = derived.")
+  :xdg-runtime-dir  (env "XDG_RUNTIME_DIR"
+                         :type :string
+                         :required false
+                         :doc "Per-user runtime dir; the attention root defaults under it."))
 
 (def ^:const default-socket-fallback
   "Daemon ID used when EMACS_SOCKET_NAME is unset.

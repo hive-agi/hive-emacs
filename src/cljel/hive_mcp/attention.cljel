@@ -1,0 +1,445 @@
+;; hive-emacs attention: publish "Emacs is waiting for a human" OUT OF BAND.
+;;
+;; ## Why a file, and not an emacsclient query
+;;
+;; Measured 2026-09-13 on a throwaway `emacs -Q --daemon` (Emacs 31.0.50) with
+;; a real tty frame:
+;;
+;;   prompt opened from a timer / the command loop
+;;     -> emacsclient still answers, minibuffer-prompt is readable
+;;   prompt opened INSIDE an emacsclient eval (the shape of `cider spawn`,
+;;   which runs cider-jack-in inside the server filter)
+;;     -> EVERY emacsclient call times out until the prompt is answered,
+;;        yet minibuffer-setup-hook fires, timers keep running, and keys
+;;        pushed onto unread-command-events from a timer answer the prompt
+;;        (the stuck eval then returns and emacsclient recovers).
+;;
+;; So the one case an agent most needs to hear about is the one a pull over
+;; emacsclient cannot see. This module therefore PUSHES: a hook and a timer
+;; write <root>/<server-name>/attention.json, the JVM reads the file without
+;; touching emacsclient and rides it back on the next tool response as a
+;; piggyback block, and an agent answers by writing answer.json, which the
+;; same timer consumes.
+;;
+;; ## Origin, because the human uses the minibuffer too
+;;
+;; M-x is a prompt. Alerting every agent whenever the user types a command
+;; would teach agents to skip the block. The stack that opened the prompt is
+;; captured at setup time and classified: "server" (inside an emacsclient
+;; eval), "timer", "command" (a key the human pressed) or "async" (a process
+;; filter or sentinel, e.g. CIDER's connection callback). Consumers alert on
+;; everything except "command".
+;;
+;; ## Secrets
+;;
+;; A prompt read by `read-passwd' is published as secret: its input is never
+;; written, and an answer file for it is refused. That one belongs to a human.
+;;
+;; Compiled by build.sh -> elisp/hive-mcp-attention.el.
+
+(ns hive-mcp.attention)
+
+(require 'json)
+(require 'subr-x)
+
+(defgroup hive-mcp-attention nil
+  "Publish blocking Emacs prompts so hive agents can see and answer them."
+  :group 'hive-mcp
+  :prefix "hive-mcp-attention-")
+
+(defcustom hive-mcp-attention-directory nil
+  "Root under which each daemon publishes its attention state.
+nil derives it: $HIVE_EMACS_ATTENTION_DIR, else $XDG_RUNTIME_DIR/hive-emacs,
+else hive-emacs-<uid> under `temporary-file-directory'. hive-emacs on the JVM
+derives the same root, so change both or neither."
+  :type '(choice (const :tag "Derived" nil) directory)
+  :group 'hive-mcp-attention)
+
+(defcustom hive-mcp-attention-poll-interval 1.0
+  "Seconds between state refreshes and answer-file checks."
+  :type 'number
+  :group 'hive-mcp-attention)
+
+(defvar hive-mcp-attention--timer nil
+  "Repeating timer that refreshes the state file and consumes answers.")
+
+(defvar hive-mcp-attention--seq 0
+  "Monotonic counter behind prompt ids.")
+
+(defvar hive-mcp-attention--minibuffers nil
+  "Stack of plists (:depth :id :since :origin :secret), one per open minibuffer.")
+
+(defvar hive-mcp-attention--event-prompt nil
+  "Plist for a prompt read with `read-key' and friends, while it waits.")
+
+(defvar hive-mcp-attention--debugger nil
+  "Plist for an active debugger recursive edit, or nil.")
+
+(defvar hive-mcp-attention--secret nil
+  "Non-nil while `read-passwd' is reading.")
+
+(defvar hive-mcp-attention--published nil
+  "Non-nil while a state file written by this Emacs exists.")
+
+(defvar hive-mcp-attention--last-answer nil
+  "Plist describing the last answer consumed: (:id :keys :at).")
+
+(defvar hive-mcp-attention--last-error nil
+  "Last error the tick swallowed, as a string. Inspect via `status'.")
+
+;;; Paths
+
+(defvar hive-mcp-attention--root nil
+  "Root fixed by `enable'. Cached because `getenv' is not stable in a daemon:
+inside an emacsclient eval it reads the CLIENT's environment, in a timer the
+daemon's, so deriving the root on every write could split one daemon's state
+across two directories.")
+
+(defn- derived-root
+  "Root derived from customization and environment, for a manual `enable'."
+  []
+  (or hive-mcp-attention-directory
+      (let [override (getenv "HIVE_EMACS_ATTENTION_DIR")]
+        (when (and override (not (string-empty-p override)))
+          override))
+      (let [runtime (getenv "XDG_RUNTIME_DIR")]
+        (when (and runtime (file-directory-p runtime))
+          (expand-file-name "hive-emacs" runtime)))
+      (expand-file-name (format "hive-emacs-%d" (user-uid))
+                        temporary-file-directory)))
+
+(defn root-directory
+  "Directory under which every daemon's attention state lives."
+  []
+  (or hive-mcp-attention--root (derived-root)))
+
+(defn daemon-directory
+  "This daemon's directory: the root joined with `server-name'."
+  []
+  (expand-file-name (or (bound-and-true-p server-name) "server")
+                    (root-directory)))
+
+(defn state-file
+  "Path of the published state."
+  []
+  (expand-file-name "attention.json" (daemon-directory)))
+
+(defn answer-file
+  "Path an answer is dropped at."
+  []
+  (expand-file-name "answer.json" (daemon-directory)))
+
+;;; Prompt identity
+
+(defn- next-id
+  "A prompt id unique for this Emacs process."
+  []
+  (setq hive-mcp-attention--seq (1+ hive-mcp-attention--seq))
+  (format "%d-%d" (emacs-pid) hive-mcp-attention--seq))
+
+(defn- stack-origin
+  "Classify what opened the prompt from the current Lisp stack.
+Precedence server > timer > command, whatever the frame order: a command run
+through `call-interactively' inside an emacsclient eval is still a server
+prompt. No marker at all means a process filter or sentinel: \"async\"."
+  []
+  (let [server nil
+        timer nil
+        command nil]
+    (mapbacktrace
+     (fn [_evald func _args _flags]
+       (when (symbolp func)
+         (when (memq func '(server-process-filter server-eval-and-print server-execute))
+           (setq server t))
+         (when (eq func 'timer-event-handler)
+           (setq timer t))
+         (when (memq func '(command-execute call-interactively))
+           (setq command t)))))
+    (if server
+      "server"
+      (if timer
+        "timer"
+        (if command "command" "async")))))
+
+;;; Snapshots
+
+(defn- minibuffer-snapshot
+  "State of the innermost open minibuffer, or nil."
+  []
+  (let [depth (minibuffer-depth)
+        window (active-minibuffer-window)]
+    (when (and (> depth 0) window)
+      (let [frame (seq-find (fn [entry] (= depth (plist-get entry :depth)))
+                            hive-mcp-attention--minibuffers)
+            secret (and frame (plist-get frame :secret))]
+        (list :kind "minibuffer"
+              :id (if frame (plist-get frame :id) (format "%d-mb%d" (emacs-pid) depth))
+              :since (if frame (plist-get frame :since) nil)
+              :origin (if frame (plist-get frame :origin) "unknown")
+              :secret (if secret t :json-false)
+              :prompt (substring-no-properties (or (minibuffer-prompt) ""))
+              :input (if secret
+                       nil
+                       (with-current-buffer (window-buffer window)
+                         (minibuffer-contents-no-properties)))
+              :depth depth)))))
+
+(defn- event-snapshot
+  "State of a `read-key' style prompt, or nil."
+  []
+  (when hive-mcp-attention--event-prompt
+    (append hive-mcp-attention--event-prompt
+            (list :kind "read-event" :secret :json-false :depth 0))))
+
+(defn- debugger-snapshot
+  "State of an active debugger, or nil. Clears a debugger that has exited."
+  []
+  (let [buffer (get-buffer "*Backtrace*")]
+    (if (and hive-mcp-attention--debugger
+             buffer
+             (> (recursion-depth) (minibuffer-depth))
+             (eq (buffer-local-value 'major-mode buffer) 'debugger-mode))
+      (append hive-mcp-attention--debugger
+              (list :kind "debugger"
+                    :secret :json-false
+                    :prompt (with-current-buffer buffer
+                              (buffer-substring-no-properties
+                               (point-min)
+                               (min (point-max) (+ (point-min) 400))))
+                    :depth (recursion-depth)))
+      (do
+        (setq hive-mcp-attention--debugger nil)
+        nil))))
+
+(defn snapshot
+  "What Emacs is waiting on right now, innermost first, or nil."
+  []
+  (or (minibuffer-snapshot)
+      (event-snapshot)
+      (debugger-snapshot)))
+
+;;; Publishing
+
+(defn- write-state
+  "Atomically publish PLIST as JSON, in a directory only this user can read."
+  [plist]
+  (let [dir (daemon-directory)
+        file (state-file)
+        tmp (format "%s.tmp" file)
+        coding-system-for-write 'utf-8]
+    (with-file-modes 448
+      (make-directory dir t)
+      (with-temp-file tmp
+        (insert (json-encode plist))))
+    (rename-file tmp file t)
+    (setq hive-mcp-attention--published t)))
+
+(defn- clear-state
+  "Remove the published state, if any."
+  []
+  (when hive-mcp-attention--published
+    (let [file (state-file)]
+      (when (file-exists-p file)
+        (delete-file file)))
+    (setq hive-mcp-attention--published nil)))
+
+(defn publish
+  "Publish the current snapshot, or clear it when nothing is waiting."
+  []
+  (let [snap (snapshot)]
+    (if snap
+      (write-state
+       (append snap
+               (list :pid (emacs-pid)
+                     :server (or (bound-and-true-p server-name) "server")
+                     :answer_file (answer-file)
+                     :heartbeat (float-time))))
+      (clear-state))
+    snap))
+
+;;; Answers
+
+(defn- owned-by-me-p
+  "Non-nil when FILE is owned by this user and not writable by anyone else."
+  [file]
+  (let [attrs (file-attributes file 'integer)]
+    (and attrs
+         (eql (file-attribute-user-id attrs) (user-uid))
+         (let [modes (file-modes file)]
+           (and modes (= 0 (logand modes 18)))))))
+
+(defn- consume-answer
+  "Apply a pending answer.json to the prompt it names, then delete the file.
+An answer for a different prompt id, for a secret prompt, or from a file this
+user does not own is dropped, and the reason is kept in `--last-error'."
+  []
+  (let [file (answer-file)]
+    (when (file-exists-p file)
+      (let [trusted (owned-by-me-p file)
+            doc (condition-case nil (json-read-file file) (error nil))
+            current (snapshot)]
+        (delete-file file)
+        (cond
+          (not trusted)
+          (setq hive-mcp-attention--last-error "answer.json refused: not owned by this user or writable by others")
+
+          (null doc)
+          (setq hive-mcp-attention--last-error "answer.json refused: unreadable JSON")
+
+          (null current)
+          (setq hive-mcp-attention--last-error "answer.json dropped: nothing is waiting")
+
+          (not (equal (alist-get 'id doc) (plist-get current :id)))
+          (setq hive-mcp-attention--last-error
+                (format "answer.json dropped: id %s does not match waiting prompt %s"
+                        (alist-get 'id doc) (plist-get current :id)))
+
+          (eq t (plist-get current :secret))
+          (setq hive-mcp-attention--last-error "answer.json refused: the waiting prompt is secret")
+
+          (not (stringp (alist-get 'keys doc)))
+          (setq hive-mcp-attention--last-error "answer.json refused: keys must be a string")
+
+          :else
+          (let [key-string (alist-get 'keys doc)]
+            (setq unread-command-events
+                  (append unread-command-events
+                          (listify-key-sequence (kbd key-string))))
+            (setq hive-mcp-attention--last-answer
+                  (list :id (plist-get current :id) :keys key-string :at (float-time)))))))))
+
+(defn- tick
+  "Timer body: consume an answer, then refresh the published state. Never signals."
+  []
+  (condition-case err
+      (do
+        (consume-answer)
+        (publish))
+    (error
+     (setq hive-mcp-attention--last-error (error-message-string err)))))
+
+;;; Capture hooks
+
+(defn- on-minibuffer-setup
+  "Record who opened this minibuffer, then publish at once."
+  []
+  (let [depth (minibuffer-depth)]
+    (setq hive-mcp-attention--minibuffers
+          (cons (list :depth depth
+                      :id (next-id)
+                      :since (float-time)
+                      :origin (stack-origin)
+                      :secret (if hive-mcp-attention--secret t nil))
+                (seq-remove (fn [entry] (>= (plist-get entry :depth) depth))
+                            hive-mcp-attention--minibuffers))))
+  (condition-case err
+      (publish)
+    (error
+     (setq hive-mcp-attention--last-error (error-message-string err)))))
+
+(defn- on-minibuffer-exit
+  "Forget this minibuffer; republish once it has actually closed."
+  []
+  (let [depth (minibuffer-depth)]
+    (setq hive-mcp-attention--minibuffers
+          (seq-remove (fn [entry] (>= (plist-get entry :depth) depth))
+                      hive-mcp-attention--minibuffers)))
+  (run-at-time 0 nil #'hive-mcp-attention--tick))
+
+(defn- on-debugger
+  "Record who entered the debugger."
+  []
+  (unless hive-mcp-attention--debugger
+    (setq hive-mcp-attention--debugger
+          (list :id (next-id) :since (float-time) :origin (stack-origin))))
+  (run-at-time 0 nil #'hive-mcp-attention--tick))
+
+(defn- around-event-read
+  "Around advice for `read-key' and friends: publish while the read waits."
+  [orig &rest args]
+  (if (or hive-mcp-attention--event-prompt (> (minibuffer-depth) 0))
+    (apply orig args)
+    (let [prompt (car args)]
+      (setq hive-mcp-attention--event-prompt
+            (list :id (next-id)
+                  :since (float-time)
+                  :origin (stack-origin)
+                  :prompt (if (stringp prompt) (substring-no-properties prompt) "")))
+      (condition-case nil (publish) (error nil))
+      (unwind-protect
+          (apply orig args)
+        (setq hive-mcp-attention--event-prompt nil)
+        (run-at-time 0 nil #'hive-mcp-attention--tick)))))
+
+(defn- around-read-passwd
+  "Around advice for `read-passwd': mark the minibuffer it opens as secret."
+  [orig &rest args]
+  (setq hive-mcp-attention--secret t)
+  (unwind-protect
+      (apply orig args)
+    (setq hive-mcp-attention--secret nil)))
+
+;;; Lifecycle
+
+(defvar hive-mcp-attention--event-readers '(read-key read-char-choice read-multiple-choice)
+  "Lisp prompt readers that do not necessarily open a minibuffer.")
+
+(defn enabled-p
+  "Non-nil when publishing is active."
+  []
+  (and (timerp hive-mcp-attention--timer)
+       (memq hive-mcp-attention--timer timer-list)
+       t))
+
+(defn enable
+  "Start publishing blocking prompts under ROOT. Idempotent.
+hive-emacs passes the root it reads from, so both sides agree by construction;
+a nil ROOT falls back to `hive-mcp-attention-directory' and the environment."
+  [&optional root]
+  (clear-state)
+  (setq hive-mcp-attention--root
+        (if (and (stringp root) (not (string-empty-p root)))
+          (expand-file-name root)
+          (derived-root)))
+  (add-hook 'minibuffer-setup-hook #'hive-mcp-attention--on-minibuffer-setup)
+  (add-hook 'minibuffer-exit-hook #'hive-mcp-attention--on-minibuffer-exit)
+  (add-hook 'debugger-mode-hook #'hive-mcp-attention--on-debugger)
+  (add-hook 'kill-emacs-hook #'hive-mcp-attention--clear-state)
+  (dolist [reader hive-mcp-attention--event-readers]
+    (advice-add reader :around #'hive-mcp-attention--around-event-read))
+  (advice-add 'read-passwd :around #'hive-mcp-attention--around-read-passwd)
+  (when (timerp hive-mcp-attention--timer)
+    (cancel-timer hive-mcp-attention--timer))
+  (setq hive-mcp-attention--timer
+        (run-at-time hive-mcp-attention-poll-interval
+                     hive-mcp-attention-poll-interval
+                     #'hive-mcp-attention--tick))
+  t)
+
+(defn disable
+  "Stop publishing and remove the state file. Idempotent."
+  []
+  (remove-hook 'minibuffer-setup-hook #'hive-mcp-attention--on-minibuffer-setup)
+  (remove-hook 'minibuffer-exit-hook #'hive-mcp-attention--on-minibuffer-exit)
+  (remove-hook 'debugger-mode-hook #'hive-mcp-attention--on-debugger)
+  (remove-hook 'kill-emacs-hook #'hive-mcp-attention--clear-state)
+  (dolist [reader hive-mcp-attention--event-readers]
+    (advice-remove reader #'hive-mcp-attention--around-event-read))
+  (advice-remove 'read-passwd #'hive-mcp-attention--around-read-passwd)
+  (when (timerp hive-mcp-attention--timer)
+    (cancel-timer hive-mcp-attention--timer))
+  (setq hive-mcp-attention--timer nil)
+  (clear-state)
+  t)
+
+(defn status
+  "JSON status for diagnostics over emacsclient (when emacsclient still works)."
+  []
+  (json-encode
+   (list :enabled (if (enabled-p) t :json-false)
+         :state_file (state-file)
+         :waiting (snapshot)
+         :last_answer hive-mcp-attention--last-answer
+         :last_error hive-mcp-attention--last-error)))
+
+(provide 'hive-mcp-attention)

@@ -18,6 +18,7 @@
             [hive-emacs.runtime-ports :as rt-ports]
             [hive-emacs.repl.boundary :as repl]
             [hive-emacs.repl.profile :as repl-profile]
+            [hive-emacs.attention :as attention]
             [hive-emacs.bridge-loader :as bridge]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -49,6 +50,18 @@
   (fn
     ([code] (eval-through-bridge code nil))
     ([code timeout-ms] (eval-through-bridge code timeout-ms))))
+
+(def ^:dynamic *attention-fn*
+  "Emacs-waits-for-input boundary: (f) -> paragraph naming the impeding
+   prompt, or nil. Read from disk by hive-emacs.attention, never over
+   emacsclient, so it answers while a prompt has emacsclient blocked. Tests
+   bind a stub."
+  attention/timeout-hint)
+
+(defn- waiting-prompt
+  "The impeding-prompt paragraph, or nil. Never throws."
+  []
+  (result/rescue nil (*attention-fn*)))
 
 ;;; =============================================================================
 ;;; Result plumbing (local — support/try-result does not catch, core's does)
@@ -83,6 +96,32 @@
   (if (result/ok? r)
     (tool/mcp-success (:ok r))
     (tool/mcp-error (str "Error: " (or (:message r) (:error r))))))
+
+(defn with-waiting-prompt
+  "Attach an impeding Emacs prompt, if any, to a spawn Result.
+
+   spawn answers \"starting\" before CIDER has done anything that can ask a
+   question, so an ok carries the prompt only when one is ALREADY waiting (a
+   JSON object result gains \"attention\"; anything else gets the paragraph
+   appended). The prompts jack-in raises later arrive on every subsequent
+   tool response as the ---EMACS-ATTENTION--- block. An error already names
+   the prompt when it came from an emacsclient timeout, so it is left alone
+   unless it does not."
+  [r]
+  (if-let [prompt (waiting-prompt)]
+    (if (result/ok? r)
+      (let [v (:ok r)
+            parsed (when (string? v)
+                     (result/rescue nil (json/read-str v)))]
+        (result/ok (if (map? parsed)
+                     (json/write-str (assoc parsed "attention" prompt))
+                     (str v "\n\n" prompt))))
+      ;; The timeout's copy was rendered a few seconds earlier, so its "(Ns)"
+      ;; differs; the marker, not the text, says it is already there.
+      (cond-> r
+        (not (str/includes? (str (:message r)) "WAITING FOR INPUT"))
+        (update :message #(str % "\n" prompt))))
+    r))
 
 (defn- handle-elisp
   "Common handler: execute elisp via try-result boundary, return MCP response."
@@ -156,37 +195,57 @@
   120)
 
 (defn- wait-for-session-ready
-  "Poll until the named session reports connected. Returns true/false.
+  "Poll until the named session reports connected.
+   Returns :ready, :timeout, or {:blocked paragraph} as soon as Emacs is found
+   waiting on an impeding prompt: no amount of polling connects a session
+   whose jack-in is stuck at a question, so the budget is not spent on it.
    Polls at `session-ready-poll-ms` intervals, at most `max-attempts` times."
   [session-name max-attempts]
   (loop [attempt 0]
     (if (>= attempt max-attempts)
-      false
+      :timeout
       (let [r (list-sessions*)]
-        (if (and (result/ok? r)
-                 (some (fn [s]
-                         (and (= session-name (:name s))
-                              (= "connected" (:status s))))
-                       (:ok r)))
-          true
-          (do (Thread/sleep session-ready-poll-ms)
-              (recur (inc attempt))))))))
+        (cond
+          (and (result/ok? r)
+               (some (fn [s]
+                       (and (= session-name (:name s))
+                            (= "connected" (:status s))))
+                     (:ok r)))
+          :ready
+
+          :else
+          (if-let [prompt (waiting-prompt)]
+            {:blocked prompt}
+            (do (Thread/sleep session-ready-poll-ms)
+                (recur (inc attempt)))))))))
 
 (defn- spawn-and-wait*
   "Spawn a session and wait for readiness. Returns Result with session name.
    Waits up to `session-ready-max-attempts` polls; a session that is still
    coming up when the budget runs out yields :cider/session-timeout, not a
-   kill, so it may reach connected afterwards."
+   kill, so it may reach connected afterwards. A session whose start is stuck
+   at an Emacs prompt yields :cider/blocked-on-prompt, naming the prompt and
+   how to answer it."
   [session-name project-dir]
   (if (spawn-session-internal session-name project-dir)
-    (if (wait-for-session-ready session-name session-ready-max-attempts)
-      (result/ok session-name)
-      (result/err :cider/session-timeout
-                  {:message (str "Spawned session '" session-name "' but it was not connected within "
-                                 (quot (* session-ready-poll-ms session-ready-max-attempts) 1000)
-                                 "s. It may still be starting; check with `code cider sessions`.")}))
+    (let [readiness (wait-for-session-ready session-name session-ready-max-attempts)]
+      (cond
+        (= :ready readiness)
+        (result/ok session-name)
+
+        (:blocked readiness)
+        (result/err :cider/blocked-on-prompt
+                    {:message (str "Spawned session '" session-name "' is not connected: "
+                                   "Emacs is waiting for input.\n" (:blocked readiness))})
+
+        :else
+        (result/err :cider/session-timeout
+                    {:message (str "Spawned session '" session-name "' but it was not connected within "
+                                   (quot (* session-ready-poll-ms session-ready-max-attempts) 1000)
+                                   "s. It may still be starting; check with `code cider sessions`.")})))
     (result/err :cider/spawn-failed
-                {:message (str "Failed to spawn session '" session-name "'")})))
+                {:message (cond-> (str "Failed to spawn session '" session-name "'")
+                            (waiting-prompt) (str ".\n" (waiting-prompt)))})))
 
 (defn- ensure-connected*
   "Ensure CIDER is connected, auto-spawning a session if needed.
@@ -460,19 +519,21 @@
   (log/info "cider-spawn" {:name name :repl_type repl_type :agent_id agent_id :port port})
   (if (str/blank? name)
     (tool/mcp-error "Error: spawn requires a non-blank 'name'")
-    (let [port (cond-> port (string? port) parse-long)]
-      (handle-elisp :cider/spawn-failed
-                    (el/require-and-call-plist-json
-                      'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
-                      {:name       name
-                       :repl-type  (when repl_type (symbol repl_type))
-                       :port       port
-                       :project-dir project_dir
-                       :agent-id   agent_id
-                       :extra-args (when extra_args (vec extra_args))
-                       :aliases    (when aliases (vec aliases))
-                       :extra-deps (when extra_deps (vec extra_deps))
-                       :middleware (when middleware (vec middleware))})))))
+    (let [port (cond-> port (string? port) parse-long)
+          elisp (el/require-and-call-plist-json
+                  'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
+                  {:name       name
+                   :repl-type  (when repl_type (symbol repl_type))
+                   :port       port
+                   :project-dir project_dir
+                   :agent-id   agent_id
+                   :extra-args (when extra_args (vec extra_args))
+                   :aliases    (when aliases (vec aliases))
+                   :extra-deps (when extra_deps (vec extra_deps))
+                   :middleware (when middleware (vec middleware))})]
+      (result->mcp
+       (with-waiting-prompt
+         (try-result :cider/spawn-failed #(elisp->result elisp nil)))))))
 
 (defn handle-connect
   "Connect to an existing nREPL server as a named session.

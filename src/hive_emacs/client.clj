@@ -7,6 +7,7 @@
   (:require [clojure.java.shell :refer [sh]]
             [clojure.string :as str]
             [hive-dsl.result :as result]
+            [hive-emacs.attention :as attention]
             [hive-emacs.config :as config]
             [hive-emacs.runtime-ports :as ports]
             [hive-weave.guarded :as guarded]
@@ -337,10 +338,16 @@
              response   (cond
                           (result/ok? execution) (:ok execution)
                           (= :weave/timeout (:error execution))
-                          {:success false
-                           :error (format "Emacsclient call timed out after %dms"
-                                          timeout-ms)
-                           :timed-out true}
+                          ;; A timeout is most often Emacs waiting on a prompt,
+                          ;; which emacsclient itself cannot see. The attention
+                          ;; channel can, so the timeout names the prompt.
+                          (let [hint (attention/timeout-hint)]
+                            (cond-> {:success false
+                                     :error (cond-> (format "Emacsclient call timed out after %dms"
+                                                            timeout-ms)
+                                              hint (str "\n" hint))
+                                     :timed-out true}
+                              hint (assoc :attention hint)))
                           :else
                           {:success false
                            :error (str "Emacsclient execution failed: "

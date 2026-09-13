@@ -7,6 +7,7 @@
 
    Owned entirely by hive-emacs and exposed as declarative IAddon tool data."
   (:require [hive-dsl.result :as result]
+            [hive-emacs.attention :as attention]
             [hive-emacs.client :as ec]
             [hive-emacs.elisp :as el]
             [hive-emacs.tools.buffer :as buffer]
@@ -73,7 +74,42 @@
     (result/map-ok (elisp->result (*eval-fn* elisp))
                    (fn [r] {:buffer r}))))
 
+(defn- attention* [{:keys [enable]}]
+  ;; Reading never needs emacsclient: that is the point of the channel. Only
+  ;; an explicit enable (after an Emacs restart, say) evaluates elisp.
+  (let [enabled (when (true? enable) (attention/enable-in-emacs! *eval-fn*))
+        now (System/currentTimeMillis)
+        root (attention/root-dir)]
+    (result/ok (cond-> {:root (.getAbsolutePath root)
+                        :waiting (mapv (fn [[state status]]
+                                         (assoc state
+                                                :status status
+                                                :impedes-agents? (attention/actionable? state)))
+                                       (attention/read-states root now))}
+                 (some? enabled) (assoc :enabled? enabled)))))
+
+(defn- answer* [{key-string :keys :keys [id daemon wait_ms]}]
+  (let [answered (attention/answer! (cond-> {:keys key-string :id id :daemon daemon}
+                                      wait_ms (assoc :wait-ms wait_ms)))]
+    (if (:ok answered)
+      (result/ok (:ok answered))
+      (result/err :emacs/answer-refused (dissoc answered :error)))))
+
 ;; ── public handlers (MCP boundary) ──────────────────────────────────────────
+
+(defn handle-attention
+  "List prompts Emacs is waiting on (read from disk, no emacsclient)."
+  [params]
+  (log/info "emacs-attention" {:enable (:enable params)})
+  (tool/result->mcp
+   (tool/try-result :emacs/attention-failed #(attention* params))))
+
+(defn handle-answer
+  "Answer a waiting Emacs prompt with keys, out of band (no emacsclient)."
+  [{:keys [id daemon] :as params}]
+  (log/info "emacs-answer" {:id id :daemon daemon})
+  (tool/result->mcp
+   (tool/try-result :emacs/answer-failed #(answer* params))))
 
 (defn handle-eval
   "Evaluate Elisp code."
@@ -140,6 +176,8 @@
    :find            handle-find-file
    :save            handle-save
    :current         handle-current-buffer
+   :attention       handle-attention
+   :answer          handle-answer
    ;; Absorbed from buffer.clj
    :goto-line       buffer/handle-goto-line
    :insert          buffer/handle-insert-text
@@ -170,6 +208,8 @@
                      "goto-line (move cursor), insert (text at point), project-root, recent (recent files), "
                      "context (full Emacs context), capabilities (hive-mcp.el status), workflows (list workflows), "
                      "special-buffers (list *-buffers), buffer-info (detailed buffer info), "
+                     "attention (prompts Emacs is WAITING on, read without emacsclient; enable=true restarts publishing), "
+                     "answer (answer a waiting prompt: keys in kbd syntax, id from the ---EMACS-ATTENTION--- block; works while emacsclient is blocked), "
                      "docs <subcmd> (describe-function, describe-variable, apropos, package-functions, "
                      "find-keybindings, package-commentary, list-packages). "
                      "Use command='help' to list all.")
@@ -178,6 +218,7 @@
                                          :enum ["eval" "buffers" "notify" "status" "switch" "find" "save" "current"
                                                 "goto-line" "insert" "project-root" "recent"
                                                 "context" "capabilities" "workflows" "special-buffers" "buffer-info"
+                                                "attention" "answer"
                                                 "docs describe-function" "docs describe-variable" "docs apropos"
                                                 "docs package-functions" "docs find-keybindings"
                                                 "docs package-commentary" "docs list-packages"
@@ -185,6 +226,16 @@
                                          :description "Emacs operation to perform"}
                               "code" {:type "string"
                                       :description "Elisp code to evaluate"}
+                              "keys" {:type "string"
+                                      :description "answer: keys in kbd syntax, e.g. \"y\", \"n\", \"RET\", \"C-g\""}
+                              "id" {:type "string"
+                                    :description "answer: prompt id from the EMACS-ATTENTION block (required when several wait)"}
+                              "daemon" {:type "string"
+                                        :description "answer: daemon (server-name) whose prompt to answer"}
+                              "wait_ms" {:type "integer"
+                                         :description "answer: how long to wait for Emacs to close the prompt (default 3000)"}
+                              "enable" {:type "boolean"
+                                        :description "attention: (re)start the Emacs publisher via emacsclient"}
                               "timeout_ms" {:type "integer"
                                             :description "Timeout in milliseconds for eval (default: 5000, max: 30000)"}
                               "message" {:type "string"

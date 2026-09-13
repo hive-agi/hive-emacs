@@ -5,6 +5,7 @@
             [hive-addon.mount :as mount]
             [hive-addon.protocol :as addon]
             [hive-emacs.addon :as emacs-addon]
+            [hive-emacs.attention :as attention]
             [hive-emacs.bridge-loader :as bridge]
             [hive-emacs.client :as client]
             [hive-emacs.daemon-store :as daemon-store]
@@ -122,3 +123,36 @@
         (is (= [["code" "hive.emacs" #{"cider"}]] @contributions))
         (is (nil? (addon/shutdown! instance)))
         (is (ports-clear?))))))
+
+(deftest attention-block-is-registered-and-retracted-through-the-host-port
+  (let [registered (atom {})
+        enabled (atom 0)
+        instance (emacs-addon/make-addon
+                  {:runtime/ports
+                   {:extension/register!
+                    (fn [k v] (swap! registered assoc k v))}})]
+    (with-redefs [bridge/ensure-loaded! (constantly true)
+                  client/emacs-running? (constantly true)
+                  attention/enable-in-emacs! (fn [_] (swap! enabled inc) true)]
+      (let [initialized (addon/initialize! instance {})]
+        (is (:success? initialized))
+        (is (= {:block? true :publishing? true}
+               (get-in initialized [:metadata :attention])))
+        (is (= 1 @enabled) "the Emacs half is started once the bridge is ready")
+        (is (identical? attention/emitter
+                        (get @registered :block/emacs-attention)))
+        (is (nil? (addon/shutdown! instance)))
+        (is (nil? ((get @registered :block/emacs-attention) {}))
+            "shutdown leaves an emitter that renders nothing")))))
+
+(deftest attention-publisher-is-not-started-without-the-bridge
+  (let [enabled (atom 0)
+        instance (emacs-addon/make-addon {})]
+    (with-redefs [bridge/ensure-loaded! (constantly false)
+                  client/emacs-running? (constantly true)
+                  attention/enable-in-emacs! (fn [_] (swap! enabled inc) true)]
+      (let [initialized (addon/initialize! instance {})]
+        (is (= {:block? false :publishing? false}
+               (get-in initialized [:metadata :attention])))
+        (is (zero? @enabled))
+        (addon/shutdown! instance)))))
