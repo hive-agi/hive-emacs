@@ -17,6 +17,7 @@ hive_mcp/addons/cider/runtime.cljel
 hive_mcp/addons/cider/runtime_test.cljel
 hive_mcp/addons/cider/sessions.cljel
 hive_mcp/addons/cider/sessions_test.cljel
+hive_mcp/addons/cider/spawnwatch.cljel
 hive_mcp/addons/cider/ui.cljel
 hive_mcp/addons/claude_code.cljel
 hive_mcp/addons/cljel.cljel

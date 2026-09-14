@@ -19,7 +19,8 @@
             [hive-emacs.repl.boundary :as repl]
             [hive-emacs.repl.profile :as repl-profile]
             [hive-emacs.attention :as attention]
-            [hive-emacs.bridge-loader :as bridge]))
+            [hive-emacs.bridge-loader :as bridge]
+            [hive-emacs.cider.spawn :as spawn]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -514,7 +515,11 @@
   "Spawn a new named CIDER session with its own nREPL server.
    Full CLI surface: extra_args (raw, pre--M), aliases (-M selection),
    extra_deps (EDN strings merged into -Sdeps), middleware (appended).
-   local.deps.edn in the project dir is always auto-detected."
+   local.deps.edn in the project dir is always auto-detected.
+
+   An ok answers \"starting\" and is also WATCHED: the session's outcome
+   arrives on a later tool response as the ---CIDER-SPAWN--- block. An err
+   short-circuits the watch, so nothing is owed for a spawn that never ran."
   [{:keys [name project_dir agent_id repl_type port extra_args aliases extra_deps middleware]}]
   (log/info "cider-spawn" {:name name :repl_type repl_type :agent_id agent_id :port port})
   (if (str/blank? name)
@@ -532,8 +537,9 @@
                    :extra-deps (when extra_deps (vec extra_deps))
                    :middleware (when middleware (vec middleware))})]
       (result->mcp
-       (with-waiting-prompt
-         (try-result :cider/spawn-failed #(elisp->result elisp nil)))))))
+       (-> (try-result :cider/spawn-failed #(elisp->result elisp nil))
+           (result/map-ok (partial spawn/watch-spawn! *eval-fn*))
+           with-waiting-prompt)))))
 
 (defn handle-connect
   "Connect to an existing nREPL server as a named session.

@@ -15,6 +15,7 @@ Architecture: Facade pattern — delegates to sub-modules:
 - eval:           Async heartbeat evaluation engine
 - introspection:  MCP tool wrappers (doc, apropos, info, complete)
 - memory:         Save/query REPL results via hive-mcp memory
+- spawnwatch:     Publish the session registry for hive-emacs to read
 - ui:             Transient menu and minor mode"
   (:load-path ["cider"])
   (:require [hive-mcp-api :as api]
@@ -25,6 +26,7 @@ Architecture: Facade pattern — delegates to sub-modules:
             [hive-mcp-cider-eval]
             [hive-mcp-cider-introspection]
             [hive-mcp-cider-memory]
+            [hive-mcp-cider-spawnwatch]
             [hive-mcp-cider-ui]))
 
 ;; ============================================================================

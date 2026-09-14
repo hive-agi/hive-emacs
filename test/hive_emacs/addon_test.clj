@@ -13,7 +13,9 @@
             [hive-emacs.test-support :as support]
             [hive-test.isolation :as isolation]
             [hive-spi.vessel :as render-port]
-            [hive-vessel.renderer :as renderer]))
+            [hive-vessel.renderer :as renderer]
+            [hive-emacs.cider.spawn :as spawn]
+            [clojure.string :as str]))
 
 (def ^:private world (atom (support/empty-world)))
 
@@ -24,6 +26,23 @@
 (defn- ports-clear?
   []
   (every? nil? (vals (ports/snapshot))))
+
+(defn- recording-eval-fn
+  "An elisp boundary that records the code handed to it and never reaches a
+   live Emacs. Injected as `:emacs/eval-fn`, so a test cannot touch the
+   developer's daemon by forgetting to stub something."
+  [calls]
+  (fn
+    ([code] (swap! calls conj code) {:success true :result "t"})
+    ([code _timeout-ms] (swap! calls conj code) {:success true :result "t"})))
+
+(defn- calls-matching
+  [calls marker]
+  (count (filter #(str/includes? % marker) @calls)))
+
+(def ^:private attention-enable "hive-mcp-attention-enable")
+
+(def ^:private spawn-enable "hive-mcp-cider-spawnwatch-enable")
 
 (deftest constructor-implements-leaf-addon-contract
   (let [instance (emacs-addon/addon-ctor {:source :test})]
@@ -76,9 +95,11 @@
                   {:success true :duration-ms 1 :daemon-id daemon-id})
         emit-fn (fn [event payload]
                   (swap! world update :events conj [event payload]))
+        calls (atom [])
         instance (emacs-addon/addon-ctor
                   {:addon/config {:emacs/ping-fn ping-fn
-                                  :emacs/event-emitter emit-fn}})]
+                                  :emacs/event-emitter emit-fn
+                                  :emacs/eval-fn (recording-eval-fn calls)}})]
     (with-redefs [bridge/ensure-loaded! (constantly true)]
       (let [initialized (addon/initialize! instance {})
             repeated (addon/initialize! instance {})]
@@ -92,6 +113,8 @@
         (is (= "server" (:daemon-id (ports/ping! "server"))))
         (is (some? (daemon-store/get-daemon
                     (daemon-store/default-daemon-id))))
+        (is (seq @calls)
+            "the Emacs halves went through the injected boundary, not emacsclient")
         (is (nil? (addon/shutdown! instance)))
         (is (ports-clear?))
         (is (not (contains? @renderer/renderers "hive.emacs")))
@@ -135,19 +158,20 @@
 
 (deftest attention-block-is-registered-and-retracted-through-the-host-port
   (let [registered (atom {})
-        enabled (atom 0)
+        calls (atom [])
         instance (emacs-addon/make-addon
-                  {:runtime/ports
+                  {:emacs/eval-fn (recording-eval-fn calls)
+                   :runtime/ports
                    {:extension/register!
                     (fn [k v] (swap! registered assoc k v))}})]
     (with-redefs [bridge/ensure-loaded! (constantly true)
-                  client/emacs-running? (constantly true)
-                  attention/enable-in-emacs! (fn [_] (swap! enabled inc) true)]
+                  client/emacs-running? (constantly true)]
       (let [initialized (addon/initialize! instance {})]
         (is (:success? initialized))
         (is (= {:block? true :publishing? true}
                (get-in initialized [:metadata :attention])))
-        (is (= 1 @enabled) "the Emacs half is started once the bridge is ready")
+        (is (= 1 (calls-matching calls attention-enable))
+            "the Emacs half is started once the bridge is ready, through the injected boundary")
         (let [upkeep-calls (atom 0)]
           (with-redefs [attention/keep-publishing! (fn [_] (swap! upkeep-calls inc) false)
                         attention/emitter (constantly "BODY")]
@@ -159,14 +183,47 @@
         (is (nil? ((get @registered :block/emacs-attention) {}))
             "shutdown leaves an emitter that renders nothing")))))
 
-(deftest attention-publisher-is-not-started-without-the-bridge
-  (let [enabled (atom 0)
-        instance (emacs-addon/make-addon {})]
+(deftest spawn-block-is-registered-and-retracted-through-the-host-port
+  (let [registered (atom {})
+        calls (atom [])
+        instance (emacs-addon/make-addon
+                  {:emacs/eval-fn (recording-eval-fn calls)
+                   :runtime/ports
+                   {:extension/register!
+                    (fn [k v] (swap! registered assoc k v))}})]
+    (with-redefs [bridge/ensure-loaded! (constantly true)
+                  client/emacs-running? (constantly true)]
+      (let [initialized (addon/initialize! instance {})]
+        (is (:success? initialized))
+        (is (= {:block? true :publishing? true}
+               (get-in initialized [:metadata :cider-spawn])))
+        (is (= 1 (calls-matching calls spawn-enable))
+            "the publisher is started once the bridge is ready, through the injected boundary")
+        (binding [spawn/*root-fn* (constantly (io/file "/nonexistent-spawn-root"))]
+          (spawn/reset-watches!)
+          (spawn/watch-spawn! (recording-eval-fn calls)
+                              "{\"name\":\"pending-one\",\"port\":7920,\"repl-type\":\"clj\"}")
+          (let [body ((get @registered :block/cider-spawn) {})]
+            (is (re-find #"pending-one" body)
+                "the registered emitter reports the spawn the agent asked for")
+            (is (re-find #"still starting" body)
+                "and says it is not usable yet while no outcome is published")))
+        (is (nil? (addon/shutdown! instance)))
+        (is (nil? ((get @registered :block/cider-spawn) {}))
+            "shutdown leaves an emitter that renders nothing")
+        (is (empty? (spawn/watches))
+            "and owes no outcome from a previous lifecycle")))))
+
+(deftest neither-emacs-half-is-started-without-the-bridge
+  (let [calls (atom [])
+        instance (emacs-addon/make-addon {:emacs/eval-fn (recording-eval-fn calls)})]
     (with-redefs [bridge/ensure-loaded! (constantly false)
-                  client/emacs-running? (constantly true)
-                  attention/enable-in-emacs! (fn [_] (swap! enabled inc) true)]
+                  client/emacs-running? (constantly true)]
       (let [initialized (addon/initialize! instance {})]
         (is (= {:block? false :publishing? false}
                (get-in initialized [:metadata :attention])))
-        (is (zero? @enabled))
+        (is (= {:block? false :publishing? false}
+               (get-in initialized [:metadata :cider-spawn])))
+        (is (zero? (calls-matching calls attention-enable)))
+        (is (zero? (calls-matching calls spawn-enable)))
         (addon/shutdown! instance)))))

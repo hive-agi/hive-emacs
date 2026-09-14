@@ -1,7 +1,6 @@
 (ns hive-emacs.test-support
   "Host-free test fixtures and an in-memory implementation of runtime ports."
   (:require [datascript.core :as d]
-            [hive-emacs.attention :as attention]
             [hive-emacs.client :as client]
             [hive-emacs.daemon-ds :as daemon-ds]
             [hive-emacs.daemon-store :as daemon-store]
@@ -81,6 +80,14 @@
         (swap! world update :events conj [event payload]))}
      overrides))))
 
+(defn- isolated-eval
+  "The elisp boundary under test isolation. Whatever real Emacs answers
+   emacsclient on this machine is never reached, whichever Emacs-touching
+   function a test forgot to account for. A test that wants to OBSERVE the
+   boundary injects its own `:emacs/eval-fn` instead of leaning on this."
+  ([_code] {:success false :error "isolated: emacsclient is not available in tests"})
+  ([_code _timeout-ms] {:success false :error "isolated: emacsclient is not available in tests"}))
+
 (defmethod isolation/emit-isolation :hive-emacs/runtime
   [{:keys [store world ports]}]
   (fn [test-fn]
@@ -90,9 +97,11 @@
       (reset-world! world)
       (install-world! world ports))
     (try
-      ;; A test that stubs the bridge as ready must not start the attention
-      ;; publisher in whatever real Emacs answers emacsclient on this machine.
-      (with-redefs [attention/enable-in-emacs! (constantly false)]
+      ;; Net at the concretion, not at each caller: a test that stubs the
+      ;; bridge as ready must not start the attention publisher, the cider
+      ;; spawn publisher, or anything else, in a live Emacs.
+      (with-redefs [client/eval-elisp-with-timeout isolated-eval
+                    client/eval-elisp isolated-eval]
         (test-fn))
       (finally
         (daemon-store/stop-heartbeat-loop!)

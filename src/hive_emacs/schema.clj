@@ -122,6 +122,41 @@
    [:pid {:optional true} pos-int?]
    [:depth {:optional true} nat-int?]])
 
+(def CiderSpawnStatus
+  "Status a spawned CIDER session reports. Open-ended: the Emacs half may
+   learn a new status before the JVM half does, and an unknown one still
+   renders as unsettled."
+  [:string {:min 1}])
+
+(def CiderSpawnState
+  "One session row of cider-spawns.json, as the JVM reads it."
+  [:map {:closed true}
+   [:name [:string {:min 1}]]
+   [:port [:maybe pos-int?]]
+   [:repl-type [:string {:min 1}]]
+   [:status CiderSpawnStatus]
+   [:server [:string {:min 1}]]
+   [:heartbeat-ms [:maybe nat-int?]]
+   [:reason {:optional true} :string]
+   [:agent-id {:optional true} :string]
+   [:project-dir {:optional true} :string]])
+
+(def CiderSpawnWatch
+  "A spawn an agent asked for and has not been told the outcome of.
+   :reports counts how often its outcome has been put on a response."
+  [:map {:closed true}
+   [:name [:string {:min 1}]]
+   [:port [:maybe pos-int?]]
+   [:repl-type [:string {:min 1}]]
+   [:project-dir [:maybe :string]]
+   [:requested-ms nat-int?]
+   [:deadline-ms pos-int?]
+   [:reports {:optional true} nat-int?]])
+
+(def CiderSpawnVerdict
+  "Where a watched spawn stands. Settled verdicts are reported once."
+  [:enum :pending :connected :failed :overdue :vanished :unpublished])
+
 (def AddonInitResult
   [:map {:closed false}
    [:success? :boolean]
@@ -144,6 +179,9 @@
    :hive-emacs/mcp-response McpResponse
    :hive-emacs/result Result
    :hive-emacs/attention-state AttentionState
+   :hive-emacs/cider-spawn-state CiderSpawnState
+   :hive-emacs/cider-spawn-watch CiderSpawnWatch
+   :hive-emacs/cider-spawn-verdict CiderSpawnVerdict
    :hive-emacs/addon-init-result AddonInitResult})
 
 (schemas/register-all! schema-bundle)

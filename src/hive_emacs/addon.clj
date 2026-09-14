@@ -20,7 +20,8 @@
             [hive-emacs.editor.services :as editor-services]
             [hive-emacs.vessel :as vessel]
             [hive-spi.vessel :as render-port]
-            [hive-vessel.renderer :as renderer]))
+            [hive-vessel.renderer :as renderer]
+            [hive-emacs.cider.spawn :as spawn]))
 
 ;; Copyright (C) 2024-2026 hive-agi contributors
 ;;
@@ -74,37 +75,65 @@
           (or (:emacs/ports config) {}))
    direct-port-keys))
 
+(defn- eval-fn-of
+  "The elisp evaluation boundary this addon starts its Emacs halves through:
+   (f code timeout-ms) -> {:success bool ...}. Injectable as `:emacs/eval-fn`,
+   so a test cannot reach a live daemon by omission."
+  [config]
+  (or (:emacs/eval-fn config) ec/eval-elisp-with-timeout))
+
 (defn- ensure-elisp-loaded!
-  []
+  [eval-fn]
   (try
-    (boolean (bridge/ensure-loaded! ec/eval-elisp-with-timeout))
+    (boolean (bridge/ensure-loaded! eval-fn))
     (catch Exception e
       (log/warn "hive-emacs bridge load failed" {:error (ex-message e)})
       false)))
 
-(defn- register-attention-block!
-  "Offer the `:block/emacs-attention` emitter through the host's
-   :extension/register! port. nil outside a live host. The emitter also keeps
-   the Emacs half publishing across Emacs restarts."
-  [runtime-ports]
+(defn- register-block!
+  "Offer EMITTER under KEY through the host's :extension/register! port.
+   nil outside a live host; a registration that throws is a warning, never a
+   failed initialization."
+  [runtime-ports key emitter]
   (when-let [register (:extension/register! runtime-ports)]
     (try
-      (register attention/extension-key
-                (attention/emitter-with-upkeep ec/eval-elisp-with-timeout))
+      (register key emitter)
       true
       (catch Exception e
-        (log/warn "hive-emacs: attention block registration failed"
-                  {:error (ex-message e)})
+        (log/warn "hive-emacs: block registration failed"
+                  {:key key :error (ex-message e)})
         false))))
 
-(defn- retract-attention-block!
+(defn- register-attention-block!
+  "Register the `:block/emacs-attention` emitter. It also keeps the Emacs half
+   publishing across Emacs restarts, through EVAL-FN."
+  [runtime-ports eval-fn]
+  (register-block! runtime-ports
+                   attention/extension-key
+                   (attention/emitter-with-upkeep eval-fn)))
+
+(defn- register-spawn-block!
+  "Register the `:block/cider-spawn` emitter, which reports the outcome of
+   each spawned CIDER session once."
+  [runtime-ports]
+  (register-block! runtime-ports spawn/extension-key spawn/emitter))
+
+(defn- retract-block!
   "The registry has no unregister port; an emitter that says nothing renders
    no block, so that is the retraction."
-  [runtime-ports]
+  [runtime-ports key]
   (when-let [register (:extension/register! runtime-ports)]
     (try
-      (register attention/extension-key (constantly nil))
+      (register key (constantly nil))
       (catch Exception _ nil))))
+
+(defn- retract-attention-block!
+  [runtime-ports]
+  (retract-block! runtime-ports attention/extension-key))
+
+(defn- retract-spawn-block!
+  [runtime-ports]
+  (retract-block! runtime-ports spawn/extension-key))
 
 (defn- initialize-addon!
   [state seed runtime-config]
@@ -115,6 +144,7 @@
         (reset! state {:lifecycle :initializing})
         (try
           (let [ports (port-config config)
+                eval-fn (eval-fn-of config)
                 _ (runtime-ports/configure! ports)
                 _ (daemon-store/ensure-default-daemon!)
                 heartbeat-started?
@@ -124,17 +154,22 @@
                    true))
                 _ (cider-tool/contribute! (:runtime/ports config))
                 _ (emacs-tool/contribute! (:runtime/ports config))
-                bridge-ready? (ensure-elisp-loaded!)
+                bridge-ready? (ensure-elisp-loaded! eval-fn)
                 attention-block? (boolean
-                                  (register-attention-block! (:runtime/ports config)))
+                                  (register-attention-block! (:runtime/ports config) eval-fn))
                 attention-publishing? (and bridge-ready?
-                                           (attention/enable-in-emacs!
-                                            ec/eval-elisp-with-timeout))
+                                           (attention/enable-in-emacs! eval-fn))
+                spawn-block? (boolean
+                              (register-spawn-block! (:runtime/ports config)))
+                spawn-publishing? (and bridge-ready?
+                                       (spawn/enable-in-emacs! eval-fn))
                 editor-port (editor-port/register!)
                 editor-caps (editor-services/register!)
                 metadata {:bridge-ready? bridge-ready?
                           :attention {:block? attention-block?
                                       :publishing? (boolean attention-publishing?)}
+                          :cider-spawn {:block? spawn-block?
+                                        :publishing? (boolean spawn-publishing?)}
                           :editor-id :emacsclient
                           :editor-surfaces (registry/surfaces editor-port)
                           :editor-capabilities (set (keys editor-caps))
@@ -162,7 +197,9 @@
   (locking state
     (cider-tool/retract! (:runtime/ports @state))
     (retract-attention-block! (:runtime/ports @state))
+    (retract-spawn-block! (:runtime/ports @state))
     (attention/reset-upkeep!)
+    (spawn/reset-watches!)
     (editor-port/unregister!)
     (editor-services/unregister!)
     (when (:heartbeat-started? @state)

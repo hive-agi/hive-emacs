@@ -18,6 +18,7 @@
 (require 'hive-mcp-cider-eval)
 (require 'hive-mcp-cider-introspection)
 (require 'hive-mcp-cider-memory)
+(require 'hive-mcp-cider-spawnwatch)
 (require 'hive-mcp-cider-ui)
 
 ;;; Code:
