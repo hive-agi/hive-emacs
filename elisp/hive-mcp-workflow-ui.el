@@ -51,7 +51,7 @@
 
 (defface hive-mcp-workflow-ui-meta '((t :foreground "gray50" :height 0.9)) "Face for metadata (status, separators)." :group 'hive-mcp-workflow-ui)
 
-(defface hive-mcp-workflow-ui-wave '((t :foreground "medium purple" :weight bold)) "Face for the drone-parity wave line." :group 'hive-mcp-workflow-ui)
+(defface hive-mcp-workflow-ui-wave '((t :foreground "medium purple" :weight bold)) "Face for the ling-parity wave line." :group 'hive-mcp-workflow-ui)
 
 (defface hive-mcp-workflow-ui-roster '((t :foreground "light steel blue")) "Face for an in-flight roster entry (task-id)." :group 'hive-mcp-workflow-ui)
 
@@ -121,13 +121,13 @@
   (t segs))))
 
 (defun hive-mcp-workflow-ui--render-wave (wave)
-  "Insert WAVE's drone-parity line (dispatched/completed/failed) and the\nin-flight roster, nested under the current run node. WAVE is an alist carrying\n`dispatched', `completed', `failed' and `in-flight' — the last a list of\nalists shaped {task-id ling-id}."
+  "Insert WAVE's ling-parity line (dispatched/completed/failed) and the\nin-flight roster, nested under the current run node. WAVE is an alist carrying\n`dispatched', `completed', `failed' and `in-flight', the last a list of\nalists shaped {task-id ling-id}."
   (let* ((dispatched (hive-mcp-workflow-ui--as-string (hive-mcp-workflow-ui--field wave 'dispatched)))
         (completed (hive-mcp-workflow-ui--as-string (hive-mcp-workflow-ui--field wave 'completed)))
         (failed (hive-mcp-workflow-ui--as-string (hive-mcp-workflow-ui--field wave 'failed)))
         (in-flight (hive-mcp-workflow-ui--field wave 'in-flight))
         (roster (if (listp in-flight) in-flight '())))
-    (insert (propertize "  ⛭ drones " 'face 'hive-mcp-workflow-ui-wave))
+    (insert (propertize "  ⛭ lings " 'face 'hive-mcp-workflow-ui-wave))
     (insert (propertize (format "%s▸" (if (> (length dispatched) 0) dispatched "0")) 'face 'hive-mcp-workflow-ui-step))
     (insert (propertize (format "  %s✓" (if (> (length completed) 0) completed "0")) 'face 'hive-mcp-workflow-ui-completed))
     (insert (propertize (format "  %s✗" (if (> (length failed) 0) failed "0")) 'face 'hive-mcp-workflow-ui-failed))
@@ -202,7 +202,7 @@
     (remhash oldest hive-mcp-workflow-ui--runs))))
 
 (defun hive-mcp-workflow-ui--ingest (run-id frame)
-  "Store transition FRAME under RUN-ID, tracking first-seen order. Any existing\n`wave' (drone-roster) data on the run is carried over so a later transition\nframe does not wipe the roster panel."
+  "Store transition FRAME under RUN-ID, tracking first-seen order. Any existing\n`wave' (ling-roster) data on the run is carried over so a later transition\nframe does not wipe the roster panel."
   (let* ((existing (gethash run-id hive-mcp-workflow-ui--runs))
         (wave (and existing (alist-get 'wave existing)))
         (frame (if wave (cons (cons 'wave wave) frame) frame)))
@@ -212,7 +212,7 @@
     (hive-mcp-workflow-ui--prune)))
 
 (defun hive-mcp-workflow-ui--ingest-wave (run-id wave)
-  "Merge WAVE (drone-roster alist) into RUN-ID's frame under the `wave' key,\npreserving any existing transition fields and first-seen order."
+  "Merge WAVE (ling-roster alist) into RUN-ID's frame under the `wave' key,\npreserving any existing transition fields and first-seen order."
   (let* ((existing (gethash run-id hive-mcp-workflow-ui--runs))
         (base0 (if existing (assq-delete-all 'wave (copy-sequence existing)) '()))
         (base (if (alist-get 'phase base0) base0 (cons (cons 'phase "wave") base0)))
@@ -234,7 +234,7 @@
     (display-buffer (get-buffer hive-mcp-workflow-ui-buffer-name)))))))
 
 (defun hive-mcp-workflow-ui--on-workflow-wave (msg)
-  "Handle a `:workflow-wave' WebSocket frame MSG (alist): drone parity counts\nand the in-flight roster for a dag-wave run, keyed by run-id (= dag plan-id)."
+  "Handle a `:workflow-wave' WebSocket frame MSG (alist): ling parity counts\nand the in-flight roster for a dag-wave run, keyed by run-id (= dag plan-id)."
   (let* ((run-id (hive-mcp-workflow-ui--as-string (hive-mcp-workflow-ui--field msg 'run-id))))
     (when (> (length run-id) 0)
     (let* ((existed (gethash run-id hive-mcp-workflow-ui--runs))
