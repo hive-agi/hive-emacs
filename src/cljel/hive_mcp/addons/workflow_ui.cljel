@@ -74,7 +74,7 @@
 
 (defface hive-mcp-workflow-ui-wave
   '((t :foreground "medium purple" :weight bold))
-  "Face for the drone-parity wave line."
+  "Face for the ling-parity wave line."
   :group 'hive-mcp-workflow-ui)
 
 (defface hive-mcp-workflow-ui-roster
@@ -175,9 +175,9 @@ segment when the run has completed/failed past the last recorded segment."
      (t segs))))
 
 (defn- render-wave [wave]
-  "Insert WAVE's drone-parity line (dispatched/completed/failed) and the
+  "Insert WAVE's ling-parity line (dispatched/completed/failed) and the
 in-flight roster, nested under the current run node. WAVE is an alist carrying
-`dispatched', `completed', `failed' and `in-flight' — the last a list of
+`dispatched', `completed', `failed' and `in-flight', the last a list of
 alists shaped {task-id ling-id}."
   (let [dispatched (hive-mcp-workflow-ui--as-string
                     (hive-mcp-workflow-ui--field wave 'dispatched))
@@ -187,8 +187,8 @@ alists shaped {task-id ling-id}."
                 (hive-mcp-workflow-ui--field wave 'failed))
         in-flight (hive-mcp-workflow-ui--field wave 'in-flight)
         roster (if (listp in-flight) in-flight '())]
-    ;; drone parity line: dispatched ▸  completed ✓  failed ✗
-    (insert (propertize "  ⛭ drones " 'face 'hive-mcp-workflow-ui-wave))
+    ;; ling parity line: dispatched ▸  completed ✓  failed ✗
+    (insert (propertize "  ⛭ lings " 'face 'hive-mcp-workflow-ui-wave))
     (insert (propertize (format "%s▸" (if (> (length dispatched) 0) dispatched "0"))
                         'face 'hive-mcp-workflow-ui-step))
     (insert (propertize (format "  %s✓" (if (> (length completed) 0) completed "0"))
@@ -196,7 +196,7 @@ alists shaped {task-id ling-id}."
     (insert (propertize (format "  %s✗" (if (> (length failed) 0) failed "0"))
                         'face 'hive-mcp-workflow-ui-failed))
     (insert "\n")
-    ;; in-flight roster: one line per live drone (task-id → ling-id)
+    ;; in-flight roster: one line per live ling (task-id → ling-id)
     (dolist (entry roster)
       (let [task (hive-mcp-workflow-ui--as-string
                   (hive-mcp-workflow-ui--field entry 'task-id))
@@ -245,7 +245,7 @@ alists shaped {task-id ling-id}."
                                 'face 'hive-mcp-workflow-ui-meta)))
           (insert "\n"))
         (setq i (+ i 1))))
-    ;; drone-roster panel (present only for wave-bearing runs)
+    ;; ling-roster panel (present only for wave-bearing runs)
     (when wave (hive-mcp-workflow-ui--render-wave wave))
     (insert "\n")))
 
@@ -285,7 +285,7 @@ alists shaped {task-id ling-id}."
 
 (defn- ingest [run-id frame]
   "Store transition FRAME under RUN-ID, tracking first-seen order. Any existing
-`wave' (drone-roster) data on the run is carried over so a later transition
+`wave' (ling-roster) data on the run is carried over so a later transition
 frame does not wipe the roster panel."
   (let [existing (gethash run-id hive-mcp-workflow-ui--runs)
         wave (and existing (alist-get 'wave existing))
@@ -297,7 +297,7 @@ frame does not wipe the roster panel."
     (hive-mcp-workflow-ui--prune)))
 
 (defn- ingest-wave [run-id wave]
-  "Merge WAVE (drone-roster alist) into RUN-ID's frame under the `wave' key,
+  "Merge WAVE (ling-roster alist) into RUN-ID's frame under the `wave' key,
 preserving any existing transition fields and first-seen order."
   (let [existing (gethash run-id hive-mcp-workflow-ui--runs)
         base0 (if existing (assq-delete-all 'wave (copy-sequence existing)) '())
@@ -332,7 +332,7 @@ preserving any existing transition fields and first-seen order."
           (display-buffer (get-buffer hive-mcp-workflow-ui-buffer-name)))))))
 
 (defn- on-workflow-wave [msg]
-  "Handle a `:workflow-wave' WebSocket frame MSG (alist): drone parity counts
+  "Handle a `:workflow-wave' WebSocket frame MSG (alist): ling parity counts
 and the in-flight roster for a dag-wave run, keyed by run-id (= dag plan-id)."
   (let [run-id (hive-mcp-workflow-ui--as-string
                 (hive-mcp-workflow-ui--field msg 'run-id))]
