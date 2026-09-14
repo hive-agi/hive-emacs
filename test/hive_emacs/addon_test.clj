@@ -11,7 +11,9 @@
             [hive-emacs.daemon-store :as daemon-store]
             [hive-emacs.runtime-ports :as ports]
             [hive-emacs.test-support :as support]
-            [hive-test.isolation :as isolation]))
+            [hive-test.isolation :as isolation]
+            [hive-spi.vessel :as render-port]
+            [hive-vessel.renderer :as renderer]))
 
 (def ^:private world (atom (support/empty-world)))
 
@@ -81,6 +83,9 @@
       (let [initialized (addon/initialize! instance {})
             repeated (addon/initialize! instance {})]
         (is (:success? initialized))
+        (is (satisfies? render-port/IRenderer instance))
+        (is (identical? instance (get @renderer/renderers "hive.emacs")))
+        (is (:error (render-port/render! instance [{:op :ui/send-to-terminal :text "forbidden"}])))
         (is (:already-initialized? repeated))
         (is (identical? ping-fn (:ping-fn (ports/snapshot))))
         (is (identical? emit-fn (:emit-fn (ports/snapshot))))
@@ -89,6 +94,7 @@
                     (daemon-store/default-daemon-id))))
         (is (nil? (addon/shutdown! instance)))
         (is (ports-clear?))
+        (is (not (contains? @renderer/renderers "hive.emacs")))
         (is (nil? (addon/shutdown! instance)))))))
 
 (deftest failed-initialization-rolls-back-ports

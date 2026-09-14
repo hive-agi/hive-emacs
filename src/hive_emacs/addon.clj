@@ -18,7 +18,9 @@
             [hive-emacs.editor.port :as editor-port]
             [hive-spi.editor.registry :as registry]
             [hive-emacs.editor.services :as editor-services]
-            [hive-emacs.vessel :as vessel]))
+            [hive-emacs.vessel :as vessel]
+            [hive-spi.vessel :as render-port]
+            [hive-vessel.renderer :as renderer]))
 
 ;; Copyright (C) 2024-2026 hive-agi contributors
 ;;
@@ -187,6 +189,9 @@
                   (seq errors) (assoc :errors errors))})))
 
 (defrecord HiveEmacsAddon [state seed]
+  render-port/IRenderer
+  (renderer-id [_] addon-id-value)
+  (render! [_ ops] (renderer/deliver! (when (= :active (:lifecycle @state)) (vessel/target)) ops))
   addon/IAddon
 
   (addon-id [_] addon-id-value)
@@ -194,10 +199,13 @@
   (capabilities [_]
     #{:tools :mcp-bridge :health-reporting :editor :vessel :terminal})
 
-  (initialize! [_ runtime-config]
-    (initialize-addon! state seed runtime-config))
+  (initialize! [this runtime-config]
+    (let [result (initialize-addon! state seed runtime-config)]
+      (when (:success? result) (renderer/register! this))
+      result))
 
-  (shutdown! [_]
+  (shutdown! [this]
+    (renderer/unregister! this)
     (shutdown-addon! state))
 
   (tools [_]
