@@ -17,7 +17,8 @@
             [taoensso.timbre :as log]
             [hive-emacs.editor.port :as editor-port]
             [hive-spi.editor.registry :as registry]
-            [hive-emacs.editor.services :as editor-services]))
+            [hive-emacs.editor.services :as editor-services]
+            [hive-emacs.vessel :as vessel]))
 
 ;; Copyright (C) 2024-2026 hive-agi contributors
 ;;
@@ -214,7 +215,12 @@
 
   (hooks [_]
     (if (= :active (:lifecycle @state))
-      (merge multi-hooks/contributions ext-hooks/contributions)
+      (merge multi-hooks/contributions
+             ext-hooks/contributions
+             ;; The hive-vessel target: :elisp natives through the bridge-aware
+             ;; evaluator. Resolved per call, so it is nil once shut down.
+             {vessel/target-hook-key (fn [] (when (= :active (:lifecycle @state))
+                                              (vessel/target)))})
       {})))
 
 (defn make-addon
