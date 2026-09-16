@@ -32,6 +32,7 @@ hive_mcp/addons/kanban/protocol.cljel
 hive_mcp/addons/kanban/standalone.cljel
 hive_mcp/addons/kanban/vibe.cljel
 hive_mcp/addons/magit.cljel
+hive_mcp/addons/magit_test.cljel
 hive_mcp/addons/melpazoid.cljel
 hive_mcp/addons/olympus_ui.cljel
 hive_mcp/addons/org_ai.cljel

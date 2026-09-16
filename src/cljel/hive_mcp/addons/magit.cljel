@@ -130,30 +130,32 @@ When Magit is not installed, falls back to shell git commands."
   (-shell-lines "git stash list --oneline 2>/dev/null"))
 
 (defn- -get-recent-commits [&optional count]
-  "Return last COUNT commits as list of plists."
+  "Return last COUNT commits as list of plists.
+A field the log line does not carry reads as \"\", never a signal."
   (let* [n (or count hive-mcp-magit-log-count)
          format-str "%H%x00%h%x00%an%x00%ae%x00%s%x00%ai"
          lines (-shell-lines
                  (format "git log -n%d --format='%s' 2>/dev/null" n format-str))]
     (mapcar (lambda (line)
               (let [parts (split-string line "\x00")]
-                (list :hash (nth parts 0)
-                      :short-hash (nth parts 1)
-                      :author (nth parts 2)
-                      :email (nth parts 3)
-                      :subject (nth parts 4)
-                      :date (nth parts 5))))
+                (list :hash (nth parts 0 "")
+                      :short-hash (nth parts 1 "")
+                      :author (nth parts 2 "")
+                      :email (nth parts 3 "")
+                      :subject (nth parts 4 "")
+                      :date (nth parts 5 ""))))
             lines)))
 
 (defn- -get-ahead-behind []
-  "Return commits ahead/behind upstream as plist."
+  "Return commits ahead/behind upstream as plist.
+A count the rev-list line does not carry reads as 0, never a signal."
   (let [result (-shell-command
                  "git rev-list --left-right --count @{upstream}...HEAD 2>/dev/null")]
     (if (string-empty-p result)
         (list :ahead 0 :behind 0)
       (let [parts (split-string result)]
-        (list :behind (string-to-number (or (nth parts 0) "0"))
-              :ahead (string-to-number (or (nth parts 1) "0")))))))
+        (list :behind (string-to-number (nth parts 0 "0"))
+              :ahead (string-to-number (nth parts 1 "0")))))))
 
 ;; ============================================================================
 ;; Branch Functions
@@ -290,15 +292,23 @@ When Magit is not installed, falls back to shell git commands."
       (magit-refresh))
     result))
 
-(defn- -push [&optional set-upstream]
-  "Push to remote.  SET-UPSTREAM to set tracking if needed."
+(defn- -push [&optional set-upstream remote]
+  "Push to remote.  SET-UPSTREAM to set tracking if needed.
+REMOTE names the remote to push the current branch to; blank or absent, git's
+own default remote is used.  With REMOTE the refspec is always explicit, so
+the push and the message it prints name the remote the caller asked for."
   (-ensure-repo)
   (let* [branch (-get-current-branch)
          upstream (-get-upstream-branch)
-         cmd (if (or upstream (not set-upstream))
-                 "git push 2>&1"
-               (format "git push -u origin %s 2>&1"
-                       (shell-quote-argument branch)))
+         cmd (if (and remote (not (string-empty-p remote)))
+                 (format "git push %s%s %s 2>&1"
+                         (if set-upstream "-u " "")
+                         (shell-quote-argument remote)
+                         (shell-quote-argument branch))
+               (if (or upstream (not set-upstream))
+                   "git push 2>&1"
+                 (format "git push -u origin %s 2>&1"
+                         (shell-quote-argument branch))))
          result (-shell-command cmd)]
     (when (-magit-available-p)
       (magit-refresh))
@@ -386,11 +396,13 @@ DIRECTORY overrides `default-directory' if provided."
 
 (defn api-push [&optional options directory]
   "Push to remote.
-OPTIONS may contain :set-upstream to set tracking.
+OPTIONS may contain :set-upstream to set tracking and :remote to name the
+remote to push to.
 DIRECTORY overrides `default-directory' if provided."
   (let [default-directory (or directory default-directory)]
     (-ensure-repo)
-    (-push (plist-get options :set-upstream))))
+    (-push (plist-get options :set-upstream)
+           (plist-get options :remote))))
 
 (defn api-pull [&optional directory]
   "Pull from upstream.

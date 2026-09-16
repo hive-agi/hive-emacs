@@ -1,0 +1,138 @@
+(ns hive-mcp-magit-test
+  "ERT contract tests for hive-mcp-magit.
+
+Two contracts:
+- push targets the remote it was asked for, refspec and all;
+- the plist reads over a short `git' field list degrade instead of signalling."
+  (:require [cl-lib]))
+
+(require 'ert)
+(require 'hive-mcp-magit)
+
+;; ============================================================================
+;; Helpers — every stub is installed with `fset' and restored on unwind, so a
+;; failing assertion cannot leave the addon rebound for the next test.
+;; ============================================================================
+
+(defn- -push-command [&optional set-upstream remote upstream]
+  "Return the git command `hive-mcp-magit--push' builds, running none of it.
+SET-UPSTREAM and REMOTE are passed through; UPSTREAM is what the current
+branch's tracking ref reports."
+  (let [captured nil
+        orig-ensure (symbol-function 'hive-mcp-magit--ensure-repo)
+        orig-branch (symbol-function 'hive-mcp-magit--get-current-branch)
+        orig-upstream (symbol-function 'hive-mcp-magit--get-upstream-branch)
+        orig-magit (symbol-function 'hive-mcp-magit--magit-available-p)
+        orig-shell (symbol-function 'hive-mcp-magit--shell-command)]
+    (unwind-protect
+        (progn
+          (fset 'hive-mcp-magit--ensure-repo (lambda (&rest _) t))
+          (fset 'hive-mcp-magit--get-current-branch (lambda (&rest _) "main"))
+          (fset 'hive-mcp-magit--get-upstream-branch (lambda (&rest _) upstream))
+          (fset 'hive-mcp-magit--magit-available-p (lambda (&rest _) nil))
+          (fset 'hive-mcp-magit--shell-command
+                (lambda (cmd)
+                  (setq captured cmd)
+                  ""))
+          (hive-mcp-magit--push set-upstream remote)
+          captured)
+      (fset 'hive-mcp-magit--ensure-repo orig-ensure)
+      (fset 'hive-mcp-magit--get-current-branch orig-branch)
+      (fset 'hive-mcp-magit--get-upstream-branch orig-upstream)
+      (fset 'hive-mcp-magit--magit-available-p orig-magit)
+      (fset 'hive-mcp-magit--shell-command orig-shell))))
+
+(defn- -api-push-args [options]
+  "Return the argument list `hive-mcp-magit-api-push' hands the push primitive."
+  (let [captured nil
+        orig-ensure (symbol-function 'hive-mcp-magit--ensure-repo)
+        orig-push (symbol-function 'hive-mcp-magit--push)]
+    (unwind-protect
+        (progn
+          (fset 'hive-mcp-magit--ensure-repo (lambda (&rest _) t))
+          (fset 'hive-mcp-magit--push
+                (lambda (&rest args)
+                  (setq captured args)
+                  ""))
+          (hive-mcp-magit-api-push options default-directory)
+          captured)
+      (fset 'hive-mcp-magit--ensure-repo orig-ensure)
+      (fset 'hive-mcp-magit--push orig-push))))
+
+(defn- -recent-commits-from [lines]
+  "Return `hive-mcp-magit--get-recent-commits' over a stubbed LINES."
+  (let [orig-lines (symbol-function 'hive-mcp-magit--shell-lines)]
+    (unwind-protect
+        (progn
+          (fset 'hive-mcp-magit--shell-lines (lambda (&rest _) lines))
+          (hive-mcp-magit--get-recent-commits 1))
+      (fset 'hive-mcp-magit--shell-lines orig-lines))))
+
+(defn- -ahead-behind-from [result]
+  "Return `hive-mcp-magit--get-ahead-behind' over a stubbed rev-list RESULT."
+  (let [orig-shell (symbol-function 'hive-mcp-magit--shell-command)]
+    (unwind-protect
+        (progn
+          (fset 'hive-mcp-magit--shell-command (lambda (&rest _) result))
+          (hive-mcp-magit--get-ahead-behind))
+      (fset 'hive-mcp-magit--shell-command orig-shell))))
+
+;; ============================================================================
+;; push honours its remote
+;; ============================================================================
+
+(ert-deftest hive-mcp-magit-test-push-honours-explicit-remote nil
+  "A named remote reaches the command line, with an explicit refspec, even
+when the branch already tracks a different remote."
+  (should (equal "git push github main 2>&1"
+                 (hive-mcp-magit-test--push-command nil "github" "origin/main"))))
+
+(ert-deftest hive-mcp-magit-test-push-sets-upstream-on-named-remote nil
+  "-u tracks the remote the caller named, never origin by default."
+  (should (equal "git push -u github main 2>&1"
+                 (hive-mcp-magit-test--push-command t "github" nil))))
+
+(ert-deftest hive-mcp-magit-test-push-blank-remote-is-no-remote nil
+  "A blank remote is absent, not a remote named \"\"."
+  (should (equal "git push 2>&1"
+                 (hive-mcp-magit-test--push-command nil "" "origin/main"))))
+
+(ert-deftest hive-mcp-magit-test-push-without-remote-is-unchanged nil
+  "Without a remote the pre-existing default-remote commands are untouched."
+  (should (equal "git push 2>&1"
+                 (hive-mcp-magit-test--push-command nil nil "origin/main")))
+  (should (equal "git push -u origin main 2>&1"
+                 (hive-mcp-magit-test--push-command t nil nil))))
+
+(ert-deftest hive-mcp-magit-test-api-push-threads-remote-from-options nil
+  "api-push reads :remote out of its OPTIONS plist and hands it on."
+  (should (equal (list nil "github")
+                 (hive-mcp-magit-test--api-push-args (list :remote "github"))))
+  (should (equal (list t "github")
+                 (hive-mcp-magit-test--api-push-args
+                  (list :set-upstream t :remote "github"))))
+  (should (equal (list nil nil)
+                 (hive-mcp-magit-test--api-push-args nil))))
+
+;; ============================================================================
+;; status reads degrade on a short field list
+;; ============================================================================
+
+(ert-deftest hive-mcp-magit-test-recent-commits-tolerates-short-line nil
+  "A log line short of its six NUL-separated fields yields \"\", not a signal."
+  (let [commit (car (hive-mcp-magit-test--recent-commits-from (list "deadbeef")))]
+    (should (equal "deadbeef" (plist-get commit :hash)))
+    (should (equal "" (plist-get commit :short-hash)))
+    (should (equal "" (plist-get commit :date)))))
+
+(ert-deftest hive-mcp-magit-test-ahead-behind-tolerates-one-count nil
+  "A rev-list line carrying one count reads the missing one as 0, not a signal."
+  (let [ab (hive-mcp-magit-test--ahead-behind-from "3")]
+    (should (equal 3 (plist-get ab :behind)))
+    (should (equal 0 (plist-get ab :ahead)))))
+
+(ert-deftest hive-mcp-magit-test-ahead-behind-reads-both-counts nil
+  "Both counts are still read the right way round."
+  (let [ab (hive-mcp-magit-test--ahead-behind-from "2\t5")]
+    (should (equal 2 (plist-get ab :behind)))
+    (should (equal 5 (plist-get ab :ahead)))))
