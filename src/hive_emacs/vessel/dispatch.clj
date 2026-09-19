@@ -1,13 +1,18 @@
-(ns hive-emacs.swarm.host
-  "The :swarm-host capability in hive-spi.editor.services: one :dispatch
-   capability that runs a hive-vessel op map against this Emacs.
+(ns hive-emacs.vessel.dispatch
+  "The :vessel capability in hive-spi.editor.services: one :dispatch sink
+   that runs any hive-vessel op map against this Emacs.
 
-   `(svc/invoke :swarm-host :dispatch op timeout-ms)` plans OP through the
-   standard hive-vessel registry plus hive-emacs.swarm.translators, executes
-   the native elisp on the Emacs vessel target, and answers the eval-shaped
-   envelope {:success bool :result <raw string> :error any :timed-out bool}."
+   `(svc/invoke :vessel :dispatch op timeout-ms)` plans OP through the
+   standard hive-vessel registry plus hive-emacs's translator sets (one
+   sibling namespace per op namespace, e.g. hive-emacs.swarm.translators),
+   executes the native elisp on the Emacs vessel target, and answers the
+   eval-shaped envelope {:success bool :result <raw string> :error any
+   :timed-out bool}."
   (:require [hive-emacs.client :as ec]
             [hive-emacs.swarm.translators :as swarm]
+            [hive-emacs.project.translators :as project]
+            [hive-emacs.kanban.translators :as kanban]
+            [hive-emacs.crystal.translators :as crystal]
             [hive-emacs.vessel :as vessel]
             [hive-spi.editor.services :as svc]
             [hive-vessel.core :as vcore]))
@@ -17,7 +22,7 @@
 
 (def registry-key
   "hive-spi.editor.services key the capability map is published under."
-  :swarm-host)
+  :vessel)
 
 (def ^:dynamic *eval-fn*
   "Elisp evaluation boundary: (f code timeout-ms) ->
@@ -26,10 +31,18 @@
   (fn [code timeout-ms]
     (vessel/bridge-evaluator code timeout-ms)))
 
+(def translators
+  "Every op translator set hive-emacs contributes, in registration order:
+   the :swarm/* / :cider/* ops from hive-emacs.swarm.translators, :project/*
+   from hive-emacs.project.translators, :kanban/* from
+   hive-emacs.kanban.translators, and :crystal/* from
+   hive-emacs.crystal.translators."
+  (vec (concat swarm/translators project/translators kanban/translators crystal/translators)))
+
 (defn registry
   "The hive-vessel registry :dispatch plans against."
   []
-  (vcore/standard-registry swarm/translators))
+  (vcore/standard-registry translators))
 
 (defn- envelope
   "Eval-shaped envelope from dispatch! OUTCOME and the LAST raw eval
@@ -70,11 +83,11 @@
   {:dispatch dispatch})
 
 (defn register!
-  "Publish the capability map under :swarm-host. Idempotent."
+  "Publish the capability map under :vessel. Idempotent."
   []
   (svc/register-services! registry-key capabilities))
 
 (defn unregister!
-  "Drop the :swarm-host capabilities. No-op when absent."
+  "Drop the :vessel capabilities. No-op when absent."
   []
   (svc/unregister-services! registry-key))

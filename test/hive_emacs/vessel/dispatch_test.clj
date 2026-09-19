@@ -1,37 +1,38 @@
-(ns hive-emacs.swarm.host-test
+(ns hive-emacs.vessel.dispatch-test
   "Swarm ops lower to exact :elisp natives through the hive-vessel registry,
-   and the :swarm-host :dispatch capability turns a vessel dispatch into the
+   and the :vessel :dispatch capability turns a vessel dispatch into the
    eval-shaped envelope, keeping :timed-out."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [hive-emacs.swarm.host :as host]
+            [clojure.string :as str]
             [hive-emacs.swarm.translators :as swarm]
+            [hive-emacs.vessel.dispatch :as vd]
             [hive-spi.editor.services :as svc]
             [hive-vessel.core :as vcore]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
 
-(defn- restore-swarm-host-key
-  "Snapshot the :swarm-host registration, register ours, run F, then put the
+(defn- restore-vessel-key
+  "Snapshot the :vessel registration, register ours, run F, then put the
    snapshot back exactly. Never touches other registry keys."
   [f]
-  (let [before (get (svc/registered) host/registry-key)]
+  (let [before (get (svc/registered) vd/registry-key)]
     (try
-      (host/register!)
+      (vd/register!)
       (f)
       (finally
-        (svc/unregister-services! host/registry-key)
+        (svc/unregister-services! vd/registry-key)
         (when before
-          (svc/register-services! host/registry-key before))))))
+          (svc/register-services! vd/registry-key before))))))
 
-(use-fixtures :each restore-swarm-host-key)
+(use-fixtures :each restore-vessel-key)
 
 (def ^:private emacs (:emacs vcore/reference-targets))
 
 (defn- payloads
   "The native :elisp payloads OP plans to for the Emacs target."
   [op]
-  (let [{:keys [ok error]} (vcore/plan (host/registry) emacs op)]
+  (let [{:keys [ok error]} (vcore/plan (vd/registry) emacs op)]
     (when error (throw (ex-info "plan failed" error)))
     (mapv (fn [{:native/keys [dialect payload]}]
             (is (= :elisp dialect))
@@ -79,7 +80,8 @@
 
 (deftest every-translator-is-covered
   (is (= (set (map :translator/op swarm/translators))
-         (set (map (comp :op first) op->payload)))))
+         (set (map (comp :op first) op->payload))))
+  (is (every? (set vd/translators) swarm/translators)))
 
 (deftest interpolations-are-escaped-by-the-dialect
   (let [nasty "a\"b\\c"
@@ -101,17 +103,17 @@
               {:op :swarm/slave-ready? :slave-id ""}
               {:op :swarm/slave-ready? :slave-id "   "}
               {:op :swarm/slave-ready? :slave-id 5}]]
-    (is (contains? (vcore/plan (host/registry) emacs op) :error) (pr-str op))))
+    (is (contains? (vcore/plan (vd/registry) emacs op) :error) (pr-str op))))
 
 (defn- dispatch-with
   "Invoke :dispatch through the SPI with *eval-fn* bound to a stub answering
    RESPONSE. Returns {:ret envelope :calls [[code timeout-ms] ...]}."
   [response op timeout-ms]
   (let [calls (atom [])]
-    (binding [host/*eval-fn* (fn [code t]
-                               (swap! calls conj [code t])
-                               response)]
-      {:ret (svc/invoke :swarm-host :dispatch op timeout-ms)
+    (binding [vd/*eval-fn* (fn [code t]
+                             (swap! calls conj [code t])
+                             response)]
+      {:ret (svc/invoke :vessel :dispatch op timeout-ms)
        :calls @calls})))
 
 (deftest dispatch-envelope
@@ -139,11 +141,27 @@
       (is (false? (:timed-out ret)))
       (is (= :unsupported (get-in ret [:error :failure/reason]))))))
 
+(deftest registry-key-is-vessel
+  (is (= :vessel vd/registry-key)))
+
+(deftest every-op-namespace-dispatches
+  (doseq [[op needle] [[{:op :swarm/slave-ready? :slave-id "s1"} "slave-ready-p"]
+                       [{:op :project/info} "projectile-api-project-info"]
+                       [{:op :kanban/move-to-done :task-id "t1"} "kanban-move"]
+                       [{:op :crystal/available?} "featurep"]
+                       [{:op :crystal/git-commits :since "midnight"} "git log"]]]
+    (testing (pr-str op)
+      (let [{:keys [ret calls]} (dispatch-with {:success true :result "ok"} op 1000)]
+        (is (:success ret))
+        (is (seq calls))
+        (is (some #(str/includes? (first %) needle) calls)
+            (pr-str calls))))))
+
 (deftest register-publishes-and-unregister-retracts-the-key
-  (is (= #{:dispatch} (svc/capabilities :swarm-host)))
-  (host/unregister!)
-  (is (not (contains? (svc/registered) :swarm-host)))
+  (is (= #{:dispatch} (svc/capabilities :vessel)))
+  (vd/unregister!)
+  (is (not (contains? (svc/registered) :vessel)))
   (is (= :editor/capability-unavailable
-         (:error (svc/invoke :swarm-host :dispatch {:op :swarm/list-lings} 1))))
-  (host/register!)
-  (is (= #{:dispatch} (svc/capabilities :swarm-host))))
+         (:error (svc/invoke :vessel :dispatch {:op :swarm/list-lings} 1))))
+  (vd/register!)
+  (is (= #{:dispatch} (svc/capabilities :vessel))))

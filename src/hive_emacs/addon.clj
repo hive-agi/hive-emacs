@@ -18,15 +18,11 @@
             [hive-emacs.editor.port :as editor-port]
             [hive-spi.editor.registry :as registry]
             [hive-emacs.editor.services :as editor-services]
-            [hive-emacs.swarm.host :as swarm-host]
+            [hive-emacs.vessel.dispatch :as vessel-dispatch]
             [hive-emacs.vessel :as vessel]
             [hive-spi.vessel :as render-port]
             [hive-vessel.renderer :as renderer]
             [hive-emacs.cider.spawn :as spawn]
-            [hive-emacs.crystal.translators :as crystal-translators]
-            [hive-emacs.kanban.translators :as kanban-translators]
-            [hive-emacs.project.translators :as project-translators]
-            [hive-emacs.swarm.translators :as swarm-translators]
             [hive-vessel.core :as vessel-core]))
 
 ;; Copyright (C) 2024-2026 hive-agi contributors
@@ -171,7 +167,7 @@
                                        (spawn/enable-in-emacs! eval-fn))
                 editor-port (editor-port/register!)
                 editor-caps (editor-services/register!)
-                swarm-caps (swarm-host/register!)
+                vessel-caps (vessel-dispatch/register!)
                 metadata {:bridge-ready? bridge-ready?
                           :attention {:block? attention-block?
                                       :publishing? (boolean attention-publishing?)}
@@ -180,7 +176,7 @@
                           :editor-id :emacsclient
                           :editor-surfaces (registry/surfaces editor-port)
                           :editor-capabilities (set (keys editor-caps))
-                          :swarm-host-capabilities (set (keys swarm-caps))
+                          :vessel-capabilities (set (keys vessel-caps))
                           :heartbeat-started? heartbeat-started?
                           :configured-ports
                           (->> ports
@@ -210,7 +206,7 @@
     (spawn/reset-watches!)
     (editor-port/unregister!)
     (editor-services/unregister!)
-    (swarm-host/unregister!)
+    (vessel-dispatch/unregister!)
     (when (:heartbeat-started? @state)
       (daemon-store/stop-heartbeat-loop!))
     (ec/shutdown-executor!)
@@ -273,10 +269,7 @@
              ext-hooks/contributions
              ;; Swarm / CIDER-session and projectile / project op lowerings
              ;; for any host building a hive-vessel registry from addon hooks.
-             {vessel-core/hook-key (concat swarm-translators/translators
-                                           project-translators/translators
-                                           kanban-translators/translators
-                                           crystal-translators/translators)}
+             {vessel-core/hook-key vessel-dispatch/translators}
              ;; The hive-vessel target: :elisp natives through the bridge-aware
              ;; evaluator. Resolved per call, so it is nil once shut down.
              {vessel/target-hook-key (fn [] (when (= :active (:lifecycle @state))
