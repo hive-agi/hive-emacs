@@ -23,6 +23,8 @@
             [hive-spi.vessel :as render-port]
             [hive-vessel.renderer :as renderer]
             [hive-emacs.cider.spawn :as spawn]
+            [hive-emacs.kanban.translators :as kanban-translators]
+            [hive-emacs.project.translators :as project-translators]
             [hive-emacs.swarm.translators :as swarm-translators]
             [hive-vessel.core :as vessel-core]))
 
@@ -268,9 +270,11 @@
     (if (= :active (:lifecycle @state))
       (merge multi-hooks/contributions
              ext-hooks/contributions
-             ;; Swarm / CIDER-session op lowerings for any host building a
-             ;; hive-vessel registry from addon hooks.
-             {vessel-core/hook-key swarm-translators/translators}
+             ;; Swarm / CIDER-session and projectile / project op lowerings
+             ;; for any host building a hive-vessel registry from addon hooks.
+             {vessel-core/hook-key (concat swarm-translators/translators
+                                           project-translators/translators
+                                           kanban-translators/translators)}
              ;; The hive-vessel target: :elisp natives through the bridge-aware
              ;; evaluator. Resolved per call, so it is nil once shut down.
              {vessel/target-hook-key (fn [] (when (= :active (:lifecycle @state))

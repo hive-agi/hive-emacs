@@ -16,10 +16,12 @@
      {:op :swarm/respond-prompt :slave-id s :response r}
      {:op :swarm/kill :slave-id s}
      {:op :swarm/send-prompt :slave-id s :prompt p}
+     {:op :swarm/slave-ready? :slave-id s}
      {:op :swarm/collect :task-id t :timeout-ms n-or-nil}
      {:op :cider/spawn-session :name n}
      {:op :cider/kill-session :name n}"
-  (:require [hive-vessel.dialect.elisp :as el]))
+  (:require [clojure.string :as str]
+            [hive-vessel.dialect.elisp :as el]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -73,6 +75,12 @@
 (defn send-prompt-code [{:keys [slave-id prompt]}]
   (form "hive-mcp-swarm-send-to-terminal" (s slave-id) (s prompt)))
 
+(defn slave-ready?-code [{:keys [slave-id]}]
+  (form "if"
+        (form "hive-mcp-swarm-tasks--slave-ready-p" (s slave-id))
+        (s "t")
+        (s "nil")))
+
 (defn collect-code [{:keys [task-id timeout-ms]}]
   (json-call "hive-mcp-swarm-api-collect" (s task-id) (el/data-literal timeout-ms)))
 
@@ -83,6 +91,10 @@
   (form "hive-mcp-cider-kill-session" (s name)))
 
 (def ^:private Str [:string])
+
+(def ^:private NonBlankStr
+  "A string with at least one non-whitespace character."
+  [:and Str [:fn (complement str/blank?)]])
 
 (defn- lowering
   "A translator lowering OP through CODE-FN, gated by ACCEPTS when given."
@@ -111,6 +123,8 @@
              [:map [:slave-id Str]])
    (lowering :swarm/send-prompt #(send-prompt-code %)
              [:map [:slave-id Str] [:prompt Str]])
+   (lowering :swarm/slave-ready? #(slave-ready?-code %)
+             [:map [:slave-id NonBlankStr]])
    (lowering :swarm/collect #(collect-code %)
              [:map [:task-id Str] [:timeout-ms {:optional true} [:maybe int?]]])
    (lowering :cider/spawn-session #(spawn-session-code %)

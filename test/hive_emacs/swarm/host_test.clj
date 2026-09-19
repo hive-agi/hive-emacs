@@ -61,6 +61,8 @@
     "(when (fboundp 'hive-mcp-swarm-slaves-kill) (hive-mcp-swarm-slaves-kill \"ling-3\"))"]
    [{:op :swarm/send-prompt :slave-id "ling-4" :prompt "do it"}
     "(hive-mcp-swarm-send-to-terminal \"ling-4\" \"do it\")"]
+   [{:op :swarm/slave-ready? :slave-id "ling-5"}
+    "(if (hive-mcp-swarm-tasks--slave-ready-p \"ling-5\") \"t\" \"nil\")"]
    [{:op :swarm/collect :task-id "task-9" :timeout-ms 30000}
     "(json-encode (hive-mcp-swarm-api-collect \"task-9\" 30000))"]
    [{:op :swarm/collect :task-id "task-9" :timeout-ms nil}
@@ -94,7 +96,11 @@
 (deftest malformed-ops-do-not-plan
   (doseq [op [{:op :swarm/broadcast}
               {:op :swarm/kill :slave-id 7}
-              {:op :swarm/collect :task-id "t" :timeout-ms "soon"}]]
+              {:op :swarm/collect :task-id "t" :timeout-ms "soon"}
+              {:op :swarm/slave-ready?}
+              {:op :swarm/slave-ready? :slave-id ""}
+              {:op :swarm/slave-ready? :slave-id "   "}
+              {:op :swarm/slave-ready? :slave-id 5}]]
     (is (contains? (vcore/plan (host/registry) emacs op) :error) (pr-str op))))
 
 (defn- dispatch-with
