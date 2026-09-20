@@ -1,0 +1,153 @@
+(ns hive-mcp-config-adopt-test
+  "ERT tests for the cljel settings adopted onto the hive-mcp-config chain.
+
+Card 20260810165248-1d9ce22a moved four machine-local defaults out of source:
+the cljel project dir, the default nREPL project dir, the cljel addon's
+project dir and the schema directory.
+
+The trap being guarded (principle 20260810164654-0ec453df): a defcustom that
+keeps a non-nil default SHADOWS every rung below it, so the config-file rung
+is never consulted and the chain silently does nothing. Each setting is
+therefore asserted at all four rungs, in precedence order.
+
+No test reads or writes the real `hive-mcp-config-file': every file rung is a
+temp file the test creates and deletes."
+  (:require [cl-lib]))
+
+(require 'ert)
+(require 'hive-mcp-config)
+(require 'hive-mcp-cider-nrepl)
+(require 'hive-mcp-schema)
+
+;; ============================================================================
+;; Helpers
+;; ============================================================================
+
+(require 'hive-mcp-cljel)
+
+(defn- -with-temp-config [contents fn]
+  "Call FN with `hive-mcp-config-file' bound to a temp file holding CONTENTS."
+  (let [path (make-temp-file "hive-config-adopt-" nil ".edn" contents)]
+    (unwind-protect
+        (let [hive-mcp-config-file path]
+          (funcall fn))
+      (delete-file path))))
+
+;; ============================================================================
+;; The defcustoms must be nil, or every rung below them is dead
+;; ============================================================================
+
+(ert-deftest hive-mcp-config-adopt-test-defcustom-defaults-are-nil nil
+  "A non-nil defcustom default makes the file rung unreachable."
+  (should (null (default-value 'hive-mcp-cider-nrepl-cljel-project-dir)))
+  (should (null (default-value 'hive-mcp-cider-nrepl-default-project-dir)))
+  (should (null (default-value 'hive-mcp-cljel-project-dir)))
+  (should (null (default-value 'hive-mcp-schema-directory))))
+
+;; ============================================================================
+;; cljel project dir, four rungs
+;; ============================================================================
+
+(ert-deftest hive-mcp-config-adopt-test-cljel-dir-literal-rung nil
+  "With nothing set, resolution reaches the shipped literal."
+  (let [hive-mcp-cider-nrepl-cljel-project-dir nil
+        hive-mcp-cider-nrepl-project-dir nil
+        hive-mcp-config-file nil
+        process-environment (cons "HIVE_CLJEL_PROJECT_DIR=" process-environment)]
+    (should (equal (expand-file-name "~/PP/clojure-elisp")
+                   (hive-mcp-cider-nrepl-project-dir 'cljel)))))
+
+(ert-deftest hive-mcp-config-adopt-test-cljel-dir-file-rung nil
+  "The config file is consulted, which is what the old default prevented."
+  (-with-temp-config
+   "{:cider {:nrepl {:cljel-project-dir \"/from/file\"}}}"
+   (lambda ()
+     (let [hive-mcp-cider-nrepl-cljel-project-dir nil
+           hive-mcp-cider-nrepl-project-dir nil
+           process-environment (cons "HIVE_CLJEL_PROJECT_DIR=" process-environment)]
+       (should (equal "/from/file" (hive-mcp-cider-nrepl-project-dir 'cljel)))))))
+
+(ert-deftest hive-mcp-config-adopt-test-cljel-dir-env-beats-file nil
+  (-with-temp-config
+   "{:cider {:nrepl {:cljel-project-dir \"/from/file\"}}}"
+   (lambda ()
+     (let [hive-mcp-cider-nrepl-cljel-project-dir nil
+           hive-mcp-cider-nrepl-project-dir nil
+           process-environment (cons "HIVE_CLJEL_PROJECT_DIR=/from/env"
+                                     process-environment)]
+       (should (equal "/from/env" (hive-mcp-cider-nrepl-project-dir 'cljel)))))))
+
+(ert-deftest hive-mcp-config-adopt-test-cljel-dir-custom-beats-env nil
+  (-with-temp-config
+   "{:cider {:nrepl {:cljel-project-dir \"/from/file\"}}}"
+   (lambda ()
+     (let [hive-mcp-cider-nrepl-cljel-project-dir "/from/custom"
+           hive-mcp-cider-nrepl-project-dir nil
+           process-environment (cons "HIVE_CLJEL_PROJECT_DIR=/from/env"
+                                     process-environment)]
+       (should (equal "/from/custom" (hive-mcp-cider-nrepl-project-dir 'cljel)))))))
+
+;; ============================================================================
+;; default nREPL project dir, four rungs plus the explicit argument
+;; ============================================================================
+
+(ert-deftest hive-mcp-config-adopt-test-default-dir-nil-disables-fallback nil
+  "Unlike the cljel dir, this chain has NO literal rung, on purpose.
+Nil through every rung means the fallback is disabled and start-default errors
+instead of guessing, which is the contract the old defcustom documented and
+its own test pins. The machine path moved to the config file, not to source."
+  (let [hive-mcp-cider-nrepl-default-project-dir nil
+        hive-mcp-cider-nrepl-project-dir nil
+        hive-mcp-config-file nil
+        process-environment (cons "HIVE_NREPL_DEFAULT_PROJECT_DIR="
+                                  process-environment)]
+    (should (null (hive-mcp-cider-nrepl-default-project-dir nil)))))
+
+(ert-deftest hive-mcp-config-adopt-test-default-dir-chain nil
+  (-with-temp-config
+   "{:cider {:nrepl {:default-project-dir \"/from/file\"}}}"
+   (lambda ()
+     (let [hive-mcp-cider-nrepl-default-project-dir nil
+           hive-mcp-cider-nrepl-project-dir nil
+           process-environment (cons "HIVE_NREPL_DEFAULT_PROJECT_DIR="
+                                     process-environment)]
+       (should (equal "/from/file" (hive-mcp-cider-nrepl-default-project-dir nil))))
+     (let [hive-mcp-cider-nrepl-default-project-dir nil
+           hive-mcp-cider-nrepl-project-dir nil
+           process-environment (cons "HIVE_NREPL_DEFAULT_PROJECT_DIR=/from/env"
+                                     process-environment)]
+       (should (equal "/from/env" (hive-mcp-cider-nrepl-default-project-dir nil))))
+     (let [hive-mcp-cider-nrepl-default-project-dir "/from/custom"
+           hive-mcp-cider-nrepl-project-dir nil
+           process-environment (cons "HIVE_NREPL_DEFAULT_PROJECT_DIR=/from/env"
+                                     process-environment)]
+       (should (equal "/from/custom" (hive-mcp-cider-nrepl-default-project-dir nil))))
+     (let [hive-mcp-cider-nrepl-default-project-dir "/from/custom"
+           hive-mcp-cider-nrepl-project-dir nil]
+       (should (equal "/explicit"
+                      (hive-mcp-cider-nrepl-default-project-dir "/explicit")))))))
+
+;; ============================================================================
+;; schema directory, HIVE_MCP_HOME keeps its old meaning
+;; ============================================================================
+
+(ert-deftest hive-mcp-config-adopt-test-schema-dir-chain nil
+  (-with-temp-config
+   "{:schema {:directory \"/from/file/schema\"}}"
+   (lambda ()
+     (let [hive-mcp-schema-directory nil
+           process-environment (cons "HIVE_MCP_HOME=" process-environment)]
+       (should (equal "/from/file/schema" (hive-mcp-schema-resolve-directory))))
+     (let [hive-mcp-schema-directory nil
+           process-environment (cons "HIVE_MCP_HOME=/from/home" process-environment)]
+       (should (equal "/from/home/resources/schema" (hive-mcp-schema-resolve-directory))))
+     (let [hive-mcp-schema-directory "/from/custom"
+           process-environment (cons "HIVE_MCP_HOME=/from/home" process-environment)]
+       (should (equal "/from/custom" (hive-mcp-schema-resolve-directory)))))))
+
+(ert-deftest hive-mcp-config-adopt-test-schema-dir-literal-rung nil
+  (let [hive-mcp-schema-directory nil
+        hive-mcp-config-file nil
+        process-environment (cons "HIVE_MCP_HOME=" process-environment)]
+    (should (equal (expand-file-name "~/PP/hive/hive-mcp/resources/schema")
+                   (hive-mcp-schema-resolve-directory)))))

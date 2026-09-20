@@ -33,11 +33,18 @@ Usage: M-x cider-jack-in-cljel → done."
   :group 'cider
   :prefix "hive-mcp-cljel-")
 
-(defcustom hive-mcp-cljel-project-dir "~/PP/clojure-elisp"
-  "Default project directory for ClojureElisp nREPL.
-This should point to the clojure-elisp project root
-which has the deps.edn with the compiler + nREPL middleware."
-  :type 'directory
+(require 'hive-mcp-cider-nrepl)
+
+(defcustom hive-mcp-cljel-project-dir nil
+  "Project directory for the ClojureElisp toolchain.
+Highest-precedence rung of a chain; nil is unset, and resolution falls through
+to HIVE_CLJEL_PROJECT_DIR, `(:cider :nrepl :cljel-project-dir)' in
+`hive-mcp-config-file', and finally \"~/PP/clojure-elisp\". It shares that
+chain with `hive-mcp-cider-nrepl-cljel-project-dir': one checkout, one answer.
+
+This defcustom must stay nil: a non-nil default would shadow the file rung and
+make it unreachable."
+  :type '(choice (const :tag "Resolve automatically" nil) directory)
   :group 'hive-mcp-cljel)
 
 (defcustom hive-mcp-cljel-inject-deps nil
@@ -94,12 +101,14 @@ With prefix arg, prompt for project directory."
   (interactive
    (list (when current-prefix-arg
            (read-directory-name "ClojureElisp project: "
-                                hive-mcp-cljel-project-dir))))
+                                (hive-mcp-cider-nrepl-project-dir 'cljel)))))
   (require 'cider nil t)
   (require 'cider-clojure-elisp nil t)
   (unless (featurep 'cider)
     (error "CIDER is required for cider-jack-in-cljel"))
-  (let [dir (expand-file-name (or project-dir hive-mcp-cljel-project-dir))]
+  (let [dir (expand-file-name (or project-dir
+                                  hive-mcp-cljel-project-dir
+                                  (hive-mcp-cider-nrepl-project-dir 'cljel)))]
     (if (and (fboundp 'hive-mcp-cider-spawn-session)
              (boundp 'hive-mcp-cider--sessions))
         ;; Delegate to CIDER addon for unified session management

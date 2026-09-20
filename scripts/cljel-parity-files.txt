@@ -56,6 +56,7 @@ hive_mcp/api.cljel
 hive_mcp/channel.cljel
 hive_mcp/channel_ws.cljel
 hive_mcp/config.cljel
+hive_mcp/config_adopt_test.cljel
 hive_mcp/config_test.cljel
 hive_mcp/context.cljel
 hive_mcp/graceful.cljel

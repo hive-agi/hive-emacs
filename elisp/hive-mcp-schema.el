@@ -22,10 +22,12 @@
   :group 'hive-mcp
   :prefix "hive-mcp-schema-")
 
-(defcustom hive-mcp-schema-directory (expand-file-name "resources/schema" (or (getenv "HIVE_MCP_HOME") (expand-file-name "~/PP/hive/hive-mcp")))
-  "Directory containing EDN schema files."
+(require 'hive-mcp-config)
+
+(defcustom hive-mcp-schema-directory nil
+  "Directory containing EDN schema files.\nHighest-precedence rung of a chain; nil is unset, and resolution falls through\nto HIVE_MCP_HOME (as its resources/schema), `(:schema :directory)' in\n`hive-mcp-config-file', and finally \"~/PP/hive/hive-mcp/resources/schema\".\n\nThis defcustom must stay nil: its old default computed a checkout path at load\ntime, which shadowed every other rung before they could be consulted."
   :group 'hive-mcp-schema
-  :type 'directory)
+  :type '(choice (const :tag "Resolve automatically" nil) directory))
 
 (defvar hive-mcp-schema--file-cache (make-hash-table :test 'equal)
   "Cache of parsed schema files. Keys: ns-name strings, values: hash-tables.")
@@ -33,9 +35,23 @@
 (defvar hive-mcp-schema--schema-cache (make-hash-table :test 'equal)
   "Cache of individual schemas. Keys: keyword symbols, values: schema vectors.")
 
+(defun hive-mcp-schema-schema-directory-source ()
+  "Return the source chain for the EDN schema directory.\nPrecedence: `hive-mcp-schema-directory', HIVE_MCP_SCHEMA_DIRECTORY,\n`(:schema :directory)' in `hive-mcp-config-file', then the shipped default.\nA checkout path belongs in the bottom literal rung and nowhere above it. Pure."
+  (hive-mcp-config-coalesce (delq nil (list (hive-mcp-config-custom 'hive-mcp-schema-directory) (hive-mcp-config-env "HIVE_MCP_SCHEMA_DIRECTORY") (when hive-mcp-config-file
+    (hive-mcp-config-edn-file hive-mcp-config-file '(:schema :directory))) (hive-mcp-config-literal "~/PP/hive/hive-mcp/resources/schema")))))
+
+(defun hive-mcp-schema-resolve-directory (&optional readers)
+  "Resolve the EDN schema directory to an absolute path.\n\nNamed `resolve-directory' rather than `directory': the latter compiles to\n`hive-mcp-schema-directory', which is already the defcustom, and a function\nsharing a settings name is a trap for the next reader even where Emacs allows\nit.\n\nHIVE_MCP_HOME keeps its old meaning: its resources/schema is consulted before\nthe shipped default, which is what the computed defcustom default used to do."
+  (let* ((from-home (let* ((home (getenv "HIVE_MCP_HOME")))
+    (when (and (stringp home) (not (string= "" home)))
+    (expand-file-name "resources/schema" home))))
+        (resolved (or (hive-mcp-config-resolve-setting (hive-mcp-config-coalesce (delq nil (list (hive-mcp-config-custom 'hive-mcp-schema-directory) (when from-home
+    (hive-mcp-config-literal from-home))))) readers) (hive-mcp-config-resolve-setting (hive-mcp-schema-schema-directory-source) readers))))
+    (expand-file-name resolved)))
+
 (defun hive-mcp-schema--load-file (ns-name)
   "Load and cache schema file for NS-NAME (e.g., \"cider\").\nReturns parsed hash-table or nil."
-  (let* ((path (expand-file-name (clel-concat ns-name ".edn") hive-mcp-schema-directory)))
+  (let* ((path (expand-file-name (clel-concat ns-name ".edn") (hive-mcp-schema-resolve-directory))))
     (when (file-exists-p path)
     (let* ((content (with-temp-buffer
     (insert-file-contents path)

@@ -27,10 +27,12 @@
   :group 'cider
   :prefix "hive-mcp-cljel-")
 
-(defcustom hive-mcp-cljel-project-dir "~/PP/clojure-elisp"
-  "Default project directory for ClojureElisp nREPL.\nThis should point to the clojure-elisp project root\nwhich has the deps.edn with the compiler + nREPL middleware."
+(require 'hive-mcp-cider-nrepl)
+
+(defcustom hive-mcp-cljel-project-dir nil
+  "Project directory for the ClojureElisp toolchain.\nHighest-precedence rung of a chain; nil is unset, and resolution falls through\nto HIVE_CLJEL_PROJECT_DIR, `(:cider :nrepl :cljel-project-dir)' in\n`hive-mcp-config-file', and finally \"~/PP/clojure-elisp\". It shares that\nchain with `hive-mcp-cider-nrepl-cljel-project-dir': one checkout, one answer.\n\nThis defcustom must stay nil: a non-nil default would shadow the file rung and\nmake it unreachable."
   :group 'hive-mcp-cljel
-  :type 'directory)
+  :type '(choice (const :tag "Resolve automatically" nil) directory))
 
 (defcustom hive-mcp-cljel-inject-deps nil
   "Extra dependencies to inject for ClojureElisp nREPL.\nDefault is nil because jack-in runs from the clojure-elisp project\nwhich already has the compiler and middleware on its classpath.\nOnly set this if jacking in from a different project."
@@ -61,12 +63,12 @@
 (defun hive-mcp-cljel-jack-in (&optional project-dir)
   "Jack in to an nREPL with ClojureElisp support.\n\nWhen the CIDER addon (hive-mcp-cider) is loaded, delegates to its\n`spawn-session' with 'cljel repl-type for unified session management.\nOtherwise falls back to direct CIDER jack-in.\n\nStarts nREPL with the wrap-cljel middleware, connects CIDER,\nauto-sends cljel-start, and enables cider-cljel-mode for .cljel buffers.\n\nPROJECT-DIR defaults to `hive-mcp-cljel-project-dir'.\nWith prefix arg, prompt for project directory."
   (interactive (list (when current-prefix-arg
-    (read-directory-name "ClojureElisp project: " hive-mcp-cljel-project-dir))))
+    (read-directory-name "ClojureElisp project: " (hive-mcp-cider-nrepl-project-dir 'cljel)))))
   (require 'cider nil t)
   (require 'cider-clojure-elisp nil t)
   (unless (featurep 'cider)
     (error "CIDER is required for cider-jack-in-cljel"))
-  (let* ((dir (expand-file-name (or project-dir hive-mcp-cljel-project-dir))))
+  (let* ((dir (expand-file-name (or project-dir hive-mcp-cljel-project-dir (hive-mcp-cider-nrepl-project-dir 'cljel)))))
     (if (and (fboundp 'hive-mcp-cider-spawn-session) (boundp 'hive-mcp-cider--sessions)) (progn
   (setq hive-mcp-cljel--pending-activation t)
   (hive-mcp-cider-spawn-session (format "cljel-%d" (random 9999)) 'cljel hive-mcp-cljel-port dir)) (let* ((cider-jack-in-nrepl-middlewares (append cider-jack-in-nrepl-middlewares (list hive-mcp-cljel-middleware)))

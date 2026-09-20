@@ -13,6 +13,8 @@
 
 
 
+(require 'hive-mcp-config)
+
 (require 'cl-lib)
 
 (require 'parseedn)
@@ -29,15 +31,15 @@
   :group 'hive-mcp-cider
   :type '(choice (const nil) directory))
 
-(defcustom hive-mcp-cider-nrepl-default-project-dir "~/PP/hive/hive-mcp"
-  "Fallback working directory for the default nREPL server.\nUsed by `hive-mcp-cider-nrepl-start-default' when neither an explicit DIR nor\n`hive-mcp-cider-nrepl-project-dir' is given. Nil disables the fallback, making\nstart-default error instead of guessing."
+(defcustom hive-mcp-cider-nrepl-default-project-dir nil
+  "Fallback working directory for the default nREPL server.\nHighest-precedence rung of a chain; nil is unset, and resolution falls through\nto HIVE_NREPL_DEFAULT_PROJECT_DIR, `(:cider :nrepl :default-project-dir)' in\n`hive-mcp-config-file', and finally \"~/PP/hive/hive-mcp\".\n\nUsed by `hive-mcp-cider-nrepl-start-default' when neither an explicit DIR nor\n`hive-mcp-cider-nrepl-project-dir' is given. This defcustom must stay nil:\na non-nil default here would shadow the file rung and make it unreachable."
   :group 'hive-mcp-cider
-  :type '(choice (const nil) directory))
+  :type '(choice (const :tag "Resolve automatically" nil) directory))
 
-(defcustom hive-mcp-cider-nrepl-cljel-project-dir "~/PP/clojure-elisp"
-  "Project directory for ClojureElisp nREPL sessions.\nShould point to the clojure-elisp project root with deps.edn\ncontaining the compiler and nREPL middleware."
+(defcustom hive-mcp-cider-nrepl-cljel-project-dir nil
+  "Project directory for ClojureElisp nREPL sessions.\nShould point to the clojure-elisp project root with deps.edn containing the\ncompiler and nREPL middleware.\n\nHighest-precedence rung of a chain; nil is unset, and resolution falls through\nto HIVE_CLJEL_PROJECT_DIR, `(:cider :nrepl :cljel-project-dir)' in\n`hive-mcp-config-file', and finally \"~/PP/clojure-elisp\". This defcustom must\nstay nil: a non-nil default here would shadow the file rung and make it\nunreachable."
   :group 'hive-mcp-cider
-  :type 'directory)
+  :type '(choice (const :tag "Resolve automatically" nil) directory))
 
 (defcustom hive-mcp-cider-nrepl-cljw-binary nil
   "Path to the ClojureWasm (cljw) binary used to start a 'cljw nREPL session.\nHighest-precedence rung of the cljw binary chain; nil is unset, and\nresolution falls through to HIVE_CLJW_BINARY, `(:runtimes :cljw :binary)' in\n`hive-mcp-config-file', and finally \"cljw\" on PATH. Launched as\n`cljw nrepl --port N'."
@@ -134,7 +136,7 @@
         (main-flag (hive-mcp-cider-nrepl-launch-flag effective-aliases))
         (overrides (append extra-deps (delq nil (list (hive-mcp-cider-nrepl-main-opts-neutralizer effective-aliases)))))
         (clj-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"}}}" hive-mcp-cider-nrepl-version hive-mcp-cider-nrepl-cider-nrepl-version))
-        (cljel-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"} io.github.BuddhiLW/clojure-elisp {:local/root \"%s\"}}}" hive-mcp-cider-nrepl-version hive-mcp-cider-nrepl-cider-nrepl-version (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir)))
+        (cljel-deps (format "{:deps {nrepl/nrepl {:mvn/version \"%s\"} cider/cider-nrepl {:mvn/version \"%s\"} io.github.BuddhiLW/clojure-elisp {:local/root \"%s\"}}}" hive-mcp-cider-nrepl-version hive-mcp-cider-nrepl-cider-nrepl-version (hive-mcp-cider-nrepl-project-dir 'cljel)))
         (sdeps-for (lambda (base)
     (if overrides (hive-mcp-cider-nrepl-merge-deps-edn base overrides) base)))
         (mw-for (lambda (built-ins)
@@ -158,15 +160,33 @@
   "Build the nREPL start command for REPL-TYPE on PORT.\nReturns a list of (program . args) for `start-process'; the caller owns the\nworking directory. This is the :command of `launch-plan' — a launch that\nalso needs environment entries, or that must report why a source root was\nnot delivered, has to take the plan, since a bare argv can carry neither.\nREPL-TYPE is one of 'clj, 'cljs, 'cljel, 'cljw, or 'cljrs.\nUses inline -Sdeps plus ALIASES (default `hive-mcp-cider-nrepl-launch-aliases')\nso spawn works in any project without requiring a :nrepl or :dev alias.\nThe selected aliases' `:main-opts' are blanked through the same -Sdeps map\n(see `main-opts-neutralizer') — an alias that names its own -m would otherwise\nrun instead of nrepl.cmdline and the spawn would never open a port.\nEXTRA-DEPS is a list of deps EDN strings (e.g. local.deps.edn contents)\nmerged into the built-in -Sdeps map via `merge-deps-edn' — the CLI keeps\nonly the last -Sdeps, so layering must merge, not repeat the flag.\nMIDDLEWARE is a list of nREPL middleware symbol strings appended to the\nbuilt-in list for REPL-TYPE.\nEXTRA-ARGS is a list of raw CLI args spliced after -Sdeps and before the -M\nmain flag (e.g. '(\"-Srepro\") or JVM opts); everything after -M is\nmain-opts, so CLI opts must precede it.\nThe native runtimes 'cljw (ClojureWasm) and 'cljrs (clojurust) launch their\nown binary's `nrepl --port' subcommand; the JVM-only options (-Sdeps,\nALIASES, EXTRA-DEPS, MIDDLEWARE) do not apply and are ignored."
   (plist-get (hive-mcp-cider-nrepl-launch-plan repl-type port extra-args aliases extra-deps middleware) :command))
 
-(defun hive-mcp-cider-nrepl-project-dir (repl-type)
-  "Resolve the project directory for REPL-TYPE.\nReturns absolute path string, or nil if no explicit dir is configured.\n\nFor 'cljel — falls back to `hive-mcp-cider-nrepl-cljel-project-dir'\ndefcustom (the cljel toolchain has a single canonical project).\n\nFor 'cljw/'cljrs — the native runtimes need no deps project, only a cwd;\nfalls back to `temporary-file-directory' (cljrs writes .nrepl-port there).\n\nFor 'clj/'cljs — returns nil if `hive-mcp-cider-nrepl-project-dir' is\nunset. Callers must supply project-dir explicitly. The Emacs daemon's\ncurrent buffer is NOT a reliable proxy when spawn is triggered from an\nMCP tool boundary — it leaks hive-mcp into every other project's REPL."
+(defun hive-mcp-cider-nrepl-project-dir-source (custom-symbol env-var key-path default)
+  "Return the source chain for one nREPL project directory.\nPrecedence, highest first: CUSTOM-SYMBOL, ENV-VAR, KEY-PATH under `:cider' in\n`hive-mcp-config-file', then DEFAULT. A nil rung is omitted.\n\nDEFAULT is the bottom `literal' rung and is the ONLY place a checkout path\nbelongs: as a defcustom default it would shadow every rung below it, which is\nthe precedence trap this chain exists to avoid. Pure."
+  (hive-mcp-config-coalesce (delq nil (list (when custom-symbol
+    (hive-mcp-config-custom custom-symbol)) (when env-var
+    (hive-mcp-config-env env-var)) (when (and key-path hive-mcp-config-file)
+    (hive-mcp-config-edn-file hive-mcp-config-file (cons :cider key-path))) (when default
+    (hive-mcp-config-literal default))))))
+
+(defun hive-mcp-cider-nrepl-cljel-project-dir-source ()
+  "Return the source chain for the ClojureElisp project directory.\nPrecedence: `hive-mcp-cider-nrepl-cljel-project-dir', HIVE_CLJEL_PROJECT_DIR,\n`(:cider :nrepl :cljel-project-dir)' in `hive-mcp-config-file', then\n\"~/PP/clojure-elisp\". Pure."
+  (hive-mcp-cider-nrepl-project-dir-source 'hive-mcp-cider-nrepl-cljel-project-dir "HIVE_CLJEL_PROJECT_DIR" '(:nrepl :cljel-project-dir) "~/PP/clojure-elisp"))
+
+(defun hive-mcp-cider-nrepl-default-project-dir-source ()
+  "Return the source chain for the default nREPL server's working directory.\nPrecedence: `hive-mcp-cider-nrepl-default-project-dir',\nHIVE_NREPL_DEFAULT_PROJECT_DIR, then `(:cider :nrepl :default-project-dir)' in\n`hive-mcp-config-file'.\n\nThere is deliberately NO literal rung. Nil through every rung means the\nfallback is disabled and `start-default' errors instead of guessing, which is\nthe contract the old defcustom documented and its test pins. The machine path\nthat used to sit in source now belongs in the config file or the environment."
+  (hive-mcp-cider-nrepl-project-dir-source 'hive-mcp-cider-nrepl-default-project-dir "HIVE_NREPL_DEFAULT_PROJECT_DIR" '(:nrepl :default-project-dir) nil))
+
+(defun hive-mcp-cider-nrepl-project-dir (repl-type &optional readers)
+  "Resolve the project directory for REPL-TYPE.\nReturns absolute path string, or nil if no explicit dir is configured.\n\nFor 'cljel — resolves `cljel-project-dir-source' (defcustom, then\nHIVE_CLJEL_PROJECT_DIR, then `hive-mcp-config-file', then the shipped\ndefault). READERS is forwarded, so a test supplies literals for every origin\nand never reads the developer's real config file.\n\nFor 'cljw/'cljrs — the native runtimes need no deps project, only a cwd;\nfalls back to `temporary-file-directory' (cljrs writes .nrepl-port there).\n\nFor 'clj/'cljs — returns nil if `hive-mcp-cider-nrepl-project-dir' is\nunset. Callers must supply project-dir explicitly. The Emacs daemon's\ncurrent buffer is NOT a reliable proxy when spawn is triggered from an\nMCP tool boundary — it leaks hive-mcp into every other project's REPL."
   (or hive-mcp-cider-nrepl-project-dir (pcase repl-type
-  ((quote cljel) (expand-file-name hive-mcp-cider-nrepl-cljel-project-dir))
+  ((quote cljel) (let* ((resolved (hive-mcp-config-resolve-setting (hive-mcp-cider-nrepl-cljel-project-dir-source) readers)))
+    (when (and (stringp resolved) (not (string= "" resolved)))
+    (expand-file-name resolved))))
   ((or (quote cljw) (quote cljrs)) temporary-file-directory))))
 
-(defun hive-mcp-cider-nrepl-default-project-dir (dir)
-  "Resolve the working directory for the default nREPL server.\nDIR wins, then `hive-mcp-cider-nrepl-project-dir', then\n`hive-mcp-cider-nrepl-default-project-dir'. Returns an absolute path\nstring, or nil when none of the three is a non-empty string."
-  (let* ((candidate (or dir hive-mcp-cider-nrepl-project-dir hive-mcp-cider-nrepl-default-project-dir)))
+(defun hive-mcp-cider-nrepl-default-project-dir (dir &optional readers)
+  "Resolve the working directory for the default nREPL server.\nDIR wins, then `hive-mcp-cider-nrepl-project-dir', then\n`default-project-dir-source' (defcustom, then HIVE_NREPL_DEFAULT_PROJECT_DIR,\nthen `hive-mcp-config-file', then the shipped default). Returns an absolute\npath string, or nil when nothing resolves to a non-empty string.\n\nREADERS is forwarded to the chain, so a test supplies literals for every\norigin instead of reading the developer's real config file."
+  (let* ((candidate (or dir hive-mcp-cider-nrepl-project-dir (hive-mcp-config-resolve-setting (hive-mcp-cider-nrepl-default-project-dir-source) readers))))
     (when (and (stringp candidate) (not (string= "" candidate)))
     (expand-file-name candidate))))
 
