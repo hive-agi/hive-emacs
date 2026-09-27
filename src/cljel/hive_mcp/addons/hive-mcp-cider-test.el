@@ -33,5 +33,23 @@
   (should (not (hive-mcp-cider-sessions-exists-p "victim"))))
   (hive-mcp-cider-sessions-clear-all)))
 
+(ert-deftest hive-mcp-cider-test-spawn-plist-aliases-reach-the-argv nil "The :aliases of a spawn request select the -M flag of the started process\nand override `hive-mcp-cider-nrepl-launch-aliases'. The process is recorded,\nnever started; the retry timer is not armed." (hive-mcp-cider-sessions-clear-all) (let* ((dir (make-temp-file "hive-mcp-cider-test" t))
+        (argv nil))
+    (unwind-protect
+    (let* ((hive-mcp-cider-nrepl-launch-aliases '("dev")))
+    (cl-letf (((symbol-function 'start-process) (lambda (_name _buffer &rest cmd)
+    (setq argv cmd)
+    nil)) ((symbol-function 'run-with-timer) (lambda (&rest _)
+    nil)) ((symbol-function 'hive-mcp-cider-nrepl-port-open-p) (lambda (_port)
+    nil))) (hive-mcp-cider-spawn-session-from-plist (list :name "aliased" :repl-type 'clj :port 7991 :project-dir dir :aliases '("test"))))
+    (should (member "-M:test" argv))
+    (should-not (member "-M:dev" argv))
+    (should-not (member "-M" argv))
+    (should (member "nrepl.cmdline" argv))
+    (should (cl-some (lambda (a)
+    (string-match-p ":test {:main-opts \\[\\]}" a)) argv)))
+  (hive-mcp-cider-sessions-clear-all)
+  (delete-directory dir t))))
+
 (provide 'hive-mcp-cider-test)
 ;;; hive-mcp-cider-test.el ends here

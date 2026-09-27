@@ -83,6 +83,15 @@
       (is (str/includes? (first @calls) ":port 7999"))
       (is (not (str/includes? (first @calls) ":port \"7999\""))))))
 
+(deftest spawn-accepts-aliases-as-a-string
+  (doseq [given ["test" ":test" "dev,test" ":dev:test"]]
+    (let [{:keys [calls eval-fn]} (ok-stub)]
+      (binding [cider/*eval-fn* eval-fn]
+        (cider/handle-spawn {:name "s" :aliases given})
+        (let [form (first @calls)]
+          (is (re-find #":aliases '\((\"dev\" )?\"test\"\)" form) (str given " -> " form))
+          (is (not (str/includes? form "?t")) "never split into characters"))))))
+
 ;;; =============================================================================
 ;;; kill-session — fail loud on blank (no silent no-op)
 ;;; =============================================================================
@@ -107,12 +116,99 @@
 ;;; eval — session routing + auto-connect spawn
 ;;; =============================================================================
 
+(defn- registry-stub
+  "A stub *eval-fn* standing in for Emacs + nREPL: SESSIONS is the registry
+   listing (a seq of session names, all connected). Each eval-in-session call
+   is recorded in :received as the connection (session name) it was addressed
+   to; any eval that is NOT addressed to a named session is recorded as
+   :default, the coordinator's connection."
+  [sessions]
+  (let [received (atom [])
+        calls (atom [])
+        sessions-json (str "[" (str/join "," (map #(str "{\"name\":\"" % "\",\"status\":\"connected\"}")
+                                                  sessions))
+                           "]")
+        respond (fn [code]
+                  (swap! calls conj code)
+                  (cond
+                    (str/includes? code "hive-mcp-cider-list-sessions")
+                    {:success true :result sessions-json}
+
+                    (str/includes? code "hive-mcp-cider-eval-in-session")
+                    (let [target (second (re-find #"hive-mcp-cider-eval-in-session\s+\"([^\"]+)\"" code))]
+                      (swap! received conj target)
+                      {:success true :result (str "ran-in:" target)})
+
+                    (re-find #"hive-mcp-cider-(eval-silent|eval-explicit)" code)
+                    (do (swap! received conj :default)
+                        {:success true :result "ran-in:default"})
+
+                    (re-find #"hive-mcp-cider-(doc|info|complete|apropos)" code)
+                    (do (swap! received conj (or (second (re-find #"\"([^\"]+)\"\)*\s*$" code)) :default))
+                        {:success true :result "\"{}\""})
+
+                    :else {:success true :result "\"{}\""}))]
+    {:received received
+     :calls calls
+     :eval-fn (fn ([code] (respond code)) ([code _timeout-ms] (respond code)))}))
+
 (deftest eval-routes-to-named-session
-  (let [{:keys [calls eval-fn]} (ok-stub)]
+  (let [{:keys [received eval-fn]} (registry-stub ["coord" "s1"])]
     (binding [cider/*eval-fn* eval-fn]
-      (cider/handle-eval {:code "(+ 1 2)" :session_name "s1"})
-      (is (str/includes? (first @calls) "hive-mcp-cider-eval-in-session"))
-      (is (str/includes? (first @calls) "\"s1\"")))))
+      (let [resp (cider/handle-eval {:code "(+ 1 2)" :session_name "s1"})]
+        (is (not (:isError resp)))
+        (is (= "ran-in:s1" (:text resp))))
+      (is (= ["s1"] @received) "the eval reached s1's connection and no other"))))
+
+(deftest eval-session-verb-routes-the-name-param
+  (let [{:keys [received eval-fn]} (registry-stub ["coord" "spawned"])
+        handler (get cider/handlers :eval-session)]
+    (binding [cider/*eval-fn* eval-fn]
+      (is (= "ran-in:spawned" (:text (handler {:code "(System/getProperty \"user.dir\")"
+                                              :name "spawned"}))))
+      (is (= "ran-in:spawned" (:text (handler {:code "1" :session_name "spawned"}))))
+      (is (= ["spawned" "spawned"] @received)))))
+
+(deftest eval-session-verb-without-a-name-is-refused
+  (let [{:keys [calls eval-fn]} (registry-stub ["coord"])]
+    (binding [cider/*eval-fn* eval-fn]
+      (let [resp ((get cider/handlers :eval-session) {:code "1"})]
+        (is (true? (:isError resp)))
+        (is (str/includes? (:text resp) "session_name")))
+      (is (empty? @calls) "nothing is evaluated anywhere"))))
+
+(deftest unknown-session-name-is-refused-never-defaulted
+  (let [{:keys [received eval-fn]} (registry-stub ["coord" "alpha"])
+        eval-session (get cider/handlers :eval-session)]
+    (binding [cider/*eval-fn* eval-fn]
+      (doseq [resp [(cider/handle-eval {:code "1" :session_name "ghost"})
+                    (eval-session {:code "1" :name "ghost"})
+                    (cider/handle-doc {:symbol "map" :session_name "ghost"})
+                    (cider/handle-info {:symbol "map" :session_name "ghost"})
+                    (cider/handle-complete {:prefix "ma" :session_name "ghost"})
+                    (cider/handle-apropos {:pattern "ma" :session_name "ghost"})]]
+        (is (true? (:isError resp)))
+        (is (str/includes? (:text resp) "Unknown CIDER session 'ghost'"))
+        (is (str/includes? (:text resp) "Known sessions: alpha, coord")))
+      (is (empty? @received) "no connection received anything"))))
+
+(deftest named-introspection-reaches-the-named-session
+  (let [{:keys [calls eval-fn]} (registry-stub ["coord" "s1"])]
+    (binding [cider/*eval-fn* eval-fn]
+      (doseq [resp [(cider/handle-doc {:symbol "map" :session_name "s1"})
+                    (cider/handle-info {:symbol "map" :session_name "s1"})
+                    (cider/handle-complete {:prefix "ma" :session_name "s1"})
+                    (cider/handle-apropos {:pattern "ma" :session_name "s1"})]]
+        (is (not (:isError resp))))
+      (let [sent (remove #(str/includes? % "list-sessions") @calls)]
+        (is (= 4 (count sent)))
+        (is (every? #(str/includes? % "\"s1\"") sent))))))
+
+(deftest resolve-named-session-lists-known-sessions
+  (is (= {:ok "a"} (select-keys (cider/resolve-named-session [{:name "a"}] "a") [:ok])))
+  (let [r (cider/resolve-named-session [] "x")]
+    (is (= :cider/unknown-session (:error r)))
+    (is (str/includes? (:message r) "(none)"))))
 
 (deftest eval-auto-spawns-when-no-session
   (let [sessions-json "[]"

@@ -187,9 +187,13 @@ Returns non-nil when an interrupt was dispatched, nil when it could not be."
       (nrepl-request:interrupt request-id (lambda (_response) nil) connection)
       t)))
 
-(defn eval-with-heartbeat [code &optional timeout-override]
+(defn eval-with-heartbeat [code &optional timeout-override connection-override]
   "Evaluate CODE and return its result string, or signal on timeout.
 Optional TIMEOUT-OVERRIDE in seconds (default: `hive-mcp-cider-eval-timeout').
+Optional CONNECTION-OVERRIDE is the REPL buffer the request MUST go to; it is
+handed to `cider-nrepl-request:eval' explicitly, so sesman's notion of the
+current REPL (which may be the coordinator's) is never consulted. Without it
+the request goes to `cider-current-repl'.
 
 Contract: the nREPL request is asynchronous but this call is SYNCHRONOUS — it
 polls `accept-process-output' every `hive-mcp-cider-eval-poll-interval' and
@@ -205,14 +209,16 @@ On timeout an nREPL interrupt is sent for the pending request so the server
 stops evaluating and the session is not left wedged."
   (let [st (make-eval-state)
         id-cell (make-vector 1 nil)
-        connection (current-connection)]
-    ;; Send async request — callback folds responses into the local state
-    (cider-nrepl-request:eval
-     code
-     (lambda (response)
-       (let [id (nrepl-dict-get response "id")]
-         (when id (aset id-cell 0 id)))
-       (apply-response st response)))
+        connection (or connection-override (current-connection))
+        callback (lambda (response)
+                   (let [id (nrepl-dict-get response "id")]
+                     (when id (aset id-cell 0 id)))
+                   (apply-response st response))]
+    ;; Send async request — callback folds responses into the local state.
+    ;; A pinned connection travels as the explicit CONNECTION argument.
+    (if connection-override
+        (cider-nrepl-request:eval code callback nil nil nil nil connection-override)
+      (cider-nrepl-request:eval code callback))
     (unless (aref id-cell 0)
       (aset id-cell 0 (connection-request-id connection)))
     ;; Poll with heartbeat until done or timeout
@@ -252,7 +258,8 @@ Asserts the recorded :cljel-upgrade instead of trusting :repl-type alone."
 (defn eval-in-session [name code &optional timeout]
   "Evaluate CODE in the CIDER session NAME.
 Optional TIMEOUT in seconds (default: `hive-mcp-cider-eval-timeout').
-Uses the synchronous heartbeat poll of `eval-with-heartbeat'.
+Uses the synchronous heartbeat poll of `eval-with-heartbeat', pinned to the
+session's own REPL buffer as the explicit nREPL connection.
 Refuses any session that is not 'connected (surfacing its registry :reason)
 and any cljel session whose upgrade did not confirm.
 CODE reaches the runtime verbatim, whatever the session's repl-type."
@@ -270,7 +277,7 @@ CODE reaches the runtime verbatim, whatever the session's repl-type."
         (hive-mcp-cider-sessions-update-prop name :status 'stale))
       (error "Session '%s' REPL buffer is gone" name))
     (with-current-buffer cider-buf
-      (eval-with-heartbeat code timeout))))
+      (eval-with-heartbeat code timeout (get-buffer cider-buf)))))
 
 ;; ============================================================================
 ;; MCP API Eval Functions

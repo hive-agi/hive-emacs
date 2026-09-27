@@ -326,23 +326,61 @@
                          (fn [] (elisp->result (elisp-fn code) ec-timeout-ms))
                          nil))))))))
 
+(defn resolve-named-session
+  "Result: ok SESSION-NAME when SESSIONS (the registry listing) holds a session
+   of that name, else :cider/unknown-session whose message names every known
+   session. Never substitutes another session."
+  [sessions session-name]
+  (if (some #(= session-name (:name %)) sessions)
+    (result/ok session-name)
+    (let [known (sort (keep :name sessions))]
+      (result/err :cider/unknown-session
+                  {:message (str "Unknown CIDER session '" session-name "'; refusing to use "
+                                 "any other connection. Known sessions: "
+                                 (if (seq known) (str/join ", " known) "(none)")
+                                 ". Spawn it with `code cider spawn` or list with `code cider sessions`.")}))))
+
+(defn- in-named-session
+  "Result of (F session-name) once the registry confirms SESSION-NAME resolves;
+   :cider/unknown-session otherwise, with F never called."
+  [session-name f]
+  (result/let-ok [sessions (list-sessions*)
+                  session (resolve-named-session sessions session-name)]
+                 (f session)))
+
+(defn- eval-in-named-session
+  "Evaluate CODE in the session called SESSION-NAME and nowhere else. An
+   unknown name is refused before any eval is sent."
+  [session-name {:keys [code timeout]}]
+  (let [ec-timeout-ms (+ (* (or timeout 60) 1000) 2000)]
+    (result->mcp
+     (try-result :cider/eval-failed
+                 (fn []
+                   (binding [ec/*max-timeout-ms* (max ec/*max-timeout-ms* ec-timeout-ms)]
+                     (in-named-session
+                      session-name
+                      (fn [session]
+                        (elisp->result
+                          (el/require-and-call-text
+                            'hive-mcp-cider 'hive-mcp-cider-eval-in-session
+                            session code (or timeout nil))
+                          ec-timeout-ms)))))))))
+
 (defn handle-eval
   "Evaluate Clojure code via CIDER. mode selects silent (default) or explicit;
-   session_name routes to a named session instead."
+   session_name routes to a named session instead, refusing an unknown name."
   [{:keys [mode session_name] :as params}]
-  (if (session-arg session_name)
-    (let [{:keys [code timeout]} params
-          ec-timeout-ms (+ (* (or timeout 60) 1000) 2000)]
-      (result->mcp
-       (try-result :cider/eval-failed
-                   (fn []
-                     (binding [ec/*max-timeout-ms* (max ec/*max-timeout-ms* ec-timeout-ms)]
-                       (elisp->result
-                         (el/require-and-call-text
-                           'hive-mcp-cider 'hive-mcp-cider-eval-in-session
-                           session_name code (or timeout nil))
-                         ec-timeout-ms))))))
+  (if-let [session (session-arg session_name)]
+    (eval-in-named-session session params)
     (handle-eval-common params (or mode "silent"))))
+
+(defn handle-eval-session
+  "The eval-session verb: evaluate in a NAMED session, given as session_name
+   or name. A missing name is refused; there is no default connection here."
+  [{:keys [session_name] spawn-name :name :as params}]
+  (if-let [session (or (session-arg session_name) (session-arg spawn-name))]
+    (eval-in-named-session session params)
+    (tool/mcp-error "Error: eval-session requires 'session_name' (or 'name') naming a spawned or connected session")))
 
 ;;; =============================================================================
 ;;; Introspection handlers
@@ -354,34 +392,46 @@
   (handle-elisp :cider/status-failed
                 (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-status)))
 
+(defn- handle-introspection
+  "Run the introspection elisp (BUILD session-or-nil) under CATEGORY. A
+   non-blank SESSION-NAME must resolve in the registry first, else the call is
+   refused with :cider/unknown-session and no elisp is sent; a blank one
+   targets the current connection."
+  [category session-name build]
+  (result->mcp
+   (try-result category
+               (fn []
+                 (if-let [session (session-arg session-name)]
+                   (in-named-session session #(elisp->result (build %)))
+                   (elisp->result (build nil)))))))
+
 (defn handle-doc
-  "Docstring for a symbol, optionally inside SESSION_NAME's REPL."
+  "Docstring for a symbol, inside SESSION_NAME's REPL when given."
   [{:keys [symbol session_name]}]
-  (handle-elisp :cider/doc-failed
-                (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-doc
-                                          symbol (session-arg session_name))))
+  (handle-introspection :cider/doc-failed session_name
+                        #(el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-doc
+                                                   symbol %)))
 
 (defn handle-info
-  "Full semantic info for a symbol, optionally inside SESSION_NAME's REPL."
+  "Full semantic info for a symbol, inside SESSION_NAME's REPL when given."
   [{:keys [symbol session_name]}]
-  (handle-elisp :cider/info-failed
-                (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-info
-                                          symbol (session-arg session_name))))
+  (handle-introspection :cider/info-failed session_name
+                        #(el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-info
+                                                   symbol %)))
 
 (defn handle-complete
-  "Completions for a prefix, optionally inside SESSION_NAME's REPL."
+  "Completions for a prefix, inside SESSION_NAME's REPL when given."
   [{:keys [prefix session_name]}]
-  (handle-elisp :cider/complete-failed
-                (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-complete
-                                          prefix (session-arg session_name))))
+  (handle-introspection :cider/complete-failed session_name
+                        #(el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-complete
+                                                   prefix %)))
 
 (defn handle-apropos
-  "Search symbols matching a pattern, optionally inside SESSION_NAME's REPL."
+  "Search symbols matching a pattern, inside SESSION_NAME's REPL when given."
   [{:keys [pattern search_docs session_name]}]
-  (handle-elisp :cider/apropos-failed
-                (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-apropos
-                                          pattern (boolean search_docs)
-                                          (session-arg session_name))))
+  (handle-introspection :cider/apropos-failed session_name
+                        #(el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-apropos
+                                                   pattern (boolean search_docs) %)))
 
 ;;; =============================================================================
 ;;; Session lifecycle handlers
@@ -511,6 +561,20 @@
                    " (pass backend=" (first serving) ")")
               "; no registered backend serves it"))))))
 
+(defn spawn-list-param
+  "A spawn list param as a vector of non-blank strings, or nil when empty.
+   A sequential passes through. A lone string is ONE entry, except under
+   SPLIT-RE, which splits it (aliases given as \"dev,test\" or \":dev:test\")."
+  ([v] (spawn-list-param v nil))
+  ([v split-re]
+   (let [entries (cond
+                   (nil? v) nil
+                   (string? v) (if split-re (str/split v split-re) [v])
+                   (sequential? v) (map str v)
+                   :else [(str v)])
+         kept (vec (remove str/blank? entries))]
+     (when (seq kept) kept))))
+
 (defn handle-spawn
   "Spawn a new named CIDER session with its own nREPL server.
    Full CLI surface: extra_args (raw, pre--M), aliases (-M selection),
@@ -521,7 +585,8 @@
    arrives on a later tool response as the ---CIDER-SPAWN--- block. An err
    short-circuits the watch, so nothing is owed for a spawn that never ran."
   [{:keys [name project_dir agent_id repl_type port extra_args aliases extra_deps middleware]}]
-  (log/info "cider-spawn" {:name name :repl_type repl_type :agent_id agent_id :port port})
+  (log/info "cider-spawn" {:name name :repl_type repl_type :agent_id agent_id :port port
+                           :aliases aliases})
   (if (str/blank? name)
     (tool/mcp-error "Error: spawn requires a non-blank 'name'")
     (let [port (cond-> port (string? port) parse-long)
@@ -532,10 +597,10 @@
                    :port       port
                    :project-dir project_dir
                    :agent-id   agent_id
-                   :extra-args (when extra_args (vec extra_args))
-                   :aliases    (when aliases (vec aliases))
-                   :extra-deps (when extra_deps (vec extra_deps))
-                   :middleware (when middleware (vec middleware))})]
+                   :extra-args (spawn-list-param extra_args)
+                   :aliases    (spawn-list-param aliases #"[,:\s]+")
+                   :extra-deps (spawn-list-param extra_deps)
+                   :middleware (spawn-list-param middleware)})]
       (result->mcp
        (-> (try-result :cider/spawn-failed #(elisp->result elisp nil))
            (result/map-ok (partial spawn/watch-spawn! *eval-fn*))
@@ -596,7 +661,8 @@
    Verbs in the first group belong to the transport-agnostic vocabulary: a
    :backend param selects which registered transport serves them, defaulting to
    CIDER. Session lifecycle stays CIDER-only — an nREPL session and a SLY
-   connection are not the same object."
+   connection are not the same object. eval-session only ever evaluates in the
+   session it names."
   (merge
    (into {}
          (map (fn [[verb h]] [verb (via-backend verb h)]))
@@ -613,10 +679,10 @@
     :connect      handle-connect
     :sessions     handle-sessions
     :kill-session handle-kill-session
-    :kill-all     handle-kill-all}
-   ;; deprecated aliases (core parity)
-   {:eval-explicit (fn [params] (handle-eval (assoc params :mode "explicit")))
-    :eval-session  handle-eval}))
+    :kill-all     handle-kill-all
+    :eval-session handle-eval-session}
+   ;; deprecated alias (core parity)
+   {:eval-explicit (fn [params] (handle-eval (assoc params :mode "explicit")))}))
 
 (defn- subdomain-handler
   "Strip the \"<subdomain> \" prefix off :command before calling INNER."
@@ -641,7 +707,8 @@
             :description (str "REPL operations (hive.emacs addon). Verbs: eval (silent|explicit), doc, info, "
                               "complete, apropos, status, load-file, inspect, restart, spawn "
                               "(extra_args/aliases/extra_deps/middleware; local.deps.edn auto-detected), "
-                              "connect, sessions, kill-session, kill-all. "
+                              "connect, sessions, kill-session, kill-all, eval-session (session_name or name; "
+                              "an unknown session is refused, never replaced by the default connection). "
                               "backend selects the transport for the verb group above: cider (default, nREPL) "
                               "or slynk (a Common Lisp image over SLY); inspect and restart are slynk-only, "
                               "and session lifecycle is cider-only.")}})

@@ -168,8 +168,8 @@
 (ert-deftest hive-mcp-cider-eval-test-session-live-buffer-evaluates nil "A live session evaluates inside its registered REPL buffer." (let* ((buf (generate-new-buffer " *live-repl*")))
     (unwind-protect
     (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup) (lambda (_name)
-    (list :status 'connected :cider-buffer buf))) ((symbol-function 'hive-mcp-cider-eval-eval-with-heartbeat) (lambda (code timeout)
-    (list code timeout (eq (current-buffer) buf))))) (should (equal (list "(+ 1 2)" 7 t) (hive-mcp-cider-eval-eval-in-session "live" "(+ 1 2)" 7))))
+    (list :status 'connected :cider-buffer buf))) ((symbol-function 'hive-mcp-cider-eval-eval-with-heartbeat) (lambda (code timeout &optional conn)
+    (list code timeout (eq (current-buffer) buf) (eq conn buf))))) (should (equal (list "(+ 1 2)" 7 t t) (hive-mcp-cider-eval-eval-in-session "live" "(+ 1 2)" 7))))
   (kill-buffer buf))))
 
 (ert-deftest hive-mcp-cider-eval-test-not-connected-message-carries-reason nil "A registry :reason is surfaced with the status instead of being dropped." (should (equal "Session 'a' not connected (status: connecting)" (hive-mcp-cider-eval-not-connected-message "a" (list :status 'connecting)))) (should (string-match-p "status: error).*port 7910: handshake never completed" (hive-mcp-cider-eval-not-connected-message "a" (list :status 'error :reason "port 7910: handshake never completed")))))
@@ -277,12 +277,37 @@
     (should (equal "42" result))
     (should (equal 0 interrupts)))))
 
+(ert-deftest hive-mcp-cider-eval-test-pinned-connection-wins-over-current-repl nil "A pinned connection is handed to nREPL explicitly, even when sesman's\ncurrent REPL is another (the coordinator's) connection." (cl-letf (((symbol-function 'nrepl-dict-get) (function hive-mcp-cider-eval-test--alist-dict-get))) (let* ((coord (generate-new-buffer " *coordinator-repl*"))
+        (spawned (generate-new-buffer " *spawned-repl*"))
+        (received nil))
+    (unwind-protect
+    (cl-letf (((symbol-function 'cider-current-repl) (lambda (&rest _)
+    coord)) ((symbol-function 'cider-nrepl-request:eval) (lambda (_code callback &optional _ns _line _col _extra connection)
+    (setq received connection)
+    (funcall callback (list (cons "id" "1") (cons "value" "ok") (cons "status" (list "done"))))))) (should (equal "ok" (hive-mcp-cider-eval-eval-with-heartbeat "(+ 1 2)" 5 spawned))))
+  (kill-buffer coord)
+  (kill-buffer spawned))
+    (should (eq spawned received)))))
+
+(ert-deftest hive-mcp-cider-eval-test-eval-in-session-pins-its-buffer nil "eval-in-session sends to the session's registered buffer, not the current REPL." (cl-letf (((symbol-function 'nrepl-dict-get) (function hive-mcp-cider-eval-test--alist-dict-get))) (let* ((coord (generate-new-buffer " *coordinator-repl*"))
+        (spawned (generate-new-buffer " *spawned-repl*"))
+        (received nil))
+    (unwind-protect
+    (cl-letf (((symbol-function 'cider-current-repl) (lambda (&rest _)
+    coord)) ((symbol-function 'hive-mcp-cider-sessions-lookup) (lambda (_name)
+    (list :status 'connected :cider-buffer (buffer-name spawned)))) ((symbol-function 'cider-nrepl-request:eval) (lambda (_code callback &optional _ns _line _col _extra connection)
+    (setq received connection)
+    (funcall callback (list (cons "id" "1") (cons "value" "ok") (cons "status" (list "done"))))))) (should (equal "ok" (hive-mcp-cider-eval-eval-in-session "spawned" "(+ 1 2)" 5))))
+  (kill-buffer coord)
+  (kill-buffer spawned))
+    (should (eq spawned received)))))
+
 (ert-deftest hive-mcp-cider-eval-test-cljw-receives-source-verbatim nil "A cljw session receives CODE unchanged, in exactly ONE eval.\nThe bridge used to split a top-level `do' with the EMACS LISP reader and\nre-print each child. `{' is not a delimiter in Emacs Lisp, so a map literal\nshattered into the two symbols `{:control' and `zz}' and went out as two\nevals; cljw read `zz}' on its own and reported `Unexpected delimiter'.\nClojure text is not Emacs Lisp text - the runtime is the only reader." (let* ((buf (generate-new-buffer " *cljw-repl*"))
         (sent nil)
         (code "(do\n  (def zz 1)\n  {:control zz})"))
     (unwind-protect
     (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup) (lambda (_name)
-    (list :status 'connected :cider-buffer buf :repl-type 'cljw))) ((symbol-function 'hive-mcp-cider-eval-eval-with-heartbeat) (lambda (c _timeout)
+    (list :status 'connected :cider-buffer buf :repl-type 'cljw))) ((symbol-function 'hive-mcp-cider-eval-eval-with-heartbeat) (lambda (c _timeout &optional _conn)
     (setq sent (cons c sent))
     "ok"))) (should (equal "ok" (hive-mcp-cider-eval-eval-in-session "w" code))))
   (kill-buffer buf))
@@ -294,7 +319,7 @@
         (code "(do (require '[clojure.string :as s]) (s/upper-case \"x\"))"))
     (unwind-protect
     (cl-letf (((symbol-function 'hive-mcp-cider-sessions-lookup) (lambda (_name)
-    (list :status 'connected :cider-buffer buf :repl-type rt))) ((symbol-function 'hive-mcp-cider-eval-eval-with-heartbeat) (lambda (c _timeout)
+    (list :status 'connected :cider-buffer buf :repl-type rt))) ((symbol-function 'hive-mcp-cider-eval-eval-with-heartbeat) (lambda (c _timeout &optional _conn)
     (setq sent (cons c sent))
     "ok"))) (hive-mcp-cider-eval-eval-in-session "s" code))
   (kill-buffer buf))

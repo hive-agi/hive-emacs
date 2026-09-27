@@ -162,16 +162,17 @@
     (ignore-errors (nrepl-request:interrupt request-id (lambda (_response)
     nil) connection) t)))
 
-(defun hive-mcp-cider-eval-eval-with-heartbeat (code &optional timeout-override)
-  "Evaluate CODE and return its result string, or signal on timeout.\nOptional TIMEOUT-OVERRIDE in seconds (default: `hive-mcp-cider-eval-timeout').\n\nContract: the nREPL request is asynchronous but this call is SYNCHRONOUS — it\npolls `accept-process-output' every `hive-mcp-cider-eval-poll-interval' and\nblocks the Emacs command loop until the response is complete, which is what the\nheadless MCP backend needs from a request/response tool call. Do not call it\nfrom inside another eval running in this same Emacs.\n\nAsync state lives in a closure-local eval-state vector (see `make-eval-state');\nthe callback folds each nREPL response into it via `apply-response', and\n`finalize-eval-state' turns the completed state into the result string —\nexecuting compiled cljel locally in Emacs when the session is cljel-active.\nOn timeout an nREPL interrupt is sent for the pending request so the server\nstops evaluating and the session is not left wedged."
+(defun hive-mcp-cider-eval-eval-with-heartbeat (code &optional timeout-override connection-override)
+  "Evaluate CODE and return its result string, or signal on timeout.\nOptional TIMEOUT-OVERRIDE in seconds (default: `hive-mcp-cider-eval-timeout').\nOptional CONNECTION-OVERRIDE is the REPL buffer the request MUST go to; it is\nhanded to `cider-nrepl-request:eval' explicitly, so sesman's notion of the\ncurrent REPL (which may be the coordinator's) is never consulted. Without it\nthe request goes to `cider-current-repl'.\n\nContract: the nREPL request is asynchronous but this call is SYNCHRONOUS — it\npolls `accept-process-output' every `hive-mcp-cider-eval-poll-interval' and\nblocks the Emacs command loop until the response is complete, which is what the\nheadless MCP backend needs from a request/response tool call. Do not call it\nfrom inside another eval running in this same Emacs.\n\nAsync state lives in a closure-local eval-state vector (see `make-eval-state');\nthe callback folds each nREPL response into it via `apply-response', and\n`finalize-eval-state' turns the completed state into the result string —\nexecuting compiled cljel locally in Emacs when the session is cljel-active.\nOn timeout an nREPL interrupt is sent for the pending request so the server\nstops evaluating and the session is not left wedged."
   (let* ((st (hive-mcp-cider-eval-make-eval-state))
         (id-cell (make-vector 1 nil))
-        (connection (hive-mcp-cider-eval--current-connection)))
-    (cider-nrepl-request:eval code (lambda (response)
+        (connection (or connection-override (hive-mcp-cider-eval--current-connection)))
+        (callback (lambda (response)
     (let* ((id (nrepl-dict-get response "id")))
     (when id
     (aset id-cell 0 id)))
-    (hive-mcp-cider-eval-apply-response st response)))
+    (hive-mcp-cider-eval-apply-response st response))))
+    (if connection-override (cider-nrepl-request:eval code callback nil nil nil nil connection-override) (cider-nrepl-request:eval code callback))
     (unless (aref id-cell 0)
     (aset id-cell 0 (hive-mcp-cider-eval--connection-request-id connection)))
     (let* ((start-time (float-time))
@@ -192,7 +193,7 @@
   (and (eq (plist-get session :repl-type) 'cljel) (eq (plist-get session :cljel-upgrade) 'failed) t))
 
 (defun hive-mcp-cider-eval-eval-in-session (name code &optional timeout)
-  "Evaluate CODE in the CIDER session NAME.\nOptional TIMEOUT in seconds (default: `hive-mcp-cider-eval-timeout').\nUses the synchronous heartbeat poll of `eval-with-heartbeat'.\nRefuses any session that is not 'connected (surfacing its registry :reason)\nand any cljel session whose upgrade did not confirm.\nCODE reaches the runtime verbatim, whatever the session's repl-type."
+  "Evaluate CODE in the CIDER session NAME.\nOptional TIMEOUT in seconds (default: `hive-mcp-cider-eval-timeout').\nUses the synchronous heartbeat poll of `eval-with-heartbeat', pinned to the\nsession's own REPL buffer as the explicit nREPL connection.\nRefuses any session that is not 'connected (surfacing its registry :reason)\nand any cljel session whose upgrade did not confirm.\nCODE reaches the runtime verbatim, whatever the session's repl-type."
   (let* ((session (hive-mcp-cider-sessions-lookup name))
         (cider-buf (plist-get session :cider-buffer)))
     (unless session
@@ -205,7 +206,7 @@
     (ignore-errors (hive-mcp-cider-sessions-update-prop name :status 'stale))
     (error "Session '%s' REPL buffer is gone" name))
     (with-current-buffer cider-buf
-    (hive-mcp-cider-eval-eval-with-heartbeat code timeout))))
+    (hive-mcp-cider-eval-eval-with-heartbeat code timeout (get-buffer cider-buf)))))
 
 (defun hive-mcp-cider-eval-eval-silent (code &optional timeout)
   "Evaluate CODE via CIDER silently, return result.\nOptional TIMEOUT in seconds.\nAuto-connects if not connected, reusing existing session if available; when the\nconnection cannot be established the error carries the connectivity diagnosis\n(closed socket vs. an nREPL that never completed the CIDER handshake)."
