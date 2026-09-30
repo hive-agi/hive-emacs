@@ -18,10 +18,12 @@
 
 (def FeatureName
   "An Emacs feature symbol, without the leading quote. The same charset the
-   host's addon doctor accepts for its feature expectations."
+   host's addon doctor accepts for its feature expectations. Anchored with
+   \\z, not $: malli :re is a re-find and Java's $ also matches before a
+   final line terminator, which would let \"foo\\n\" through."
   [:and
    [:string {:min 1 :max 256}]
-   [:re #"^[A-Za-z0-9][A-Za-z0-9+*./_:@~-]*$"]])
+   [:re #"^[A-Za-z0-9][A-Za-z0-9+*./_:@~-]*\z"]])
 
 (defn feature-code
   "(featurep 'FEATURE): is FEATURE loaded in this Emacs."

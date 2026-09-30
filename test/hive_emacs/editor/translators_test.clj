@@ -46,6 +46,10 @@
               {:op :editor/feature? :feature "x) (delete-file \"/\""}
               {:op :editor/feature? :feature "a b"}
               {:op :editor/feature? :feature "x\n(kill-emacs)"}
+              ;; a TRAILING line terminator: Java's $ matches before it, \z does not
+              {:op :editor/feature? :feature "foo\n"}
+              {:op :editor/feature? :feature "foo\r\n"}
+              {:op :editor/feature? :feature "foo\u0085"}
               {:op :editor/feature? :feature (apply str (repeat 257 "a"))}
               {:op :editor/eval :code "(kill-emacs)"}]]
     (is (contains? (vcore/plan registry emacs op) :error) (pr-str op))))
