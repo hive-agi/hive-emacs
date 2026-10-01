@@ -39,7 +39,7 @@
 (def ParamKey
   "A key an op may draw its RPC arguments from."
   [:enum :code :symbol :prefix :package :pattern :filename :form :level :n
-   :external-only :case-sensitive])
+   :external-only :case-sensitive :search-docs :privates])
 
 ;;; =============================================================================
 ;;; Profile — the measured behaviour of one backend, as data
@@ -115,6 +115,15 @@
 ;;; Request / plan / result
 ;;; =============================================================================
 
+(def Target
+  "Where on the transport a request runs. :target/buffer names the REPL buffer
+   to issue it from (a named session); absent means the current connection.
+   :target/refuse-repl-types lists REPL types the request must not be sent to:
+   the boundary answers :refused instead, so the caller can serve it another way."
+  [:map {:closed true}
+   [:target/buffer {:optional true} :string]
+   [:target/refuse-repl-types {:optional true} [:vector :string]]])
+
 (def Request
   "A caller's intent, before any backend is consulted. Modelled permissively:
    MCP hands every param through as a string."
@@ -123,6 +132,7 @@
    [:req/backend BackendId]
    [:req/params {:optional true} [:map-of ParamKey :any]]
    [:req/lang {:optional true} Lang]
+   [:req/target {:optional true} Target]
    [:req/timeout-ms {:optional true} pos-int?]])
 
 (def Call
@@ -133,6 +143,7 @@
    [:call/args [:vector :any]]
    [:call/transport {:optional true} Transport]
    [:call/wire-keys {:optional true} [:vector :string]]
+   [:call/target {:optional true} Target]
    [:call/shape [:enum :string :string-pair :plist :plist-list :completion-list
                  :flex-list :any]]
    [:call/timeout-ms pos-int?]])
@@ -176,6 +187,7 @@
    :hive-emacs.repl/param-key ParamKey
    :hive-emacs.repl/rpc-name RpcName
    :hive-emacs.repl/transport Transport
+   :hive-emacs.repl/target Target
    :hive-emacs.repl/op Op
    :hive-emacs.repl/lang-wrapper LangWrapper
    :hive-emacs.repl/profile Profile

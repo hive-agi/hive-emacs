@@ -102,21 +102,26 @@
           "    (error (list :error (error-message-string hive--err)))))")
      (pr-str lisp-source) secs secs)))
 
-(m/=> nrepl-value [:=> [:cat :any] :string])
+(m/=> nrepl-value [:=> [:cat :any] [:maybe :string]])
 
 (defn nrepl-value
-  "VALUE as an elisp literal for an nREPL request field: integers stay
+  "VALUE as an elisp literal for an nREPL request field, or nil when the field
+   is to be omitted. nil and false omit it, true sends \"t\", integers stay
    integers, everything else is sent as a string."
   [value]
-  (if (integer? value)
-    (str value)
-    (pr-str (if (keyword? value) (name value) (str value)))))
+  (cond
+    (or (nil? value) (false? value)) nil
+    (true? value) "\"t\""
+    (integer? value) (str value)
+    (keyword? value) (pr-str (name value))
+    :else (pr-str (str value))))
 
 (m/=> nrepl-request-form [:=> [:cat schema/Call] :string])
 
 (defn nrepl-request-form
-  "CALL as an elisp list literal: an nREPL request whose op is the part of
-   :call/rpc after the slash, each argument keyed by :call/wire-keys. Throws
+  "CALL as an elisp form building an nREPL request: the op is the part of
+   :call/rpc after the slash, each argument keyed by :call/wire-keys (omitted
+   when its value is nil or false), plus the REPL's current namespace. Throws
    when an argument has no wire key."
   [{:call/keys [rpc args wire-keys]}]
   (let [op (subs rpc (inc (str/index-of rpc "/")))
@@ -125,43 +130,74 @@
       (throw (ex-info "nREPL call has an argument with no wire key"
                       {:rpc rpc :args args :wire-keys ks})))
     (str "(list \"op\" " (pr-str op)
-         (apply str (map (fn [k v] (str " " (pr-str k) " " (nrepl-value v))) ks args))
-         ")")))
+         (apply str (keep (fn [[k v]]
+                            (when-let [lit (nrepl-value v)]
+                              (str " " (pr-str k) " " lit)))
+                          (map vector ks args)))
+         " \"ns\" (cider-current-ns))")))
 
-(m/=> nrepl-bounded-elisp [:=> [:cat :string pos-int?] :string])
+(m/=> nrepl-bounded-elisp [:=> [:cat :string pos-int? [:maybe schema/Target]] :string])
 
 (defn nrepl-bounded-elisp
-  "Elisp sending REQUEST-FORM on the current CIDER connection and awaiting its
-   \"done\" status for at most TIMEOUT-MS.
+  "Elisp sending REQUEST-FORM on a CIDER connection and awaiting its \"done\"
+   status for at most TIMEOUT-MS. TARGET picks the REPL buffer to send from
+   (absent: the current connection) and REPL types to refuse.
 
-   Yields (:ok ALIST), (:timeout SECS) or (:error MSG). The alist merges every
-   response: string fields concatenate, others keep their last value."
-  [request-form timeout-ms]
+   Yields a JSON string, one of {\"ok\": MERGED}, {\"timeout\": SECS},
+   {\"error\": MSG} or {\"refused\": REPL-TYPE}. MERGED folds every response:
+   strings concatenate, statuses accumulate, others keep their last value;
+   nREPL dicts become objects and lists become arrays."
+  [request-form timeout-ms {:target/keys [buffer refuse-repl-types]}]
   (let [secs (max 1 (long (Math/ceil (/ (double timeout-ms) 1000.0))))]
     (format
-     (str "(let ((hive--done nil) (hive--acc nil) (hive--result nil))"
-          "  (condition-case hive--err"
-          "      (progn"
-          "        (cider-nrepl-send-request %s"
-          "          (lambda (r) (push r hive--acc)"
-          "            (when (member \"done\" (nrepl-dict-get r \"status\")) (setq hive--done t)))"
-          "          (cider-current-repl) nil)"
-          "        (with-timeout (%d (setq hive--result (list :timeout %d)))"
-          "          (while (not hive--done) (accept-process-output nil 0.05)))"
-          "        (or hive--result"
-          "            (let (hive--m)"
-          "              (dolist (r (nreverse hive--acc))"
-          "                (nrepl-dict-map"
-          "                 (lambda (k v)"
-          "                   (unless (member k '(\"id\" \"session\" \"status\"))"
-          "                     (let ((cell (assoc k hive--m)))"
-          "                       (cond ((and cell (stringp v) (stringp (cdr cell)))"
-          "                              (setcdr cell (concat (cdr cell) v)))"
-          "                             (cell (setcdr cell v))"
-          "                             (t (push (cons k v) hive--m))))))"
-          "                 r))"
-          "              (list :ok (nreverse hive--m)))))"
-          "    (error (list :error (error-message-string hive--err)))))")
+     (str "(progn (require 'json) (require 'cl-lib)"
+          " (cl-labels ((hive--conv (v)"
+          "               (cond ((nrepl-dict-p v)"
+          "                      (let (a) (nrepl-dict-map (lambda (k x) (push (cons k (hive--conv x)) a)) v)"
+          "                        (or (nreverse a) (make-hash-table))))"
+          "                     ((and v (listp v)) (vconcat (mapcar #'hive--conv v)))"
+          "                     (t v))))"
+          "  (let ((hive--buf %s) (hive--refuse '%s))"
+          "   (json-encode"
+          "    (if (not (buffer-live-p hive--buf))"
+          "        (list (cons \"error\" %s))"
+          "      (with-current-buffer hive--buf"
+          "        (let* ((hive--conn (cider-current-repl))"
+          "               (hive--type (and hive--conn"
+          "                                (format \"%%s\" (buffer-local-value 'cider-repl-type hive--conn)))))"
+          "          (cond"
+          "           ((null hive--conn) (list (cons \"error\" \"CIDER not connected\")))"
+          "           ((member hive--type hive--refuse) (list (cons \"refused\" hive--type)))"
+          "           (t"
+          "            (let ((hive--done nil) (hive--acc nil) (hive--result nil))"
+          "              (condition-case hive--err"
+          "                  (progn"
+          "                    (cider-nrepl-send-request %s"
+          "                      (lambda (r) (push r hive--acc)"
+          "                        (when (member \"done\" (nrepl-dict-get r \"status\")) (setq hive--done t)))"
+          "                      hive--conn nil)"
+          "                    (with-timeout (%d (setq hive--result (list (cons \"timeout\" %d))))"
+          "                      (while (not hive--done) (accept-process-output nil 0.05)))"
+          "                    (or hive--result"
+          "                        (let (hive--m)"
+          "                          (dolist (r (nreverse hive--acc))"
+          "                            (nrepl-dict-map"
+          "                             (lambda (k v)"
+          "                               (unless (member k '(\"id\" \"session\"))"
+          "                                 (let ((cell (assoc k hive--m)))"
+          "                                   (cond ((and cell (equal k \"status\"))"
+          "                                          (setcdr cell (append (cdr cell) v)))"
+          "                                         ((and cell (stringp v) (stringp (cdr cell)))"
+          "                                          (setcdr cell (concat (cdr cell) v)))"
+          "                                         (cell (setcdr cell v))"
+          "                                         (t (push (cons k v) hive--m))))))"
+          "                             r))"
+          "                          (list (cons \"ok\" (mapcar (lambda (c) (cons (car c) (hive--conv (cdr c))))"
+          "                                                     (nreverse hive--m)))))))"
+          "                (error (list (cons \"error\" (error-message-string hive--err)))))))))))))))")
+     (if buffer (str "(get-buffer " (pr-str buffer) ")") "(current-buffer)")
+     (pr-str (apply list refuse-repl-types))
+     (pr-str (str "REPL buffer " buffer " is gone"))
      request-form secs secs)))
 
 (defmulti call-elisp
@@ -174,7 +210,8 @@
 
 (defmethod call-elisp :nrepl
   [call]
-  (nrepl-bounded-elisp (nrepl-request-form call) (:call/timeout-ms call)))
+  (nrepl-bounded-elisp (nrepl-request-form call) (:call/timeout-ms call)
+                       (:call/target call)))
 
 ;;; =============================================================================
 ;;; Execution

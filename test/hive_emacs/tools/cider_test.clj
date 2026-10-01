@@ -7,7 +7,8 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [hive-emacs.tools.cider :as cider]
-            [hive-emacs.cider.spawn :as spawn]))
+            [hive-emacs.cider.spawn :as spawn]
+            [clojure.data.json :as json]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -148,41 +149,70 @@
 ;;; eval — session routing + auto-connect spawn
 ;;; =============================================================================
 
+(defn- session-entry
+  "A registry row: a bare name is a connected clj session whose REPL buffer is
+   \"*repl NAME*\"; a map overrides any of those fields."
+  [s]
+  (merge {:status "connected" :repl-type "clj"}
+         (if (string? s) {:name s :cider-buffer (str "*repl " s "*")} s)))
+
+(def ^:private ok-info-envelope
+  "{\"ok\":{\"name\":\"map\",\"ns\":\"clojure.core\",\"doc\":\"d\",\"arglists-str\":\"[f coll]\",\"status\":[\"done\"]}}")
+
+(defn- bridge-session
+  "The session argument of the bridge introspection call in CODE: the last
+   argument when it is a string, else :default."
+  [code]
+  (let [args (second (re-find #"\(hive-mcp-cider-(?:doc|info|complete|apropos) ([^()]*)\)" code))]
+    (or (second (re-find #"\"([^\"]+)\"\s*$" (str args))) :default)))
+
 (defn- registry-stub
   "A stub *eval-fn* standing in for Emacs + nREPL: SESSIONS is the registry
-   listing (a seq of session names, all connected). Each eval-in-session call
-   is recorded in :received as the connection (session name) it was addressed
-   to; any eval that is NOT addressed to a named session is recorded as
-   :default, the coordinator's connection."
-  [sessions]
-  (let [received (atom [])
-        calls (atom [])
-        sessions-json (str "[" (str/join "," (map #(str "{\"name\":\"" % "\",\"status\":\"connected\"}")
-                                                  sessions))
-                           "]")
-        respond (fn [code]
-                  (swap! calls conj code)
-                  (cond
-                    (str/includes? code "hive-mcp-cider-list-sessions")
-                    {:success true :result sessions-json}
+   listing (names or registry rows). Each eval-in-session call is recorded in
+   :received as the session it was addressed to; an eval NOT addressed to a
+   named session as :default. A bounded nREPL request is recorded as
+   [:nrepl buffer-or-:current] and answered by NREPL (code -> envelope JSON);
+   a bridge introspection call as [:bridge session-or-:default]."
+  ([sessions] (registry-stub sessions (constantly ok-info-envelope)))
+  ([sessions nrepl]
+   (let [received (atom [])
+         calls (atom [])
+         sessions-json (str "[" (str/join "," (map (fn [s]
+                                                      (let [{:keys [name status repl-type cider-buffer]} (session-entry s)]
+                                                        (str "{\"name\":\"" name "\",\"status\":\"" status
+                                                             "\",\"repl-type\":\"" repl-type "\""
+                                                             (when cider-buffer (str ",\"cider-buffer\":\"" cider-buffer "\""))
+                                                             "}")))
+                                                    sessions))
+                            "]")
+         respond (fn [code]
+                   (swap! calls conj code)
+                   (cond
+                     (str/includes? code "hive-mcp-cider-list-sessions")
+                     {:success true :result sessions-json}
 
-                    (str/includes? code "hive-mcp-cider-eval-in-session")
-                    (let [target (second (re-find #"hive-mcp-cider-eval-in-session\s+\"([^\"]+)\"" code))]
-                      (swap! received conj target)
-                      {:success true :result (str "ran-in:" target)})
+                     (str/includes? code "cider-nrepl-send-request")
+                     (do (swap! received conj [:nrepl (or (second (re-find #"\(get-buffer \"([^\"]+)\"\)" code))
+                                                          :current)])
+                         {:success true :result (nrepl code)})
 
-                    (re-find #"hive-mcp-cider-(eval-silent|eval-explicit)" code)
-                    (do (swap! received conj :default)
-                        {:success true :result "ran-in:default"})
+                     (str/includes? code "hive-mcp-cider-eval-in-session")
+                     (let [target (second (re-find #"hive-mcp-cider-eval-in-session\s+\"([^\"]+)\"" code))]
+                       (swap! received conj target)
+                       {:success true :result (str "ran-in:" target)})
 
-                    (re-find #"hive-mcp-cider-(doc|info|complete|apropos)" code)
-                    (do (swap! received conj (or (second (re-find #"\"([^\"]+)\"\)*\s*$" code)) :default))
-                        {:success true :result "\"{}\""})
+                     (re-find #"hive-mcp-cider-(eval-silent|eval-explicit)" code)
+                     (do (swap! received conj :default)
+                         {:success true :result "ran-in:default"})
 
-                    :else {:success true :result "\"{}\""}))]
-    {:received received
-     :calls calls
-     :eval-fn (fn ([code] (respond code)) ([code _timeout-ms] (respond code)))}))
+                     (re-find #"hive-mcp-cider-(doc|info|complete|apropos)" code)
+                     (do (swap! received conj [:bridge (bridge-session code)])
+                         {:success true :result "{\"bridge\":true}"})
+
+                     :else {:success true :result "\"{}\""}))]
+     {:received received
+      :calls calls
+      :eval-fn (fn ([code] (respond code)) ([code _timeout-ms] (respond code)))})))
 
 (deftest eval-routes-to-named-session
   (let [{:keys [received eval-fn]} (registry-stub ["coord" "s1"])]
@@ -225,16 +255,57 @@
       (is (empty? @received) "no connection received anything"))))
 
 (deftest named-introspection-reaches-the-named-session
-  (let [{:keys [calls eval-fn]} (registry-stub ["coord" "s1"])]
+  (let [{:keys [received calls eval-fn]} (registry-stub ["coord" "s1"])]
     (binding [cider/*eval-fn* eval-fn]
       (doseq [resp [(cider/handle-doc {:symbol "map" :session_name "s1"})
                     (cider/handle-info {:symbol "map" :session_name "s1"})
                     (cider/handle-complete {:prefix "ma" :session_name "s1"})
                     (cider/handle-apropos {:pattern "ma" :session_name "s1"})]]
-        (is (not (:isError resp))))
-      (let [sent (remove #(str/includes? % "list-sessions") @calls)]
-        (is (= 4 (count sent)))
-        (is (every? #(str/includes? % "\"s1\"") sent))))))
+        (is (not (:isError resp)) (pr-str resp)))
+      (is (= (repeat 4 [:nrepl "*repl s1*"]) @received)
+          "each verb went to s1's REPL buffer over the bounded boundary, nowhere else")
+      (is (every? #(str/includes? % "with-timeout")
+                  (filter #(str/includes? % "cider-nrepl-send-request") @calls))))))
+
+(deftest introspection-keeps-its-json-shape
+  (let [{:keys [eval-fn]} (registry-stub ["s1"])]
+    (binding [cider/*eval-fn* eval-fn]
+      (is (= {"doc" "d" "arglists" "[f coll]" "ns" "clojure.core" "name" "map" "file" "" "line" 0}
+             (json/read-str (:text (cider/handle-doc {:symbol "map" :session_name "s1"})))))
+      (is (= {"name" "map" "ns" "clojure.core" "doc" "d" "arglists" "[f coll]"}
+             (json/read-str (:text (cider/handle-info {:symbol "map" :session_name "s1"}))))))))
+
+(deftest a-cljel-session-is-introspected-by-the-bridge
+  (let [{:keys [received eval-fn]}
+        (registry-stub [{:name "el" :repl-type "cljel" :cider-buffer "*repl el*"}])]
+    (binding [cider/*eval-fn* eval-fn]
+      (is (= "{\"bridge\":true}" (:text (cider/handle-doc {:symbol "car" :session_name "el"}))))
+      (is (= [[:bridge "el"]] @received)
+          "its symbols live in Emacs, so no nREPL request is sent"))))
+
+(deftest a-session-without-a-repl-buffer-falls-back-to-the-bridge
+  (let [{:keys [received eval-fn]}
+        (registry-stub [{:name "gone" :repl-type "clj" :cider-buffer nil}])]
+    (binding [cider/*eval-fn* eval-fn]
+      (cider/handle-doc {:symbol "map" :session_name "gone"})
+      (is (= [[:bridge "gone"]] @received)))))
+
+(deftest the-current-connection-refuses-cljel-and-falls-back
+  (let [{:keys [received calls eval-fn]}
+        (registry-stub [] (constantly "{\"refused\":\"cljel\"}"))]
+    (binding [cider/*eval-fn* eval-fn]
+      (is (= "{\"bridge\":true}" (:text (cider/handle-info {:symbol "car"}))))
+      (is (= [[:nrepl :current] [:bridge :default]] @received))
+      (is (str/includes? (first (filter #(str/includes? % "cider-nrepl-send-request") @calls))
+                         "(\"cljel\")")
+          "the boundary is told which REPL types to refuse"))))
+
+(deftest an-unanswered-request-is-a-bounded-error
+  (let [{:keys [eval-fn]} (registry-stub ["s1"] (constantly "{\"timeout\":10}"))]
+    (binding [cider/*eval-fn* eval-fn]
+      (let [resp (cider/handle-complete {:prefix "ma" :session_name "s1"})]
+        (is (:isError resp))
+        (is (str/includes? (:text resp) "no reply within 10s"))))))
 
 (deftest resolve-named-session-lists-known-sessions
   (is (= {:ok "a"} (select-keys (cider/resolve-named-session [{:name "a"}] "a") [:ok])))
@@ -359,11 +430,11 @@
 ;;; =============================================================================
 
 (deftest doc-omits-blank-session
-  (let [{:keys [calls eval-fn]} (ok-stub)]
+  (let [{:keys [received eval-fn]} (registry-stub ["s1"])]
     (binding [cider/*eval-fn* eval-fn]
       (cider/handle-doc {:symbol "map" :session_name "  "})
-      (is (str/includes? (first @calls) "hive-mcp-cider-doc"))
-      (is (str/includes? (first @calls) "\"map\" nil")))))
+      (is (= [[:nrepl :current]] @received)
+          "a blank name targets the current connection, without a registry lookup"))))
 
 ;;; =============================================================================
 ;;; connect — boundary validation

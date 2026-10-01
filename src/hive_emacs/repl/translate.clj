@@ -106,7 +106,7 @@
    Returns a Result: ok wraps a schema/Plan, err carries a schema/Failure. The
    plan's :plan/prelude lists modules the boundary must ensure are loaded
    before the call is issued."
-  [{:req/keys [verb backend params lang timeout-ms] :or {params {}}}]
+  [{:req/keys [verb backend params lang target timeout-ms] :or {params {}}}]
   (if-let [prof (profile/profile backend)]
     (if-let [op (get-in prof [:profile/ops verb])]
       (let [wrapper (lang-wrapper prof lang verb)
@@ -123,7 +123,9 @@
                                    (:profile/transport prof)
                                    (assoc :call/transport (:profile/transport prof))
                                    (:op/wire-keys op)
-                                   (assoc :call/wire-keys (:op/wire-keys op)))})
+                                   (assoc :call/wire-keys (:op/wire-keys op))
+                                   (seq target)
+                                   (assoc :call/target target))})
           (fail :missing-param
                 (str "verb " verb " on " backend " requires " v)
                 {:verb verb :param v})))

@@ -20,7 +20,8 @@
             [hive-emacs.repl.profile :as repl-profile]
             [hive-emacs.attention :as attention]
             [hive-emacs.bridge-loader :as bridge]
-            [hive-emacs.cider.spawn :as spawn]))
+            [hive-emacs.cider.spawn :as spawn]
+            [hive-emacs.cider.introspection :as intro]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -395,46 +396,84 @@
   (handle-elisp :cider/status-failed
                 (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-status)))
 
+(def ^:private native-repl-types
+  "REPL types the bridge introspects in Emacs itself rather than over nREPL."
+  ["cljel"])
+
+(defn- bounded-introspection
+  "Result of VERB with REPL-PARAMS run through the bounded nREPL boundary at
+   TARGET, decoded into the verb's usual JSON. FALLBACK (a thunk returning a
+   Result) serves the verb when the boundary refuses the target's REPL type."
+  [verb repl-params target fallback]
+  (let [r (binding [repl/*eval-fn* (fn [elisp timeout-ms] (*eval-fn* elisp timeout-ms))]
+            (repl/run {:req/verb verb
+                       :req/backend :cider
+                       :req/params repl-params
+                       :req/target target}))]
+    (if (result/ok? r)
+      (let [decoded (intro/outcome verb repl-params (:value (:ok r)))]
+        (if (= :cider/refused (:error decoded))
+          (fallback)
+          decoded))
+      (result/err :cider/introspection-failed
+                  {:message (or (:fail/message r) (:message r) (str (:error r)))}))))
+
 (defn- handle-introspection
-  "Run the introspection elisp (BUILD session-or-nil) under CATEGORY. A
+  "Serve introspection VERB with REPL-PARAMS under CATEGORY.
+
+   Clojure REPLs answer through the bounded nREPL boundary. A cljel REPL, whose
+   symbols live in Emacs, is answered by the bridge (BUILD session-or-nil). A
    non-blank SESSION-NAME must resolve in the registry first, else the call is
-   refused with :cider/unknown-session and no elisp is sent; a blank one
+   refused with :cider/unknown-session and nothing is sent; a blank one
    targets the current connection."
-  [category session-name build]
+  [category verb repl-params session-name build]
   (result->mcp
    (try-result category
                (fn []
                  (if-let [session (session-arg session-name)]
-                   (in-named-session session #(elisp->result (build %)))
-                   (elisp->result (build nil)))))))
+                   (result/let-ok [sessions (list-sessions*)
+                                   resolved (resolve-named-session sessions session)]
+                                  (let [entry (first (filter #(= resolved (:name %)) sessions))
+                                        bridge #(elisp->result (build resolved))]
+                                    (if (or (some #{(str (:repl-type entry))} native-repl-types)
+                                            (str/blank? (:cider-buffer entry)))
+                                      (bridge)
+                                      (bounded-introspection verb repl-params
+                                                             {:target/buffer (:cider-buffer entry)}
+                                                             bridge))))
+                   (bounded-introspection verb repl-params
+                                          {:target/refuse-repl-types native-repl-types}
+                                          #(elisp->result (build nil))))))))
 
 (defn handle-doc
   "Docstring for a symbol, inside SESSION_NAME's REPL when given."
   [{:keys [symbol session_name]}]
-  (handle-introspection :cider/doc-failed session_name
+  (handle-introspection :cider/doc-failed :doc {:symbol symbol} session_name
                         #(el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-doc
                                                    symbol %)))
 
 (defn handle-info
   "Full semantic info for a symbol, inside SESSION_NAME's REPL when given."
   [{:keys [symbol session_name]}]
-  (handle-introspection :cider/info-failed session_name
+  (handle-introspection :cider/info-failed :info {:symbol symbol} session_name
                         #(el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-info
                                                    symbol %)))
 
 (defn handle-complete
   "Completions for a prefix, inside SESSION_NAME's REPL when given."
   [{:keys [prefix session_name]}]
-  (handle-introspection :cider/complete-failed session_name
+  (handle-introspection :cider/complete-failed :complete {:prefix prefix} session_name
                         #(el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-complete
                                                    prefix %)))
 
 (defn handle-apropos
   "Search symbols matching a pattern, inside SESSION_NAME's REPL when given."
   [{:keys [pattern search_docs session_name]}]
-  (handle-introspection :cider/apropos-failed session_name
+  (handle-introspection :cider/apropos-failed :apropos
+                        {:pattern pattern :search-docs (boolean search_docs)} session_name
                         #(el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-apropos
                                                    pattern (boolean search_docs) %)))
+
 
 ;;; =============================================================================
 ;;; Session lifecycle handlers

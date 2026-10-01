@@ -253,7 +253,7 @@
 
 (deftest every-cider-request-is-deadline-bounded
   (let [calls (atom [])]
-    (binding [boundary/*eval-fn* (recording-stub calls (constantly {:success true :result '(:ok nil)}))]
+    (binding [boundary/*eval-fn* (recording-stub calls (constantly {:success true :result "{\"ok\":{}}"}))]
       (doseq [verb (profile/capabilities :cider)]
         (let [op (get-in profile/cider-profile [:profile/ops verb])]
           (is (result/ok? (boundary/run {:req/verb verb :req/backend :cider
@@ -261,12 +261,38 @@
               (str verb)))))
     (is (= (count (profile/capabilities :cider)) (count @calls))
         "no prelude on nREPL: one request per verb")
-    (doseq [{:keys [elisp timeout]} @calls]
+    (doseq [{:keys [elisp]} @calls]
       (is (str/includes? elisp "cider-nrepl-send-request"))
       (is (str/includes? elisp "with-timeout"))
       (is (not (str/includes? elisp "cider-nrepl-sync-request"))
-          "a sync request waits with no deadline")
-      (is (= 60000 timeout)))))
+          "a sync request waits with no deadline"))
+    (is (= {10000 4 60000 2} (frequencies (map :timeout @calls)))
+        "introspection gets CIDER's 10s sync budget; eval and status the profile's 60s")))
+
+(deftest a-target-travels-from-request-to-emitted-elisp
+  (let [target {:target/buffer "*repl s1*" :target/refuse-repl-types ["cljel"]}
+        call (:plan/call (:ok (translate/plan {:req/verb :info :req/backend :cider
+                                               :req/params {:symbol "map"} :req/target target})))
+        elisp (boundary/call-elisp call)]
+    (is (= target (:call/target call)))
+    (is (str/includes? elisp "(get-buffer \"*repl s1*\")"))
+    (is (str/includes? elisp "'(\"cljel\")") "refused types are an elisp list, as member needs")
+    (testing "no target means the current buffer and nothing refused"
+      (let [bare (boundary/call-elisp (:plan/call (:ok (translate/plan {:req/verb :info :req/backend :cider
+                                                                         :req/params {:symbol "map"}}))))]
+        (is (str/includes? bare "(current-buffer)"))
+        (is (str/includes? bare "'()"))))))
+
+(deftest nrepl-flags-follow-nrepl-truthiness
+  (is (nil? (boundary/nrepl-value nil)))
+  (is (nil? (boundary/nrepl-value false)))
+  (is (= "\"t\"" (boundary/nrepl-value true)))
+  (let [form #(boundary/nrepl-request-form
+               (:plan/call (:ok (translate/plan {:req/verb :apropos :req/backend :cider
+                                                 :req/params (merge {:pattern "ma"} %)}))))]
+    (is (not (str/includes? (form {}) "docs?")) "an absent flag is omitted, never sent as false")
+    (is (str/includes? (form {}) "\"privates?\" \"t\""))
+    (is (str/includes? (form {:search-docs true}) "\"docs?\" \"t\""))))
 
 (deftest cider-request-deadline-follows-the-request
   (let [calls (atom [])]
