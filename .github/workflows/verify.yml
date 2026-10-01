@@ -58,23 +58,15 @@ jobs:
       - name: Checkout hive-emacs
         uses: actions/checkout@v4
 
-      # The compiler follows clojure-elisp's latest release instead of a pinned
-      # tag: the .el artifacts are rebuilt from src/cljel on every run below, so
-      # a compiler bump never needs a hand-regenerated tree to get past CI.
-      - name: Checkout clojure-elisp
+      # Pinned to the compiler the committed elisp/ was built with (v0.7.2,
+      # runtime feature 'clojure-elisp-runtime, shipped in elisp/). Keep in step
+      # with build.sh's pin.
+      - name: Checkout clojure-elisp v0.7.2
         uses: actions/checkout@v4
         with:
           repository: BuddhiLW/clojure-elisp
-          fetch-depth: 0
+          ref: d638956d165b30c82ec05be46cb85373f18c3a87
           path: .cache/clojure-elisp
-
-      - name: Use the latest clojure-elisp release
-        working-directory: .cache/clojure-elisp
-        run: |
-          TAG=$(git tag --list 'v*' --sort=-v:refname | head -1)
-          test -n "$TAG" || { echo "no clojure-elisp release tag found" >&2; exit 1; }
-          git checkout --quiet "$TAG"
-          echo "clojure-elisp $TAG"
 
       - name: Setup Java
         uses: actions/setup-java@v4
