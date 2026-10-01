@@ -174,27 +174,27 @@ Returns schema vector or nil."
   "Validate VALUE against SCHEMA. PATH is a list of keys for error context.
 Returns list of error strings, or nil if valid."
   (let [typ (-schema-type schema)]
-    (pcase typ
+    (case typ
       ;; Primitive types
-      (:string (-validate-string schema value path))
-      (:int    (-validate-int schema value path))
-      (:boolean nil)  ;; everything is truthy/falsy in elisp
-      (:double (if (numberp value) nil
-                 (list (format "%s: expected number, got %s"
-                               (-path-str path) (type-of value)))))
-      (:keyword (if (keywordp value) nil
-                  (list (format "%s: expected keyword, got %s"
-                                (-path-str path) (type-of value)))))
-      (:any nil)
+      :string (-validate-string schema value path)
+      :int    (-validate-int schema value path)
+      :boolean nil  ;; everything is truthy/falsy in elisp
+      :double (if (numberp value) nil
+                (list (format "%s: expected number, got %s"
+                              (-path-str path) (type-of value))))
+      :keyword (if (keywordp value) nil
+                 (list (format "%s: expected keyword, got %s"
+                               (-path-str path) (type-of value))))
+      :any nil
 
       ;; Compound types
-      (:map    (-validate-map schema value path))
-      (:enum   (-validate-enum schema value path))
-      (:maybe  (-validate-maybe schema value path))
-      (:vector (-validate-vector schema value path))
+      :map    (-validate-map schema value path)
+      :enum   (-validate-enum schema value path)
+      :maybe  (-validate-maybe schema value path)
+      :vector (-validate-vector schema value path)
 
       ;; Unknown — pass through
-      (_ nil))))
+      nil)))
 
 (defn- -validate-string [schema value path]
   "Validate a string value, optionally checking :min/:max length."

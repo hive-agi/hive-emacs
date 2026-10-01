@@ -63,6 +63,7 @@ hive_mcp/graceful.cljel
 hive_mcp/hive_mcp.cljel
 hive_mcp/hivemind.cljel
 hive_mcp/kanban.cljel
+hive_mcp/keyword_dispatch_test.cljel
 hive_mcp/log.cljel
 hive_mcp/memory_thin.cljel
 hive_mcp/schema.cljel

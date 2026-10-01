@@ -170,6 +170,14 @@
   (message "[swarm-tasks] Queue: %s not ready (retry %d/%d)" slave-id (1+ retries) hive-mcp-swarm-dispatch-max-retries)
   :retry)))))
 
+(defun hive-mcp-swarm-tasks--requeue (outcome entry queue)
+  "Return QUEUE with ENTRY pushed when OUTCOME is :retry, retries bumped."
+  (pcase outcome
+  (:retry (progn
+  (plist-put entry :retries (1+ (or (plist-get entry :retries) 0)))
+  (cons entry queue)))
+  (_ queue)))
+
 (defun hive-mcp-swarm-tasks-process-queue ()
   "Process all ready entries in the dispatch queue.\nCalled periodically by the queue timer."
   (condition-case err
@@ -178,10 +186,7 @@
         (new-queue '()))
     (setq hive-mcp-swarm-dispatch-queue nil)
     (dolist (entry current-queue)
-    (pcase (hive-mcp-swarm-tasks--process-queue-entry entry)
-  ('retry (plist-put entry :retries (1+ (plist-get entry :retries))) (push entry new-queue))
-  ('success nil)
-  ('failed nil)))
+    (setq new-queue (hive-mcp-swarm-tasks--requeue (hive-mcp-swarm-tasks--process-queue-entry entry) entry new-queue)))
     (setq hive-mcp-swarm-dispatch-queue (nreverse new-queue))
     (when (null hive-mcp-swarm-dispatch-queue)
     (hive-mcp-swarm-tasks-stop-queue-processor))))

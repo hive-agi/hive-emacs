@@ -1,0 +1,114 @@
+(ns hive-mcp-keyword-dispatch-test
+  "ERT tests: keyword dispatch in the shipped modules reaches every arm.
+
+Run:
+  bb test:ert"
+  (:require [cl-lib]))
+
+(require 'ert)
+(require 'hive-mcp-schema)
+(require 'hive-mcp-workflows)
+(require 'hive-mcp-swarm-tasks)
+
+;; ============================================================================
+;; hive-mcp-schema — validate-inline dispatches on the schema type keyword
+;; ============================================================================
+
+(defn- -v [& items]
+  "Build a schema vector from ITEMS."
+  (vconcat items))
+
+(ert-deftest hive-mcp-keyword-dispatch-test-schema-primitives nil
+  "Each primitive type rejects a wrong value and accepts a right one."
+  (should (hive-mcp-schema-validate-inline :string 42))
+  (should-not (hive-mcp-schema-validate-inline :string "ok"))
+  (should (hive-mcp-schema-validate-inline :int "x"))
+  (should-not (hive-mcp-schema-validate-inline :int 7))
+  (should (hive-mcp-schema-validate-inline :double "x"))
+  (should-not (hive-mcp-schema-validate-inline :double 1.5))
+  (should (hive-mcp-schema-validate-inline :keyword "x"))
+  (should-not (hive-mcp-schema-validate-inline :keyword :k))
+  (should-not (hive-mcp-schema-validate-inline :boolean nil))
+  (should-not (hive-mcp-schema-validate-inline :any 'whatever)))
+
+(ert-deftest hive-mcp-keyword-dispatch-test-schema-compound nil
+  "Compound types dispatch to their validators."
+  (should (hive-mcp-schema-validate-inline (-v :enum "a" "b") "c"))
+  (should-not (hive-mcp-schema-validate-inline (-v :enum "a" "b") "a"))
+  (should (hive-mcp-schema-validate-inline (-v :maybe :string) 1))
+  (should-not (hive-mcp-schema-validate-inline (-v :maybe :string) nil))
+  (should (hive-mcp-schema-validate-inline (-v :vector :int) "no"))
+  (should-not (hive-mcp-schema-validate-inline (-v :vector :int) '(1 2)))
+  (should (hive-mcp-schema-validate-inline (-v :map (-v :name :string)) '(:name 1)))
+  (should (hive-mcp-schema-validate-inline (-v :map (-v :name :string)) nil))
+  (should-not (hive-mcp-schema-validate-inline (-v :map (-v :name :string)) '(:name "n"))))
+
+(ert-deftest hive-mcp-keyword-dispatch-test-schema-unknown-passes nil
+  "An unknown type tag passes through as valid."
+  (should-not (hive-mcp-schema-validate-inline :no-such-type 1)))
+
+;; ============================================================================
+;; hive-mcp-workflows — step type and on-error dispatch
+;; ============================================================================
+
+(ert-deftest hive-mcp-keyword-dispatch-test-workflow-elisp-step nil
+  "A built-in :elisp step runs instead of signalling an unknown type."
+  (let [env (hive-mcp-workflows--run-step '(:type :elisp :code "(+ 1 2)" :var :r)
+                                          (list :seed 0))]
+    (should (equal 3 (plist-get env :r)))))
+
+(ert-deftest hive-mcp-keyword-dispatch-test-workflow-shell-step nil
+  "A built-in :shell step runs and binds its trimmed output."
+  (let [env (hive-mcp-workflows--run-step '(:type :shell :command "echo hi" :var :out)
+                                          (list :seed 0))]
+    (should (equal "hi" (plist-get env :out)))))
+
+(ert-deftest hive-mcp-keyword-dispatch-test-workflow-unknown-step nil
+  "An unknown step type still signals."
+  (should-error (hive-mcp-workflows--run-step '(:type :bogus) nil)))
+
+(ert-deftest hive-mcp-keyword-dispatch-test-workflow-on-error-stop nil
+  ":on-error :stop aborts at the failing step."
+  (let [r (hive-mcp-workflows--execute
+           (list :on-error :stop
+                 :steps (list '(:type :elisp :code "(error \"boom\")")
+                              '(:type :elisp :code "1" :var :after)))
+           nil)]
+    (should-not (plist-get r :success))
+    (should (equal 1 (plist-get r :failed-step)))
+    (should (equal "boom" (plist-get r :error)))))
+
+(ert-deftest hive-mcp-keyword-dispatch-test-workflow-on-error-default-stops nil
+  "No :on-error defaults to :stop."
+  (let [r (hive-mcp-workflows--execute
+           (list :steps (list '(:type :elisp :code "(error \"boom\")")))
+           nil)]
+    (should-not (plist-get r :success))
+    (should (equal 1 (plist-get r :failed-step)))))
+
+(ert-deftest hive-mcp-keyword-dispatch-test-workflow-on-error-continue nil
+  ":on-error :continue runs the remaining steps."
+  (let [r (hive-mcp-workflows--execute
+           (list :on-error :continue
+                 :steps (list '(:type :elisp :code "(error \"boom\")")
+                              '(:type :elisp :code "2" :var :after)))
+           (list :seed 0))]
+    (should (plist-get r :success))
+    (should (equal 2 (plist-get (plist-get r :env) :after)))))
+
+;; ============================================================================
+;; hive-mcp-swarm-tasks — queue outcome dispatch
+;; ============================================================================
+
+(ert-deftest hive-mcp-keyword-dispatch-test-requeue-on-retry nil
+  ":retry puts the entry back with its retry count bumped."
+  (let [entry (list :slave-id "s" :retries 2)
+        q (hive-mcp-swarm-tasks--requeue :retry entry '())]
+    (should (equal 1 (length q)))
+    (should (equal 3 (plist-get (car q) :retries)))))
+
+(ert-deftest hive-mcp-keyword-dispatch-test-requeue-drops-terminal nil
+  ":success and :failed leave the queue as it was."
+  (let [entry (list :slave-id "s" :retries 0)]
+    (should (null (hive-mcp-swarm-tasks--requeue :success entry '())))
+    (should (null (hive-mcp-swarm-tasks--requeue :failed entry '())))))
