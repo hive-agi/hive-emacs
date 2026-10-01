@@ -402,8 +402,17 @@
     (is (= [["code" "hive.emacs" '("cider")]] @calls))))
 
 (deftest contribute-noops-without-runtime-ports
-  (is (nil? (cider/contribute! nil)))
+  (is (false? (cider/contribute! nil))
+      "no port injected: nothing reaches the host, and the caller is told so")
+  (is (false? (cider/contribute! {:extension/register! (fn [_ _] nil)})))
   (is (nil? (cider/retract! nil))))
+
+(deftest contribute-reports-delivery-through-the-port
+  (let [seen (atom [])]
+    (is (true? (cider/contribute! {:extension/contribute-commands!
+                                   (fn [tool addon-id commands]
+                                     (swap! seen conj [tool addon-id (set (keys commands))]))})))
+    (is (= [["code" "hive.emacs" #{"cider"}]] @seen))))
 
 (deftest retract-uses-injected-runtime-port
   (let [calls (atom [])]
