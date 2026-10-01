@@ -71,16 +71,19 @@
 (defn- elisp->result
   "Execute elisp and convert response to Result.
    {:success true :result r} -> (ok r), {:success false :error e} -> (err ...)
+   An emacsclient timeout carries :timed-out true in the err.
    Optional timeout-ms overrides the default emacsclient timeout."
   ([elisp] (elisp->result elisp nil))
   ([elisp timeout-ms]
-   (let [{:keys [success result error]}
+   (let [{:keys [success result error timed-out]}
          (if timeout-ms
            (*eval-fn* elisp timeout-ms)
            (*eval-fn* elisp))]
      (if success
        (result/ok result)
-       (result/err :cider/elisp-failed {:message (str error)})))))
+       (result/err :cider/elisp-failed
+                   (cond-> {:message (str error)}
+                     timed-out (assoc :timed-out true)))))))
 
 (defn- try-result
   "Execute thunk f returning Result; catch unexpected exceptions as error Result."
@@ -575,6 +578,21 @@
          kept (vec (remove str/blank? entries))]
      (when (seq kept) kept))))
 
+(def ^:private spawn-timeout-hint
+  (str "\nEmacs did not answer in time; it may be busy in a synchronous call."
+       " The spawn may still be starting, so its outcome will arrive as the"
+       " ---CIDER-SPAWN--- block. Do not respawn under the same name."))
+
+(defn watch-timed-out-spawn
+  "Railway step over a spawn Result's err. An emacsclient timeout is not a
+   failed spawn: Emacs may still run it. Watch ACK so the outcome is reported,
+   and say so in the message. Any other Result passes through untouched."
+  [eval-fn ack r]
+  (if (and (result/err? r) (:timed-out r))
+    (do (spawn/watch-spawn! eval-fn ack)
+        (update r :message str spawn-timeout-hint))
+    r))
+
 (defn handle-spawn
   "Spawn a new named CIDER session with its own nREPL server.
    Full CLI surface: extra_args (raw, pre--M), aliases (-M selection),
@@ -582,8 +600,9 @@
    local.deps.edn in the project dir is always auto-detected.
 
    An ok answers \"starting\" and is also WATCHED: the session's outcome
-   arrives on a later tool response as the ---CIDER-SPAWN--- block. An err
-   short-circuits the watch, so nothing is owed for a spawn that never ran."
+   arrives on a later tool response as the ---CIDER-SPAWN--- block. An
+   emacsclient timeout is watched too, since Emacs may still run the spawn;
+   any other err short-circuits the watch."
   [{:keys [name project_dir agent_id repl_type port extra_args aliases extra_deps middleware]}]
   (log/info "cider-spawn" {:name name :repl_type repl_type :agent_id agent_id :port port
                            :aliases aliases})
@@ -600,10 +619,13 @@
                    :extra-args (spawn-list-param extra_args)
                    :aliases    (spawn-list-param aliases #"[,:\s]+")
                    :extra-deps (spawn-list-param extra_deps)
-                   :middleware (spawn-list-param middleware)})]
+                   :middleware (spawn-list-param middleware)})
+          ack {:name name :port port :repl-type (or repl_type "clj")
+               :project-dir project_dir}]
       (result->mcp
        (-> (try-result :cider/spawn-failed #(elisp->result elisp nil))
            (result/map-ok (partial spawn/watch-spawn! *eval-fn*))
+           (->> (watch-timed-out-spawn *eval-fn* ack))
            with-waiting-prompt)))))
 
 (defn handle-connect

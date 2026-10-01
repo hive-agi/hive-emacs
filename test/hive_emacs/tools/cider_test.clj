@@ -6,7 +6,8 @@
    responses per call — no Emacs, no hive-mcp, no nREPL."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
-            [hive-emacs.tools.cider :as cider]))
+            [hive-emacs.tools.cider :as cider]
+            [hive-emacs.cider.spawn :as spawn]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -58,6 +59,37 @@
         (is (str/includes? form ":extra-deps '("))
         (is (str/includes? form "my/lib"))
         (is (str/includes? form ":middleware '(\"refactor-nrepl.middleware/wrap-refactor\")"))))))
+
+(deftest spawn-timeout-is-watched-not-abandoned
+  (let [{:keys [eval-fn]} (make-stub (fn [_] {:success false
+                                              :error "Emacsclient call timed out after 5000ms"
+                                              :timed-out true}))]
+    (spawn/reset-watches!)
+    (try
+      (binding [cider/*eval-fn* eval-fn
+                cider/*attention-fn* (constantly nil)]
+        (let [response (cider/handle-spawn {:name "slow" :project_dir "/p" :port 7990})
+              text (str (:text response) (get-in response [:content 0 :text]))]
+          (is (:isError response))
+          (is (str/includes? text "timed out"))
+          (is (str/includes? text "---CIDER-SPAWN---"))
+          (is (str/includes? text "Do not respawn"))
+          (is (= {:name "slow" :port 7990 :repl-type "clj" :project-dir "/p"}
+                 (select-keys (get (spawn/watches) "slow")
+                              [:name :port :repl-type :project-dir])))))
+      (finally (spawn/reset-watches!)))))
+
+(deftest spawn-hard-failure-is-not-watched
+  (let [{:keys [eval-fn]} (make-stub (fn [_] {:success false :error "void-function"}))]
+    (spawn/reset-watches!)
+    (try
+      (binding [cider/*eval-fn* eval-fn
+                cider/*attention-fn* (constantly nil)]
+        (let [response (cider/handle-spawn {:name "broken" :project_dir "/p"})]
+          (is (:isError response))
+          (is (not (str/includes? (pr-str response) "Do not respawn")))
+          (is (empty? (spawn/watches)))))
+      (finally (spawn/reset-watches!)))))
 
 (deftest spawn-omits-nil-params
   (let [{:keys [calls eval-fn]} (ok-stub)]
