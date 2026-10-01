@@ -19,23 +19,31 @@
 ;;; =============================================================================
 
 (def cider-profile
-  "nREPL, driven through the current CIDER connection. Verbs map to nREPL op
-   names; :op/wire-keys names each positional argument in the request.
+  "nREPL, driven through a CIDER connection. Verbs map to nREPL op names;
+   :op/wire-keys names each positional argument in the request.
 
-   :inspect, :restart and :load-file are absent: CIDER exposes them, but none
-   has been measured through this boundary, and an unmeasured op is not a
-   capability."
+   The introspection ops carry a 10s deadline, CIDER's own sync-request
+   default. :inspect, :restart and :load-file are absent: CIDER exposes them,
+   but none has been measured through this boundary, and an unmeasured op is
+   not a capability."
   {:profile/id :cider
    :profile/label "CIDER (nREPL)"
    :profile/transport :nrepl
    :profile/default-timeout-ms 60000
    :profile/ops
-   {:eval      {:op/rpc "nrepl/eval"        :op/args [:code]    :op/wire-keys ["code"]   :op/shape :plist}
-    :doc       {:op/rpc "nrepl/info"        :op/args [:symbol]  :op/wire-keys ["sym"]    :op/shape :plist}
-    :info      {:op/rpc "nrepl/info"        :op/args [:symbol]  :op/wire-keys ["sym"]    :op/shape :plist}
-    :complete  {:op/rpc "nrepl/completions" :op/args [:prefix]  :op/wire-keys ["prefix"] :op/shape :plist}
-    :apropos   {:op/rpc "nrepl/apropos"     :op/args [:pattern] :op/wire-keys ["query"]  :op/shape :plist}
-    :status    {:op/rpc "nrepl/describe"    :op/args []         :op/wire-keys []         :op/shape :plist}}})
+   {:eval      {:op/rpc "nrepl/eval" :op/args [:code] :op/wire-keys ["code"] :op/shape :plist}
+    :doc       {:op/rpc "nrepl/info" :op/args [:symbol] :op/wire-keys ["sym"]
+                :op/timeout-ms 10000 :op/shape :plist}
+    :info      {:op/rpc "nrepl/info" :op/args [:symbol] :op/wire-keys ["sym"]
+                :op/timeout-ms 10000 :op/shape :plist}
+    :complete  {:op/rpc "nrepl/completions" :op/args [:prefix] :op/wire-keys ["prefix"]
+                :op/timeout-ms 10000 :op/shape :plist}
+    :apropos   {:op/rpc "nrepl/apropos"
+                :op/args [:pattern :search-docs :privates]
+                :op/defaults {:search-docs false :privates true}
+                :op/wire-keys ["query" "docs?" "privates?"]
+                :op/timeout-ms 10000 :op/shape :plist}
+    :status    {:op/rpc "nrepl/describe" :op/args [] :op/wire-keys [] :op/shape :plist}}})
 
 (def slynk-profile
   "SLY/Slynk, driven against a Common Lisp image.

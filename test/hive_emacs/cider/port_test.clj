@@ -42,7 +42,8 @@
         (ports/kill-session p {:session_name "s1"})
         (is (= 3 (count @calls)))
         (is (str/includes? (nth @calls 0) "hive-mcp-cider-status"))
-        (is (str/includes? (nth @calls 1) "hive-mcp-cider-doc"))
+        (is (str/includes? (nth @calls 1) "(list \"op\" \"info\" \"sym\" \"map\"")
+            "doc is served by the bounded nREPL boundary")
         (is (str/includes? (nth @calls 2) "hive-mcp-cider-kill-session"))))))
 
 (deftest dispatch-through-registry
