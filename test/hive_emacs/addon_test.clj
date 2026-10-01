@@ -75,10 +75,13 @@
     (is (= "hive-emacs.addon" (:addon/init-ns spec)))
     (is (= "addon-ctor" (:addon/init-fn spec)))))
 
+(def ^:private contributing-ports
+  {:extension/contribute-commands! (fn [_tool _addon-id _commands] nil)})
+
 (deftest unavailable-bridge-does-not-block-activation
   (with-redefs [bridge/ensure-loaded! (constantly false)
                 client/emacs-running? (constantly true)]
-    (let [instance (emacs-addon/make-addon)
+    (let [instance (emacs-addon/make-addon {:runtime/ports contributing-ports})
           initialized (addon/initialize! instance {})]
       (is (:success? initialized))
       (is (= :emacsclient (get-in initialized [:metadata :editor-id])))
@@ -89,6 +92,23 @@
       (is (contains? (addon/hooks instance) :emacs/vessel))
       (is (nil? (addon/shutdown! instance)))
       (is (ports-clear?)))))
+
+(deftest missing-contribute-port-degrades-health-and-names-the-lost-subtrees
+  (with-redefs [bridge/ensure-loaded! (constantly false)
+                client/emacs-running? (constantly true)]
+    (doseq [runtime-ports [nil {} {:extension/register! (fn [_ _] nil)}]]
+      (let [instance (emacs-addon/make-addon {:runtime/ports runtime-ports})
+            initialized (addon/initialize! instance {})
+            health (addon/health instance)]
+        (is (:success? initialized)
+            "the rest of the addon still activates")
+        (is (= #{"code cider" "emacs attention"}
+               (get-in initialized [:metadata :missing-contributions])))
+        (is (= :degraded (:status health))
+            "an unreachable `code cider` is not a healthy addon")
+        (is (= #{"code cider" "emacs attention"}
+               (get-in health [:details :missing-contributions])))
+        (addon/shutdown! instance)))))
 
 (deftest lifecycle-owns-ports-and-is-idempotent
   (let [ping-fn (fn [daemon-id]

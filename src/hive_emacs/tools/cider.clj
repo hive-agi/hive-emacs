@@ -738,16 +738,18 @@
 (defn contribute!
   "Register the :cider subtree into the host's `code` composite tool and the
    EmacsCiderPort into the hive-spi cider registry. RUNTIME-PORTS is the
-   host-injected port vocabulary (:extension/contribute-commands!) — nil
-   outside a live host, making this a no-op. Idempotent."
+   host-injected port vocabulary (:extension/contribute-commands!). Returns
+   true when the subtree reached the host, false when no port was injected.
+   Idempotent."
   [runtime-ports]
-  (when-let [contribute (:extension/contribute-commands! runtime-ports)]
-    (contribute "code" "hive.emacs" commands)
-    (log/info "hive-emacs: contributed :cider subtree to `code`"
-              {:verbs (keys handlers)}))
   (when-let [register (result/rescue nil (requiring-resolve 'hive-emacs.cider.port/register!))]
     (register))
-  nil)
+  (if-let [contribute (:extension/contribute-commands! runtime-ports)]
+    (do (contribute "code" "hive.emacs" commands)
+        (log/info "hive-emacs: contributed :cider subtree to `code`"
+                  {:verbs (keys handlers)})
+        true)
+    false))
 
 (defn retract!
   "Retract the addon's `code` contributions and the cider port. No-op outside

@@ -197,14 +197,16 @@
 
 (defn contribute!
   "Register `commands` into the host's `emacs` root. RUNTIME-PORTS is the
-   host-injected port vocabulary; nil outside a live host, making this a
-   no-op. Retraction is the addon-wide :extension/retract-contributions!."
+   host-injected port vocabulary. Returns true when contributed, false when no
+   port was injected. Retraction is the addon-wide
+   :extension/retract-contributions!."
   [runtime-ports]
-  (when-let [contribute (:extension/contribute-commands! runtime-ports)]
-    (contribute "emacs" "hive.emacs" commands)
-    (log/info "hive-emacs: contributed attention verbs to `emacs`"
-              {:verbs (keys commands)}))
-  nil)
+  (if-let [contribute (:extension/contribute-commands! runtime-ports)]
+    (do (contribute "emacs" "hive.emacs" commands)
+        (log/info "hive-emacs: contributed attention verbs to `emacs`"
+                  {:verbs (keys commands)})
+        true)
+    false))
 
 (def handlers
   {:eval            handle-eval

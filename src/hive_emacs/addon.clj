@@ -137,6 +137,20 @@
   [runtime-ports]
   (retract-block! runtime-ports spawn/extension-key))
 
+(defn- contribute-subtrees!
+  "Contribute the `code cider` and `emacs` subtrees. Returns the set of
+   subtrees the host did NOT receive; a non-empty set is logged as an error,
+   since those verbs are then unreachable."
+  [runtime-ports]
+  (let [missing (cond-> #{}
+                  (not (cider-tool/contribute! runtime-ports)) (conj "code cider")
+                  (not (emacs-tool/contribute! runtime-ports)) (conj "emacs attention"))]
+    (when (seq missing)
+      (log/error "hive-emacs: host injected no :extension/contribute-commands! port; these subtrees are unreachable"
+                 {:missing missing
+                  :runtime-ports (some-> runtime-ports keys set)}))
+    missing))
+
 (defn- initialize-addon!
   [state seed runtime-config]
   (locking state
@@ -154,8 +168,7 @@
                  (when (:emacs/start-heartbeat? config)
                    (daemon-store/start-heartbeat-loop!)
                    true))
-                _ (cider-tool/contribute! (:runtime/ports config))
-                _ (emacs-tool/contribute! (:runtime/ports config))
+                missing-contributions (contribute-subtrees! (:runtime/ports config))
                 bridge-ready? (ensure-elisp-loaded! eval-fn)
                 attention-block? (boolean
                                   (register-attention-block! (:runtime/ports config) eval-fn))
@@ -169,6 +182,7 @@
                 editor-caps (editor-services/register!)
                 vessel-caps (vessel-dispatch/register!)
                 metadata {:bridge-ready? bridge-ready?
+                          :missing-contributions missing-contributions
                           :attention {:block? attention-block?
                                       :publishing? (boolean attention-publishing?)}
                           :cider-spawn {:block? spawn-block?
@@ -220,8 +234,9 @@
   (let [{:keys [lifecycle metadata errors]} @state]
     (if (= :active lifecycle)
       (try
-        (let [running? (boolean (ec/emacs-running?))]
-          {:status (if running? :ok :degraded)
+        (let [running? (boolean (ec/emacs-running?))
+              contributed? (empty? (:missing-contributions metadata))]
+          {:status (if (and running? contributed?) :ok :degraded)
            :details (merge metadata {:emacs-running? running?})})
         (catch Exception e
           {:status :degraded
