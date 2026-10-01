@@ -109,7 +109,8 @@ Delegates to spawn-session after destructuring."
 ATTEMPT counts the respawns so far. A requested PORT that is already open is
 not used: the next free port is. When the process dies because its port was
 bound first by another JVM, the spawn retries on another port, at most
-`hive-mcp-cider-connection-spawn-port-retries' times."
+`hive-mcp-cider-connection-spawn-port-retries' times; the retry replaces the
+failed attempt's registry entry."
   (let* [rtype (or repl-type 'clj)
          the-port (if (and port (not (hive-mcp-cider-nrepl-port-open-p port)))
                       port
@@ -117,14 +118,11 @@ bound first by another JVM, the spawn retries on another port, at most
                       #'hive-mcp-cider-nrepl-port-open-p))
          dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype))
          process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir extra-args aliases extra-deps middleware)
-         timer (run-with-timer hive-mcp-cider-connection-spawn-initial-delay
-                               hive-mcp-cider-connection-retry-interval
-                                (lambda ()
-                                  (condition-case err
-                                      (hive-mcp-cider-connection-try-connect-session name)
-                                    (error
-                                     (message "[cider] Timer error connecting session %s: %s"
-                                              name (error-message-string err))))))]
+         timer (hive-mcp-cider-connection-arm-connect-timer
+                name hive-mcp-cider-connection-spawn-initial-delay)]
+    ;; The free-port search above still saw the lost port in the old entry.
+    (when (> attempt 0)
+      (hive-mcp-cider-sessions-unregister name))
     (hive-mcp-cider-sessions-register
      name
      (hive-mcp-cider-sessions-make-session
@@ -137,8 +135,6 @@ bound first by another JVM, the spawn retries on another port, at most
        :status 'starting
        :timer timer))
     ;; Registered first: the sentinel writes onto the session it watches.
-    ;; The retry leaves PORT nil, and the registry still holds the lost port,
-    ;; so the free-port search skips it.
     (hive-mcp-cider-connection-watch-spawn-process
       name process
       (when (< attempt hive-mcp-cider-connection-spawn-port-retries)
@@ -228,8 +224,41 @@ cljel target whose upgrade never confirmed reports clj rather than lying."
            :reason (error-message-string err)))
        (error "Session '%s' connect failed: %s" name (error-message-string err))))))
 
+(defn- -refuse-prompt [&rest args]
+  "Signal instead of prompting: teardown runs where no frame can answer."
+  (error "hive-mcp-cider: teardown refused an interactive prompt: %S" (car args)))
+
+(defn call-without-prompts [thunk]
+  "Call THUNK with kill-buffer queries off and every minibuffer prompt refused."
+  (let [kill-buffer-query-functions nil]
+    (cl-letf (((symbol-function 'y-or-n-p) #'-refuse-prompt)
+              ((symbol-function 'yes-or-no-p) #'-refuse-prompt)
+              ((symbol-function 'read-from-minibuffer) #'-refuse-prompt)
+              ((symbol-function 'completing-read) #'-refuse-prompt))
+      (funcall thunk))))
+
+(defn- -teardown-session [name session]
+  "Cancel SESSION's timer, close its CIDER connection, stop its nREPL process
+and unregister NAME. A failing step is logged; the remaining steps still run."
+  (let* [timer (plist-get session :timer)
+         cider-buf (plist-get session :cider-buffer)
+         buf (and cider-buf (get-buffer cider-buf))]
+    (when (timerp timer) (cancel-timer timer))
+    (when (and buf (fboundp 'cider-quit))
+      (condition-case err
+          (cider-quit buf)
+        (error
+         (message "hive-mcp-cider: cider-quit for '%s' failed: %s"
+                  name (error-message-string err)))))
+    (when (buffer-live-p buf)
+      (kill-buffer buf))
+    (hive-mcp-cider-nrepl-stop-process (plist-get session :process))
+    (hive-mcp-cider-sessions-unregister name)))
+
 (defn kill-session [name]
   "Kill the CIDER session NAME — stops process and cleans up.
+Never prompts: teardown runs under `call-without-prompts', since a prompt in a
+frameless daemon blocks every client.
 Signals an error when NAME is blank or names no registered session."
   (interactive
    (list (completing-read "Kill session: "
@@ -240,18 +269,7 @@ Signals an error when NAME is blank or names no registered session."
       (if (not session)
         (error "hive-mcp-cider: unknown session '%s'" name)
         (progn
-          ;; Cancel any timer
-          (when-let* [timer (plist-get session :timer)]
-            (when (timerp timer) (cancel-timer timer)))
-          ;; Kill CIDER connection
-          (when-let* [cider-buf (plist-get session :cider-buffer)]
-            (when (get-buffer cider-buf)
-              (with-current-buffer cider-buf
-                (when (fboundp 'cider-quit) (cider-quit)))))
-          ;; Kill nREPL process
-          (hive-mcp-cider-nrepl-stop-process (plist-get session :process))
-          ;; Remove from registry
-          (hive-mcp-cider-sessions-unregister name)
+          (call-without-prompts (lambda () (-teardown-session name session)))
           (message "hive-mcp-cider: Session '%s' killed" name))))))
 
 (defn kill-all-sessions []

@@ -76,6 +76,12 @@ Design principles (SOLID/CLARITY):
   :type 'integer
   :group 'hive-mcp-cider)
 
+(defcustom hive-mcp-cider-connection-spawn-boot-max-retries 300
+  "Connect attempts a spawned session gets while its nREPL process is alive.
+A cold JVM resolving its classpath can outlast `hive-mcp-cider-connection-max-retries'."
+  :type 'integer
+  :group 'hive-mcp-cider)
+
 (defcustom hive-mcp-cider-connection-cljs-repl-type "shadow"
   "ClojureScript REPL type for cider-connect-cljs."
   :type '(choice (const "shadow") (const "figwheel") (const "browser"))
@@ -129,6 +135,22 @@ A MAX-RETRIES of 0 (or a non-integer) means unlimited, matching
   (and (integerp max-retries)
        (> max-retries 0)
        (>= attempts max-retries)))
+
+(defn retry-cap [max-retries boot-max-retries process-live-p]
+  "Connect-attempt cap for a session. A live nREPL process is still booting, so
+it gets the larger of MAX-RETRIES and BOOT-MAX-RETRIES; an unlimited (0)
+MAX-RETRIES stays unlimited. Pure."
+  (if (and process-live-p
+           (integerp max-retries) (> max-retries 0)
+           (integerp boot-max-retries))
+      (max max-retries boot-max-retries)
+    max-retries))
+
+(defn revivable-p [status process-live-p port-open-p]
+  "Return non-nil when a session in STATUS never really failed.
+A 'timeout session whose nREPL process is alive and whose port is open only
+outran the connect window. Pure."
+  (and (eq status 'timeout) process-live-p port-open-p t))
 
 (defn settled-props [buffer-name repl-type]
   "Registry props for a connection of REPL-TYPE that completed its handshake
@@ -484,8 +506,9 @@ write-friendly — a stable evaluation context for the connect.
 An open socket only moves the session to 'connecting; the settle callback
 from `connect-by-repl-type' is what writes 'connected (or 'error, with a
 :reason) once the nREPL handshake and any REPL upgrade have resolved.
-The no-socket-yet branch is capped by `hive-mcp-cider-connection-max-retries'
-(0 = unlimited)."
+The no-socket-yet branch is capped by `retry-cap': a live nREPL process gets
+`hive-mcp-cider-connection-spawn-boot-max-retries', anything else
+`hive-mcp-cider-connection-max-retries' (0 = unlimited)."
   (let* [session (hive-mcp-cider-sessions-lookup name)
          port (plist-get session :port)
          status (plist-get session :status)
@@ -515,8 +538,12 @@ The no-socket-yet branch is capped by `hive-mcp-cider-connection-max-retries'
                :reason (error-message-string err))
              (message "hive-mcp-cider: Session '%s' connection failed: %s"
                       name (error-message-string err))))
-        (let [attempts (1+ (or (plist-get session :attempts) 0))]
-          (if (not (retry-exhausted-p attempts hive-mcp-cider-connection-max-retries))
+        (let* [attempts (1+ (or (plist-get session :attempts) 0))
+               proc (plist-get session :process)
+               cap (retry-cap hive-mcp-cider-connection-max-retries
+                              hive-mcp-cider-connection-spawn-boot-max-retries
+                              (and (processp proc) (process-live-p proc)))]
+          (if (not (retry-exhausted-p attempts cap))
               (hive-mcp-cider-sessions-update-prop name :attempts attempts)
             (-cancel-session-timer name)
             (hive-mcp-cider-sessions-update-props name
@@ -525,6 +552,17 @@ The no-socket-yet branch is capped by `hive-mcp-cider-connection-max-retries'
               :reason (connectivity-failure-reason port nil))
             (message "hive-mcp-cider: Session '%s' timed out after %d attempts waiting for nREPL"
                      name attempts)))))))
+
+(defn arm-connect-timer [name delay]
+  "Start the repeating timer that drives `try-connect-session' for NAME after
+DELAY seconds. Timer errors are logged, never signalled. Returns the timer."
+  (run-with-timer delay hive-mcp-cider-connection-retry-interval
+                  (lambda ()
+                    (condition-case err
+                        (try-connect-session name)
+                      (error
+                       (message "[cider] Timer error connecting session %s: %s"
+                                name (error-message-string err)))))))
 
 ;; ============================================================================
 ;; Ensure Connected (cascading strategy)
@@ -575,12 +613,49 @@ registry on a dead-buffer cache miss."
         (cider-make-connection-default (current-buffer)))
       t))))
 
+(defn- -session-settled-live-p [name]
+  "Return non-nil when session NAME's REPL is live and needs no pending upgrade.
+A cljel session counts only once its compilation session is active; a cljs
+session is left to its own settle callback."
+  (and (-session-buffer-alive-p name)
+       (pcase (hive-mcp-cider-sessions-get-prop name :repl-type)
+         ('cljs nil)
+         ('cljel (-cljel-ready-p
+                  (get-buffer (hive-mcp-cider-sessions-get-prop name :cider-buffer))))
+         (_ t))))
+
+(defn- -revive-timed-out-sessions []
+  "Re-arm the connect timer of every 'timeout session whose nREPL is alive.
+Returns the list of revived names."
+  (let [revived '()]
+    (dolist (name (hive-mcp-cider-sessions-names))
+      (let* [session (and (stringp name) (hive-mcp-cider-sessions-lookup name))
+             proc (plist-get session :process)]
+        (when (and session
+                   (eq (plist-get session :status) 'timeout)
+                   (revivable-p 'timeout
+                                (and (processp proc) (process-live-p proc))
+                                (hive-mcp-cider-nrepl-port-open-p
+                                 (plist-get session :port))))
+          (hive-mcp-cider-sessions-update-props name
+            :status 'starting :attempts 0 :reason nil
+            :timer (arm-connect-timer name 0))
+          (message "hive-mcp-cider: Session '%s' outran its connect window; its nREPL is up, reconnecting"
+                   name)
+          (push name revived))))
+    revived))
+
 (defn reconcile-sessions []
   "Reconcile every registered session's :status against real REPL liveness.
 Any session claiming 'connected whose CIDER buffer is dead is reaped down to
-'stale, so a dead session can never be reported as connected.
+'stale, so a dead session can never be reported as connected. A session left
+claiming 'connecting whose REPL is live and settled is promoted to 'connected,
+and a 'timeout session whose nREPL came up late is reconnected.
 Returns the list of demoted session names."
-  (hive-mcp-cider-sessions-reconcile #'-session-buffer-alive-p))
+  (let [demoted (hive-mcp-cider-sessions-reconcile #'-session-buffer-alive-p)]
+    (hive-mcp-cider-sessions-promote #'-session-settled-live-p)
+    (-revive-timed-out-sessions)
+    demoted))
 
 (defn describe-connectivity []
   "Return a one-line diagnosis of why no CIDER connection is available.

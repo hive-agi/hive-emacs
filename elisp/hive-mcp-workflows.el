@@ -84,9 +84,9 @@
     (condition-case err
     (setq env (hive-mcp-workflows--run-step step env))
   (error (pcase on-error
-  ('stop (throw 'workflow-abort (list :success nil :error (error-message-string err) :failed-step step-num :env env)))
-  ('continue nil)
-  ('ask (unless (yes-or-no-p (format "Step %d failed: %s. Continue? " step-num (error-message-string err)))
+  (:stop (throw 'workflow-abort (list :success nil :error (error-message-string err) :failed-step step-num :env env)))
+  (:continue nil)
+  (:ask (unless (yes-or-no-p (format "Step %d failed: %s. Continue? " step-num (error-message-string err)))
     (throw 'workflow-abort (list :success nil :error "Aborted by user" :failed-step step-num :env env)))))))) (list :success t :env env))))))
 
 (defun hive-mcp-workflows--init-env (spec args)
@@ -112,13 +112,13 @@
     (if-let ((handler (gethash type hive-mcp-workflow-step-handlers)))
     (funcall handler step env)
   (pcase type
-  ('elisp (hive-mcp-workflows--step-elisp step env))
-  ('shell (hive-mcp-workflows--step-shell step env))
-  ('prompt (hive-mcp-workflows--step-prompt step env))
-  ('confirm (hive-mcp-workflows--step-confirm step env))
-  ('condition (hive-mcp-workflows--step-condition step env))
-  ('memory-add (hive-mcp-workflows--step-memory-add step env))
-  ('notify (hive-mcp-workflows--step-notify step env))
+  (:elisp (hive-mcp-workflows--step-elisp step env))
+  (:shell (hive-mcp-workflows--step-shell step env))
+  (:prompt (hive-mcp-workflows--step-prompt step env))
+  (:confirm (hive-mcp-workflows--step-confirm step env))
+  (:condition (hive-mcp-workflows--step-condition step env))
+  (:memory-add (hive-mcp-workflows--step-memory-add step env))
+  (:notify (hive-mcp-workflows--step-notify step env))
   (_ (error "Unknown step type: %s" type))))))
 
 (defun hive-mcp-workflows--step-elisp (step env)

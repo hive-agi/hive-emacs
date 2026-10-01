@@ -240,6 +240,13 @@ Returns:
                slave-id (1+ retries) hive-mcp-swarm-dispatch-max-retries)
       :retry))))
 
+(defn- -requeue [outcome entry queue]
+  "Return QUEUE with ENTRY pushed when OUTCOME is :retry, retries bumped."
+  (case outcome
+    :retry (do (plist-put entry :retries (1+ (or (plist-get entry :retries) 0)))
+               (cons entry queue))
+    queue))
+
 (defn process-queue []
   "Process all ready entries in the dispatch queue.
 Called periodically by the queue timer."
@@ -251,13 +258,7 @@ Called periodically by the queue timer."
           (setq hive-mcp-swarm-dispatch-queue nil)
           ;; Process each entry
           (dolist (entry current-queue)
-            (pcase (-process-queue-entry entry)
-              (:retry
-               ;; Re-queue with incremented retry count
-               (plist-put entry :retries (1+ (plist-get entry :retries)))
-               (push entry new-queue))
-              (:success nil)
-              (:failed nil)))
+            (setq new-queue (-requeue (-process-queue-entry entry) entry new-queue)))
           ;; Add remaining entries back to queue (in original order)
           (setq hive-mcp-swarm-dispatch-queue (nreverse new-queue))
           ;; Stop timer if queue empty

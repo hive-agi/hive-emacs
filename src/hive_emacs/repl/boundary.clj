@@ -102,6 +102,80 @@
           "    (error (list :error (error-message-string hive--err)))))")
      (pr-str lisp-source) secs secs)))
 
+(m/=> nrepl-value [:=> [:cat :any] :string])
+
+(defn nrepl-value
+  "VALUE as an elisp literal for an nREPL request field: integers stay
+   integers, everything else is sent as a string."
+  [value]
+  (if (integer? value)
+    (str value)
+    (pr-str (if (keyword? value) (name value) (str value)))))
+
+(m/=> nrepl-request-form [:=> [:cat schema/Call] :string])
+
+(defn nrepl-request-form
+  "CALL as an elisp list literal: an nREPL request whose op is the part of
+   :call/rpc after the slash, each argument keyed by :call/wire-keys. Throws
+   when an argument has no wire key."
+  [{:call/keys [rpc args wire-keys]}]
+  (let [op (subs rpc (inc (str/index-of rpc "/")))
+        ks (vec wire-keys)]
+    (when (> (count args) (count ks))
+      (throw (ex-info "nREPL call has an argument with no wire key"
+                      {:rpc rpc :args args :wire-keys ks})))
+    (str "(list \"op\" " (pr-str op)
+         (apply str (map (fn [k v] (str " " (pr-str k) " " (nrepl-value v))) ks args))
+         ")")))
+
+(m/=> nrepl-bounded-elisp [:=> [:cat :string pos-int?] :string])
+
+(defn nrepl-bounded-elisp
+  "Elisp sending REQUEST-FORM on the current CIDER connection and awaiting its
+   \"done\" status for at most TIMEOUT-MS.
+
+   Yields (:ok ALIST), (:timeout SECS) or (:error MSG). The alist merges every
+   response: string fields concatenate, others keep their last value."
+  [request-form timeout-ms]
+  (let [secs (max 1 (long (Math/ceil (/ (double timeout-ms) 1000.0))))]
+    (format
+     (str "(let ((hive--done nil) (hive--acc nil) (hive--result nil))"
+          "  (condition-case hive--err"
+          "      (progn"
+          "        (cider-nrepl-send-request %s"
+          "          (lambda (r) (push r hive--acc)"
+          "            (when (member \"done\" (nrepl-dict-get r \"status\")) (setq hive--done t)))"
+          "          (cider-current-repl) nil)"
+          "        (with-timeout (%d (setq hive--result (list :timeout %d)))"
+          "          (while (not hive--done) (accept-process-output nil 0.05)))"
+          "        (or hive--result"
+          "            (let (hive--m)"
+          "              (dolist (r (nreverse hive--acc))"
+          "                (nrepl-dict-map"
+          "                 (lambda (k v)"
+          "                   (unless (member k '(\"id\" \"session\" \"status\"))"
+          "                     (let ((cell (assoc k hive--m)))"
+          "                       (cond ((and cell (stringp v) (stringp (cdr cell)))"
+          "                              (setcdr cell (concat (cdr cell) v)))"
+          "                             (cell (setcdr cell v))"
+          "                             (t (push (cons k v) hive--m))))))"
+          "                 r))"
+          "              (list :ok (nreverse hive--m)))))"
+          "    (error (list :error (error-message-string hive--err)))))")
+     request-form secs secs)))
+
+(defmulti call-elisp
+  "Elisp issuing CALL on its transport under the call's deadline."
+  (fn [call] (:call/transport call :sly)))
+
+(defmethod call-elisp :sly
+  [call]
+  (bounded-elisp (call-form call) (:call/timeout-ms call)))
+
+(defmethod call-elisp :nrepl
+  [call]
+  (nrepl-bounded-elisp (nrepl-request-form call) (:call/timeout-ms call)))
+
 ;;; =============================================================================
 ;;; Execution
 ;;; =============================================================================
@@ -131,14 +205,15 @@
 (m/=> execute [:=> [:cat schema/Plan] :any])
 
 (defn execute
-  "Run PLAN: ensure its prelude, then issue its call under the call's deadline.
+  "Run PLAN: ensure its prelude, then issue its call on its transport under the
+   call's deadline.
 
    Returns a Result whose ok value is {:shape :value}, so a caller can decode
    without re-deriving which op produced it."
   [{:plan/keys [prelude call]}]
   (let [timeout-ms (:call/timeout-ms call)]
     (result/let-ok [_ (ensure-prelude (vec prelude) timeout-ms)
-                    v (eval-elisp (bounded-elisp (call-form call) timeout-ms) timeout-ms)]
+                    v (eval-elisp (call-elisp call) timeout-ms)]
                    (result/ok {:shape (:call/shape call) :value v}))))
 
 (m/=> run [:=> [:cat schema/Request] :any])

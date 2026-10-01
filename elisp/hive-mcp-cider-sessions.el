@@ -126,6 +126,20 @@
     (hive-mcp-cider-sessions-update-prop name :status 'stale))
     demoted))
 
+(defun hive-mcp-cider-sessions-promotable-p (status alive-p)
+  "Return non-nil when a session declaring STATUS with liveness ALIVE-P settled unrecorded.\nA session still claiming 'connecting while its REPL is live is connected. Pure."
+  (and (eq status 'connecting) alive-p t))
+
+(defun hive-mcp-cider-sessions-promote (alive-fn)
+  "Promote every 'connecting session whose REPL is live to 'connected.\nALIVE-FN is a predicate (NAME) -> non-nil when that session's REPL is live and\nfully settled. Returns the list of promoted names."
+  (let* ((promoted '()))
+    (maphash (lambda (name props)
+    (when (and (stringp name) (hive-mcp-cider-sessions-promotable-p (plist-get props :status) (funcall alive-fn name)))
+    (push name promoted))) hive-mcp-cider-sessions--registry)
+    (dolist (name promoted)
+    (hive-mcp-cider-sessions-update-props name :status 'connected :reason nil))
+    promoted))
+
 (defun hive-mcp-cider-sessions-clear-all ()
   "Remove all sessions from registry."
   (clrhash hive-mcp-cider-sessions--registry))

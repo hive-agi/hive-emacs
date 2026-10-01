@@ -76,15 +76,14 @@
   (hive-mcp-cider-spawn-session (plist-get params :name) (plist-get params :repl-type) (plist-get params :port) (plist-get params :project-dir) (plist-get params :agent-id) (plist-get params :extra-args) (plist-get params :aliases) (plist-get params :extra-deps) (plist-get params :middleware)))
 
 (defun hive-mcp-cider--spawn-attempt (attempt name repl-type port project-dir agent-id extra-args aliases extra-deps middleware)
-  "Launch one try of session NAME; see `hive-mcp-cider-spawn-session'.\nATTEMPT counts the respawns so far. A requested PORT that is already open is\nnot used: the next free port is. When the process dies because its port was\nbound first by another JVM, the spawn retries on another port, at most\n`hive-mcp-cider-connection-spawn-port-retries' times."
+  "Launch one try of session NAME; see `hive-mcp-cider-spawn-session'.\nATTEMPT counts the respawns so far. A requested PORT that is already open is\nnot used: the next free port is. When the process dies because its port was\nbound first by another JVM, the spawn retries on another port, at most\n`hive-mcp-cider-connection-spawn-port-retries' times; the retry replaces the\nfailed attempt's registry entry."
   (let* ((rtype (or repl-type 'clj))
         (the-port (if (and port (not (hive-mcp-cider-nrepl-port-open-p port))) port (hive-mcp-cider-sessions-find-available-port #'hive-mcp-cider-nrepl-port-open-p)))
         (dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype)))
         (process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir extra-args aliases extra-deps middleware))
-        (timer (run-with-timer hive-mcp-cider-connection-spawn-initial-delay hive-mcp-cider-connection-retry-interval (lambda ()
-    (condition-case err
-    (hive-mcp-cider-connection-try-connect-session name)
-  (error (message "[cider] Timer error connecting session %s: %s" name (error-message-string err))))))))
+        (timer (hive-mcp-cider-connection-arm-connect-timer name hive-mcp-cider-connection-spawn-initial-delay)))
+    (when (> attempt 0)
+    (hive-mcp-cider-sessions-unregister name))
     (hive-mcp-cider-sessions-register name (hive-mcp-cider-sessions-make-session the-port :process process :buffer (format "*nREPL-%s*" name) :agent-id agent-id :project-dir dir :repl-type rtype :status 'starting :timer timer))
     (hive-mcp-cider-connection-watch-spawn-process name process (when (< attempt hive-mcp-cider-connection-spawn-port-retries)
     (lambda ()
@@ -121,21 +120,38 @@
   (error (ignore-errors (hive-mcp-cider-sessions-update-props name :status 'error :reason (error-message-string err)))
       (error "Session '%s' connect failed: %s" name (error-message-string err))))))
 
+(defun hive-mcp-cider--refuse-prompt (&rest args)
+  "Signal instead of prompting: teardown runs where no frame can answer."
+  (error "hive-mcp-cider: teardown refused an interactive prompt: %S" (car args)))
+
+(defun hive-mcp-cider-call-without-prompts (thunk)
+  "Call THUNK with kill-buffer queries off and every minibuffer prompt refused."
+  (let* ((kill-buffer-query-functions nil))
+    (cl-letf (((symbol-function 'y-or-n-p) #'hive-mcp-cider--refuse-prompt) ((symbol-function 'yes-or-no-p) #'hive-mcp-cider--refuse-prompt) ((symbol-function 'read-from-minibuffer) #'hive-mcp-cider--refuse-prompt) ((symbol-function 'completing-read) #'hive-mcp-cider--refuse-prompt)) (funcall thunk))))
+
+(defun hive-mcp-cider--teardown-session (name session)
+  "Cancel SESSION's timer, close its CIDER connection, stop its nREPL process\nand unregister NAME. A failing step is logged; the remaining steps still run."
+  (let* ((timer (plist-get session :timer))
+        (cider-buf (plist-get session :cider-buffer))
+        (buf (and cider-buf (get-buffer cider-buf))))
+    (when (timerp timer)
+    (cancel-timer timer))
+    (when (and buf (fboundp 'cider-quit))
+    (condition-case err
+    (cider-quit buf)
+  (error (message "hive-mcp-cider: cider-quit for '%s' failed: %s" name (error-message-string err)))))
+    (when (buffer-live-p buf)
+    (kill-buffer buf))
+    (hive-mcp-cider-nrepl-stop-process (plist-get session :process))
+    (hive-mcp-cider-sessions-unregister name)))
+
 (defun hive-mcp-cider-kill-session (name)
-  "Kill the CIDER session NAME — stops process and cleans up.\nSignals an error when NAME is blank or names no registered session."
+  "Kill the CIDER session NAME — stops process and cleans up.\nNever prompts: teardown runs under `call-without-prompts', since a prompt in a\nframeless daemon blocks every client.\nSignals an error when NAME is blank or names no registered session."
   (interactive (list (completing-read "Kill session: " (hive-mcp-cider-sessions-names))))
   (if (or (not name) (string= name "")) (error "hive-mcp-cider: kill-session requires a session name") (let* ((session (hive-mcp-cider-sessions-lookup name)))
     (if (not session) (error "hive-mcp-cider: unknown session '%s'" name) (progn
-  (when-let* ((timer (plist-get session :timer)))
-    (when (timerp timer)
-    (cancel-timer timer)))
-  (when-let* ((cider-buf (plist-get session :cider-buffer)))
-    (when (get-buffer cider-buf)
-    (with-current-buffer cider-buf
-    (when (fboundp 'cider-quit)
-    (cider-quit)))))
-  (hive-mcp-cider-nrepl-stop-process (plist-get session :process))
-  (hive-mcp-cider-sessions-unregister name)
+  (hive-mcp-cider-call-without-prompts (lambda ()
+    (hive-mcp-cider--teardown-session name session)))
   (message "hive-mcp-cider: Session '%s' killed" name))))))
 
 (defun hive-mcp-cider-kill-all-sessions ()

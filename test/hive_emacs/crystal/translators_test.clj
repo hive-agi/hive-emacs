@@ -103,6 +103,9 @@
               {:op :crystal/git-commits :directory "   "}
               {:op :crystal/git-commits :since 7}
               {:op :crystal/git-commits :since ""}
+              {:op :crystal/git-commits :since "midnight'; touch /tmp/pwned; echo '"}
+              {:op :crystal/git-commits :since "$(id)"}
+              {:op :crystal/git-commits :since (apply str (repeat 41 "1"))}
               {:op :crystal/git-commits :since "x' ; touch /tmp/pwned ; '"}
               {:op :crystal/git-commits :since "midnight\n"}
               {:op :crystal/git-commits :since (apply str (repeat 41 "a"))}

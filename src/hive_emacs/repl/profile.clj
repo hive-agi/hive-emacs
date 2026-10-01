@@ -19,36 +19,39 @@
 ;;; =============================================================================
 
 (def cider-profile
-  "nREPL, driven through CIDER. Verbs map to nREPL op names.
+  "nREPL, driven through the current CIDER connection. Verbs map to nREPL op
+   names; :op/wire-keys names each positional argument in the request.
 
-   :inspect and :restart are absent: CIDER exposes both, but neither has been
-   measured here, and an unmeasured op is not a capability."
+   :inspect, :restart and :load-file are absent: CIDER exposes them, but none
+   has been measured through this boundary, and an unmeasured op is not a
+   capability."
   {:profile/id :cider
    :profile/label "CIDER (nREPL)"
+   :profile/transport :nrepl
    :profile/default-timeout-ms 60000
    :profile/ops
-   {:eval      {:op/rpc "nrepl/eval"        :op/args [:code]    :op/shape :string}
-    :doc       {:op/rpc "nrepl/info"        :op/args [:symbol]  :op/shape :plist}
-    :info      {:op/rpc "nrepl/info"        :op/args [:symbol]  :op/shape :plist}
-    :complete  {:op/rpc "nrepl/completions" :op/args [:prefix]  :op/shape :completion-list}
-    :apropos   {:op/rpc "nrepl/apropos"     :op/args [:pattern] :op/shape :plist-list}
-    :status    {:op/rpc "nrepl/describe"    :op/args []         :op/shape :plist}
-    :load-file {:op/rpc "nrepl/load-file"   :op/args [:filename] :op/shape :string}}})
+   {:eval      {:op/rpc "nrepl/eval"        :op/args [:code]    :op/wire-keys ["code"]   :op/shape :plist}
+    :doc       {:op/rpc "nrepl/info"        :op/args [:symbol]  :op/wire-keys ["sym"]    :op/shape :plist}
+    :info      {:op/rpc "nrepl/info"        :op/args [:symbol]  :op/wire-keys ["sym"]    :op/shape :plist}
+    :complete  {:op/rpc "nrepl/completions" :op/args [:prefix]  :op/wire-keys ["prefix"] :op/shape :plist}
+    :apropos   {:op/rpc "nrepl/apropos"     :op/args [:pattern] :op/wire-keys ["query"]  :op/shape :plist}
+    :status    {:op/rpc "nrepl/describe"    :op/args []         :op/wire-keys []         :op/shape :plist}}})
 
 (def slynk-profile
   "SLY/Slynk, driven against a Common Lisp image.
 
    `slynk-completion:` and `slynk-apropos:` are separate packages from `slynk:`
-   and resolve only after :profile/prelude has been required. An op whose
-   package has not been loaded does not signal — the request never receives a
-   reply — so the prelude is a correctness requirement, not an optimisation.
+   and resolve only after the op's :op/requires module has been required. An op
+   whose package has not been loaded does not signal — the request never
+   receives a reply — so the requirement is a correctness one, and it is
+   per op so a module that will not load fails only the verb that needs it.
 
    :eval uses eval-and-grab-output so a form's stdout reaches the caller
    alongside its value."
   {:profile/id :slynk
    :profile/label "SLY (Slynk)"
+   :profile/transport :sly
    :profile/default-timeout-ms 20000
-   :profile/prelude ["slynk/completion" "slynk/apropos"]
    :profile/ops
    {:eval      {:op/rpc "slynk:eval-and-grab-output"
                 :op/args [:code] :op/shape :string-pair}
@@ -59,10 +62,12 @@
     :complete  {:op/rpc "slynk-completion:simple-completions"
                 :op/args [:prefix :package]
                 :op/defaults {:package "COMMON-LISP-USER"}
+                :op/requires ["slynk/completion"]
                 :op/shape :completion-list}
     :apropos   {:op/rpc "slynk-apropos:apropos-list-for-emacs"
                 :op/args [:pattern :external-only :case-sensitive :package]
                 :op/defaults {:external-only true :case-sensitive false :package nil}
+                :op/requires ["slynk/apropos"]
                 :op/shape :plist-list}
     :status    {:op/rpc "slynk:connection-info"
                 :op/args [] :op/shape :plist}

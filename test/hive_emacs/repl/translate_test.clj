@@ -56,10 +56,45 @@
         (is (= expected (get-in (:ok r) [:plan/call :call/rpc])))))))
 
 (deftest prelude-is-carried-into-the-plan
-  (testing "contrib modules must load before their ops resolve"
+  (testing "an op's contrib module must load before it resolves"
     (let [r (translate/plan {:req/verb :complete :req/backend :slynk
                              :req/params {:prefix "map"}})]
-      (is (= ["slynk/completion" "slynk/apropos"] (:plan/prelude (:ok r)))))))
+      (is (= ["slynk/completion"] (:plan/prelude (:ok r))))))
+  (testing "a module is attached only to the op that needs it"
+    (doseq [[verb params expected]
+            [[:apropos {:pattern "x"} ["slynk/apropos"]]
+             [:eval {:code "1"} []]
+             [:status {} []]
+             [:doc {:symbol "car"} []]]]
+      (let [r (translate/plan {:req/verb verb :req/backend :slynk :req/params params})]
+        (is (= expected (:plan/prelude (:ok r))) (str verb))))))
+
+(deftest profile-prelude-and-op-requires-compose
+  (profile/register! {:profile/id :composed
+                      :profile/label "composed"
+                      :profile/default-timeout-ms 1000
+                      :profile/prelude ["base" "shared"]
+                      :profile/ops {:eval {:op/rpc "x:eval" :op/args [:code]
+                                           :op/requires ["shared" "own"]
+                                           :op/shape :string}
+                                    :status {:op/rpc "x:status" :op/args []
+                                             :op/shape :string}}})
+  (is (= ["base" "shared" "own"]
+         (:plan/prelude (:ok (translate/plan {:req/verb :eval :req/backend :composed
+                                              :req/params {:code "1"}})))))
+  (is (= ["base" "shared"]
+         (:plan/prelude (:ok (translate/plan {:req/verb :status :req/backend :composed}))))))
+
+(deftest every-default-op-plans-a-valid-plan
+  (doseq [p profile/default-profiles
+          [verb op] (:profile/ops p)]
+    (let [params (zipmap (:op/args op) (repeat "x"))
+          r (translate/plan {:req/verb verb :req/backend (:profile/id p) :req/params params})]
+      (is (result/ok? r) (str (:profile/id p) " " verb))
+      (is (schema/valid-plan? (:ok r)) (str (:profile/id p) " " verb))
+      (is (= (vec (distinct (concat (:profile/prelude p []) (:op/requires op []))))
+             (:plan/prelude (:ok r)))
+          (str (:profile/id p) " " verb)))))
 
 (deftest defaults-may-legitimately-be-nil
   (testing "apropos defaults :package to nil, which counts as supplied"
@@ -140,20 +175,39 @@
 ;;; Boundary — injected stub, never a live host
 ;;; =============================================================================
 
+(defn- recording-stub
+  [calls reply-fn]
+  (fn [elisp timeout-ms]
+    (swap! calls conj {:elisp elisp :timeout timeout-ms})
+    (reply-fn elisp)))
+
 (deftest boundary-loads-prelude-before-the-call
-  (let [calls (atom [])
-        stub (fn [elisp timeout-ms]
-               (swap! calls conj {:elisp elisp :timeout timeout-ms})
-               {:success true :result '(:ok "stubbed")})]
-    (binding [boundary/*eval-fn* stub]
+  (let [calls (atom [])]
+    (binding [boundary/*eval-fn* (recording-stub calls (constantly {:success true :result '(:ok "stubbed")}))]
       (let [r (boundary/run {:req/verb :complete :req/backend :slynk
                              :req/params {:prefix "map"}})]
         (is (result/ok? r))
         (is (= :completion-list (:shape (:ok r))))
-        (is (= 3 (count @calls)) "two prelude loads, then the op")
+        (is (= 2 (count @calls)) "the op's one module, then the op")
         (is (str/includes? (:elisp (nth @calls 0)) "slynk/completion"))
-        (is (str/includes? (:elisp (nth @calls 1)) "slynk/apropos"))
-        (is (str/includes? (:elisp (nth @calls 2)) "simple-completions"))))))
+        (is (str/includes? (:elisp (nth @calls 1)) "simple-completions"))))))
+
+(deftest an-unloadable-module-fails-only-the-op-that-needs-it
+  (let [calls (atom [])
+        apropos-dead (fn [elisp]
+                       (if (str/includes? elisp "slynk/apropos")
+                         {:success false :error "timeout loading slynk/apropos"}
+                         {:success true :result '(:ok "fine")}))]
+    (binding [boundary/*eval-fn* (recording-stub calls apropos-dead)]
+      (is (= :transport (:fail/kind (boundary/run {:req/verb :apropos :req/backend :slynk
+                                                   :req/params {:pattern "x"}}))))
+      (doseq [[verb params] [[:eval {:code "1"}] [:status {}] [:doc {:symbol "car"}]
+                             [:complete {:prefix "ma"}]]]
+        (is (result/ok? (boundary/run {:req/verb verb :req/backend :slynk :req/params params}))
+            (str verb " survives the dead apropos module")))
+      (is (not-any? #(str/includes? (:elisp %) "slynk/apropos")
+                    (rest @calls))
+          "no other verb tried to load the dead module"))))
 
 (deftest every-emitted-request-is-deadline-bounded
   (testing "an unresolvable callee is never answered, so the wait must be bounded"
@@ -180,3 +234,70 @@
   (is (= "\"x\"" (boundary/lisp-arg "x")))
   (is (= ":kw" (boundary/lisp-arg :kw)))
   (is (= "42" (boundary/lisp-arg 42))))
+
+;;; =============================================================================
+;;; The :cider profile executes through the same bounded boundary
+;;; =============================================================================
+
+(deftest cider-plans-carry-the-nrepl-transport
+  (doseq [[verb params op wire]
+          [[:eval {:code "(+ 1 2)"} "eval" "code"]
+           [:info {:symbol "map"} "info" "sym"]
+           [:complete {:prefix "ma"} "completions" "prefix"]
+           [:apropos {:pattern "ma"} "apropos" "query"]]]
+    (let [call (:plan/call (:ok (translate/plan {:req/verb verb :req/backend :cider
+                                                 :req/params params})))
+          form (boundary/nrepl-request-form call)]
+      (is (= :nrepl (:call/transport call)) (str verb))
+      (is (str/starts-with? form (str "(list \"op\" \"" op "\" \"" wire "\" ")) form))))
+
+(deftest every-cider-request-is-deadline-bounded
+  (let [calls (atom [])]
+    (binding [boundary/*eval-fn* (recording-stub calls (constantly {:success true :result '(:ok nil)}))]
+      (doseq [verb (profile/capabilities :cider)]
+        (let [op (get-in profile/cider-profile [:profile/ops verb])]
+          (is (result/ok? (boundary/run {:req/verb verb :req/backend :cider
+                                         :req/params (zipmap (:op/args op) (repeat "x"))}))
+              (str verb)))))
+    (is (= (count (profile/capabilities :cider)) (count @calls))
+        "no prelude on nREPL: one request per verb")
+    (doseq [{:keys [elisp timeout]} @calls]
+      (is (str/includes? elisp "cider-nrepl-send-request"))
+      (is (str/includes? elisp "with-timeout"))
+      (is (not (str/includes? elisp "cider-nrepl-sync-request"))
+          "a sync request waits with no deadline")
+      (is (= 60000 timeout)))))
+
+(deftest cider-request-deadline-follows-the-request
+  (let [calls (atom [])]
+    (binding [boundary/*eval-fn* (recording-stub calls (constantly {:success true :result '(:ok nil)}))]
+      (boundary/run {:req/verb :eval :req/backend :cider :req/params {:code "1"}
+                     :req/timeout-ms 2500}))
+    (is (str/includes? (:elisp (first @calls)) "(with-timeout (3 "))
+    (is (= 2500 (:timeout (first @calls))))))
+
+(deftest nrepl-request-encoding
+  (testing "strings are escaped as elisp literals, integers stay integers"
+    (is (= "\"a\\\"b\"" (boundary/nrepl-value "a\"b")))
+    (is (= "\"line\\n\"" (boundary/nrepl-value "line\n")))
+    (is (= "42" (boundary/nrepl-value 42)))
+    (is (= "\"kw\"" (boundary/nrepl-value :kw))))
+  (testing "an argument with no wire key is refused, not silently dropped"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (boundary/nrepl-request-form {:call/rpc "nrepl/eval" :call/args ["1"]
+                                               :call/transport :nrepl :call/wire-keys []
+                                               :call/shape :plist :call/timeout-ms 1000})))))
+
+(deftest a-registered-transport-is-a-defmethod-not-an-edit
+  (let [calls (atom [])
+        plan {:plan/prelude []
+              :plan/call {:call/rpc "p:x" :call/args []
+                          :call/transport ::probe
+                          :call/shape :any :call/timeout-ms 1000}}]
+    (defmethod boundary/call-elisp ::probe [call] (str "probe:" (:call/rpc call)))
+    (try
+      (is (schema/valid-plan? plan))
+      (binding [boundary/*eval-fn* (recording-stub calls (constantly {:success true :result "ok"}))]
+        (is (result/ok? (boundary/execute plan))))
+      (is (= "probe:p:x" (:elisp (first @calls))))
+      (finally (remove-method boundary/call-elisp ::probe)))))

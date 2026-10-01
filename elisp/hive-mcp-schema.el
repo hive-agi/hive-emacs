@@ -106,17 +106,16 @@
   "Validate VALUE against SCHEMA. PATH is a list of keys for error context.\nReturns list of error strings, or nil if valid."
   (let* ((typ (hive-mcp-schema--schema-type schema)))
     (pcase typ
-  ('string (hive-mcp-schema--validate-string schema value path))
-  ('int (hive-mcp-schema--validate-int schema value path))
-  ('boolean nil)
-  ('double (if (numberp value) nil (list (format "%s: expected number, got %s" (hive-mcp-schema--path-str path) (type-of value)))))
-  ('keyword (if (keywordp value) nil (list (format "%s: expected keyword, got %s" (hive-mcp-schema--path-str path) (type-of value)))))
-  ('any nil)
-  ('map (hive-mcp-schema--validate-map schema value path))
-  ('enum (hive-mcp-schema--validate-enum schema value path))
-  ('maybe (hive-mcp-schema--validate-maybe schema value path))
-  ('vector (hive-mcp-schema--validate-vector schema value path))
-  (_ nil))))
+  (:string (hive-mcp-schema--validate-string schema value path))
+  (:int (hive-mcp-schema--validate-int schema value path))
+  (:boolean nil)
+  (:double (if (numberp value) nil (list (format "%s: expected number, got %s" (hive-mcp-schema--path-str path) (type-of value)))))
+  (:keyword (if (keywordp value) nil (list (format "%s: expected keyword, got %s" (hive-mcp-schema--path-str path) (type-of value)))))
+  (:any nil)
+  (:map (hive-mcp-schema--validate-map schema value path))
+  (:enum (hive-mcp-schema--validate-enum schema value path))
+  (:maybe (hive-mcp-schema--validate-maybe schema value path))
+  (:vector (hive-mcp-schema--validate-vector schema value path)))))
 
 (defun hive-mcp-schema--validate-string (schema value path)
   "Validate a string value, optionally checking :min/:max length."

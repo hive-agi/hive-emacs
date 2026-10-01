@@ -330,8 +330,11 @@
        ;; Circuit is closed or half-open — proceed with the call
        (let [half-open? (= :half-open (:state @circuit-breaker))
              timeout-ms (min (or timeout-ms *default-timeout-ms*) *max-timeout-ms*)
-             _          (log/debug "Executing elisp with timeout:" timeout-ms "ms -" code
-                                   (when half-open? "(half-open probe)"))
+             _          (log/debug :emacsclient-exec
+                                   (cond-> {:timeout-ms   timeout-ms
+                                            :code-chars   (count code)
+                                            :code-preview (subs code 0 (min 100 (count code)))}
+                                     half-open? (assoc :half-open-probe true)))
              start      (System/currentTimeMillis)
              execution  (execute-emacsclient code timeout-ms)
              duration   (- (System/currentTimeMillis) start)
