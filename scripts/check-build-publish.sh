@@ -13,10 +13,19 @@ BUILD_SH="${1:-$SCRIPT_DIR/../build.sh}"
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 
-mkdir -p "$root/repo/src/cljel/pkg" "$root/repo/elisp" \
+mkdir -p "$root/repo/src/cljel/pkg" "$root/repo/elisp" "$root/repo/scripts" \
          "$root/clel/resources/clojure-elisp" "$root/bin"
 cp "$BUILD_SH" "$root/repo/build.sh"
+cp "$(dirname "$BUILD_SH")/scripts/clel-pin.sh" "$root/repo/scripts/clel-pin.sh"
 echo ";; runtime" > "$root/clel/resources/clojure-elisp/clojure-elisp-runtime.el"
+echo "0.0.1" > "$root/clel/VERSION"
+git_q() { git -C "$root/clel" -c user.name=t -c user.email=t@t "$@" >/dev/null 2>&1; }
+git_q init -q && git_q add -A && git_q commit -q -m pinned
+pinned_sha=$(git -C "$root/clel" rev-parse HEAD)
+write_pin() {
+  printf '{:lib x\n :clel     {:version "0.0.1" :sha "%s"}}\n' "$1" > "$root/repo/version.edn"
+}
+write_pin "$pinned_sha"
 printf "(ns pkg-a)\n" > "$root/repo/src/cljel/pkg/a.cljel"
 printf "(ns pkg-a-test)\n" > "$root/repo/src/cljel/pkg/a_test.cljel"
 printf "OLD\n" > "$root/repo/src/cljel/pkg/pkg-a-test.el"
@@ -42,6 +51,36 @@ fail=0
 check() {
   if eval "$2"; then echo "  ok   $1"; else echo "  FAIL $1"; fail=1; fi
 }
+
+untouched="grep -q OLD '$root/repo/elisp/pkg-a.el' && grep -q OLD '$root/repo/src/cljel/pkg/pkg-a-test.el'"
+build_err() {
+  (cd "$root/repo" && PATH="$root/bin:$PATH" CLEL_HOME="$root/clel" bash build.sh 2>&1 >/dev/null)
+}
+
+write_pin "0000000000000000000000000000000000000000"
+out=$(build_err); rc=$?
+check "a CLEL_HOME off the pinned sha is refused" "[[ $rc -ne 0 ]] && grep -q 'clel pin mismatch' <<<\"\$out\""
+check "a refused compiler changes nothing" "$untouched"
+write_pin "$pinned_sha"
+
+printf '{:lib x}\n' > "$root/repo/version.edn"
+out=$(build_err); rc=$?
+check "a version.edn without a :clel pin is refused" "[[ $rc -ne 0 ]] && grep -q 'no valid :clel :sha' <<<\"\$out\""
+write_pin "$pinned_sha"
+
+echo ";; edited" >> "$root/clel/resources/clojure-elisp/clojure-elisp-runtime.el"
+out=$(build_err); rc=$?
+check "a pinned checkout with local edits is refused" "[[ $rc -ne 0 ]] && grep -q 'local edits' <<<\"\$out\""
+git -C "$root/clel" checkout -q -- resources
+
+mv "$root/clel/resources/clojure-elisp/clojure-elisp-runtime.el" "$root/runtime.bak"
+git_q commit -q -a -m "drop runtime"
+write_pin "$(git -C "$root/clel" rev-parse HEAD)"
+out=$(build_err); rc=$?
+check "a missing runtime fails loudly" "[[ $rc -ne 0 ]] && grep -q 'runtime missing' <<<\"\$out\""
+check "a missing runtime changes nothing" "$untouched"
+git_q reset -q --hard "$pinned_sha"
+write_pin "$pinned_sha"
 
 printf "(ns pkg-z)\n" > "$root/repo/src/cljel/pkg/z_bad.cljel"
 run_build

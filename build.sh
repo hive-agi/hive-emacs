@@ -34,10 +34,10 @@ else
   echo "  WARN: flock unavailable; concurrent builds are not serialized" >&2
 fi
 
-if [[ ! -d "$CLEL_HOME" ]]; then
-  echo "clojure-elisp checkout not found: $CLEL_HOME" >&2
-  exit 2
-fi
+# shellcheck source=scripts/clel-pin.sh
+source "$SCRIPT_DIR/scripts/clel-pin.sh"
+clel_pin_verify "$CLEL_HOME" "$SCRIPT_DIR/version.edn" || exit 2
+RUNTIME="$CLEL_HOME/$CLEL_RUNTIME_REL"
 
 STAGE_DIR="$(mktemp -d "$SCRIPT_DIR/.build-stage.XXXXXXXX")"
 cleanup() {
@@ -116,24 +116,13 @@ if (( failed > 0 )); then
   exit 1
 fi
 
-# Copy the clojure-elisp runtime every compiled .el file requires. From 0.8.0 the
-# runtime is the package `clel` (clel.el) and compiled output requires 'clel;
-# earlier compilers ship clojure-elisp-runtime.el and require that feature.
-# Whichever runtime the compiler in use ships is the one its output needs, and
-# a build that ships none would load nothing, so its absence fails the build.
-RUNTIME=""
-for candidate in clel.el clojure-elisp-runtime.el; do
-  if [[ -f "$CLEL_HOME/resources/clojure-elisp/$candidate" ]]; then
-    RUNTIME="$CLEL_HOME/resources/clojure-elisp/$candidate"
-    break
-  fi
-done
-if [[ -z "$RUNTIME" ]]; then
-  echo "clojure-elisp runtime not found under $CLEL_HOME/resources/clojure-elisp" >&2
+# Every compiled .el requires the runtime; publishing elisp/ without it ships a broken tree.
+if [[ ! -f "$RUNTIME" ]]; then
+  echo "clojure-elisp runtime missing: $RUNTIME; elisp/ left unchanged" >&2
   exit 1
 fi
-cp "$RUNTIME" "$STAGE_OUT/$(basename "$RUNTIME")"
-echo "  $(basename "$RUNTIME" .el) (copied)"
+cp "$RUNTIME" "$STAGE_OUT/clojure-elisp-runtime.el"
+echo "  clojure-elisp-runtime (copied)"
 
 # Publish by rename, not by deleting the live tree first: elisp/ is either the
 # old build or the new one, never a partially-removed directory that a
