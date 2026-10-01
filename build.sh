@@ -116,12 +116,24 @@ if (( failed > 0 )); then
   exit 1
 fi
 
-# Copy clojure-elisp runtime (required by all compiled .el files)
-RUNTIME="$CLEL_HOME/resources/clojure-elisp/clojure-elisp-runtime.el"
-if [[ -f "$RUNTIME" ]]; then
-  cp "$RUNTIME" "$STAGE_OUT/clojure-elisp-runtime.el"
-  echo "  clojure-elisp-runtime (copied)"
+# Copy the clojure-elisp runtime every compiled .el file requires. From 0.8.0 the
+# runtime is the package `clel` (clel.el) and compiled output requires 'clel;
+# earlier compilers ship clojure-elisp-runtime.el and require that feature.
+# Whichever runtime the compiler in use ships is the one its output needs, and
+# a build that ships none would load nothing, so its absence fails the build.
+RUNTIME=""
+for candidate in clel.el clojure-elisp-runtime.el; do
+  if [[ -f "$CLEL_HOME/resources/clojure-elisp/$candidate" ]]; then
+    RUNTIME="$CLEL_HOME/resources/clojure-elisp/$candidate"
+    break
+  fi
+done
+if [[ -z "$RUNTIME" ]]; then
+  echo "clojure-elisp runtime not found under $CLEL_HOME/resources/clojure-elisp" >&2
+  exit 1
 fi
+cp "$RUNTIME" "$STAGE_OUT/$(basename "$RUNTIME")"
+echo "  $(basename "$RUNTIME" .el) (copied)"
 
 # Publish by rename, not by deleting the live tree first: elisp/ is either the
 # old build or the new one, never a partially-removed directory that a
