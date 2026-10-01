@@ -125,4 +125,6 @@
    (lowering :crystal/kanban-notes #(kanban-notes-code %)
              [:map [:project-id {:optional true} NonBlankStr]])
    (lowering :crystal/git-commits #(git-commits-code %)
-             [:map [:directory {:optional true} NonBlankStr]])])
+             [:map
+              [:directory {:optional true} NonBlankStr]
+              [:since {:optional true} SinceStr]])])

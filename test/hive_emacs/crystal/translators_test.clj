@@ -101,5 +101,10 @@
               {:op :crystal/git-commits :directory 7}
               {:op :crystal/git-commits :directory ""}
               {:op :crystal/git-commits :directory "   "}
+              {:op :crystal/git-commits :since 7}
+              {:op :crystal/git-commits :since ""}
+              {:op :crystal/git-commits :since "midnight'; touch /tmp/pwned; echo '"}
+              {:op :crystal/git-commits :since "$(id)"}
+              {:op :crystal/git-commits :since (apply str (repeat 41 "1"))}
               {:op :crystal/no-such-op}]]
     (is (contains? (vcore/plan registry emacs op) :error) (pr-str op))))
