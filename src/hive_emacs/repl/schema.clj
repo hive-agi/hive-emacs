@@ -62,16 +62,28 @@
    [:fn {:error/message "must be package-qualified"}
     (fn [s] (boolean (re-find #"[:/]" s)))]])
 
+(def Transport
+  "How the boundary reaches a backend from Emacs: the dispatch value of
+   hive-emacs.repl.boundary/call-elisp. :sly sends a Common Lisp form over the
+   current SLY connection; :nrepl sends an nREPL request over the current CIDER
+   connection. Absent means :sly. Open, like BackendId: a transport becomes
+   real by gaining a method."
+  :keyword)
+
 (def Op
   "How one verb becomes one call on one backend.
 
    :op/args names the request keys to pass, positionally. :op/defaults supplies
    values for keys the caller omitted. :op/shape labels the delivered result so
-   a decoder can be chosen without re-inspecting the value."
+   a decoder can be chosen without re-inspecting the value. :op/requires names
+   modules this op alone needs loaded first. :op/wire-keys names each positional
+   argument on a transport whose requests are keyed rather than positional."
   [:map {:closed true}
    [:op/rpc RpcName]
    [:op/args [:vector ParamKey]]
    [:op/defaults {:optional true} [:map-of ParamKey :any]]
+   [:op/requires {:optional true} [:vector :string]]
+   [:op/wire-keys {:optional true} [:vector :string]]
    [:op/shape [:enum :string :string-pair :plist :plist-list :completion-list
                :flex-list :any]]
    [:op/timeout-ms {:optional true} pos-int?]])
@@ -86,11 +98,14 @@
   "The measured behaviour of one backend. Swapping a backend is registering one
    of these — no code above the registry changes (DIP/OCP).
 
-   :profile/prelude are modules the transport must load before its ops resolve;
-   on Slynk an op whose package is not yet loaded does not error, it hangs."
+   :profile/prelude are modules every op needs loaded first; prefer
+   :op/requires, which confines a module that will not load to the ops that
+   need it. On Slynk an op whose package is not yet loaded does not error, it
+   hangs."
   [:map {:closed true}
    [:profile/id BackendId]
    [:profile/label :string]
+   [:profile/transport {:optional true} Transport]
    [:profile/ops [:map-of Verb Op]]
    [:profile/langs {:optional true} [:map-of Lang LangWrapper]]
    [:profile/prelude {:optional true} [:vector :string]]
@@ -116,6 +131,8 @@
   [:map {:closed true}
    [:call/rpc RpcName]
    [:call/args [:vector :any]]
+   [:call/transport {:optional true} Transport]
+   [:call/wire-keys {:optional true} [:vector :string]]
    [:call/shape [:enum :string :string-pair :plist :plist-list :completion-list
                  :flex-list :any]]
    [:call/timeout-ms pos-int?]])
@@ -158,6 +175,7 @@
    :hive-emacs.repl/lang Lang
    :hive-emacs.repl/param-key ParamKey
    :hive-emacs.repl/rpc-name RpcName
+   :hive-emacs.repl/transport Transport
    :hive-emacs.repl/op Op
    :hive-emacs.repl/lang-wrapper LangWrapper
    :hive-emacs.repl/profile Profile

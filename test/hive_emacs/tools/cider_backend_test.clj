@@ -33,12 +33,18 @@
     (testing "every emitted request is deadline bounded"
       (is (every? #(str/includes? % "with-timeout") elisp))
       (is (every? #(str/includes? % "sly-eval-async") elisp)))
-    (testing "the prelude loads the contrib packages before the op"
-      (is (str/includes? (nth elisp 0) "slynk/completion"))
-      (is (str/includes? (nth elisp 1) "slynk/apropos")))
+    (testing "eval needs no contrib module, so it issues the op alone"
+      (is (= 1 (count elisp)))
+      (is (not-any? #(str/includes? % "slynk/apropos") elisp)))
     (testing "and the op is the measured callee"
       (is (str/includes? (last elisp) "slynk:eval-and-grab-output")))
-    (is (not-any? #(str/includes? % "hive-mcp-cider") elisp))))
+    (is (not-any? #(str/includes? % "hive-mcp-cider") elisp)))
+  (testing "complete loads its own contrib module before the op, and only that one"
+    (let [{:keys [elisp]} (capture :complete {:prefix "map" :backend "slynk"})]
+      (is (= 2 (count elisp)))
+      (is (str/includes? (first elisp) "slynk/completion"))
+      (is (not-any? #(str/includes? % "slynk/apropos") elisp))
+      (is (str/includes? (last elisp) "simple-completions")))))
 
 (deftest lang-clojure-wraps-source-for-a-cloture-image
   (let [{:keys [elisp]} (capture :eval {:code "(map inc [1 2])"

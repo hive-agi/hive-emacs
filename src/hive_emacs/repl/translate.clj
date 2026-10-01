@@ -90,6 +90,14 @@
   (result/err kind (cond-> {:fail/kind kind :fail/message message}
                      (some? detail) (assoc :fail/detail detail))))
 
+(m/=> prelude-for [:=> [:cat schema/Profile schema/Op] [:vector :string]])
+
+(defn prelude-for
+  "Modules to ensure before OP runs: the profile-wide prelude, then the op's
+   own :op/requires, without repeats."
+  [prof op]
+  (vec (distinct (concat (:profile/prelude prof []) (:op/requires op [])))))
+
 (m/=> plan [:=> [:cat schema/Request] :any])
 
 (defn plan
@@ -107,11 +115,15 @@
                       params)
             [status v] (resolve-args op params')]
         (if (= :ok status)
-          (result/ok {:plan/prelude (vec (:profile/prelude prof []))
-                      :plan/call {:call/rpc (:op/rpc op)
-                                  :call/args v
-                                  :call/shape (:op/shape op)
-                                  :call/timeout-ms (timeout-for prof op timeout-ms)}})
+          (result/ok {:plan/prelude (prelude-for prof op)
+                      :plan/call (cond-> {:call/rpc (:op/rpc op)
+                                          :call/args v
+                                          :call/shape (:op/shape op)
+                                          :call/timeout-ms (timeout-for prof op timeout-ms)}
+                                   (:profile/transport prof)
+                                   (assoc :call/transport (:profile/transport prof))
+                                   (:op/wire-keys op)
+                                   (assoc :call/wire-keys (:op/wire-keys op)))})
           (fail :missing-param
                 (str "verb " verb " on " backend " requires " v)
                 {:verb verb :param v})))
