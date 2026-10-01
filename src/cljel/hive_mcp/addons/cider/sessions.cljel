@@ -168,6 +168,26 @@ Returns the list of names demoted to 'stale."
       (update-prop name :status 'stale))
     demoted))
 
+(defn promotable-p [status alive-p]
+  "Return non-nil when a session declaring STATUS with liveness ALIVE-P settled unrecorded.
+A session still claiming 'connecting while its REPL is live is connected. Pure."
+  (and (eq status 'connecting) alive-p t))
+
+(defn promote [alive-fn]
+  "Promote every 'connecting session whose REPL is live to 'connected.
+ALIVE-FN is a predicate (NAME) -> non-nil when that session's REPL is live and
+fully settled. Returns the list of promoted names."
+  (let [promoted '()]
+    (maphash (lambda (name props)
+               (when (and (stringp name)
+                          (promotable-p (plist-get props :status)
+                                        (funcall alive-fn name)))
+                 (push name promoted)))
+             hive-mcp-cider-sessions--registry)
+    (dolist (name promoted)
+      (update-props name :status 'connected :reason nil))
+    promoted))
+
 (defn clear-all []
   "Remove all sessions from registry."
   (clrhash hive-mcp-cider-sessions--registry))

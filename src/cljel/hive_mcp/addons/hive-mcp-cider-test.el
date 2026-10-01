@@ -51,5 +51,50 @@
   (hive-mcp-cider-sessions-clear-all)
   (delete-directory dir t))))
 
+(ert-deftest hive-mcp-cider-test-kill-session-never-prompts nil "kill-session completes when cider-quit would prompt and a kill-buffer query\nis armed: the prompt is refused, the REPL buffer and process are gone, and the\nsession is unregistered." (hive-mcp-cider-sessions-clear-all) (let* ((buf (generate-new-buffer "test-kill-repl"))
+        (proc (start-process "hive-mcp-cider-kill-test" nil "sleep" "30"))
+        (prompted (list nil))
+        (kill-buffer-query-functions (list (lambda ()
+    (error "kill-buffer query consulted during teardown")))))
+    (unwind-protect
+    (cl-letf (((symbol-function 'cider-quit) (lambda (&rest _)
+    (setcar prompted t)
+    (y-or-n-p "Are you sure you want to quit this CIDER connection? ")))) (hive-mcp-cider-sessions-register "victim" (hive-mcp-cider-sessions-make-session 7998 :process proc :cider-buffer "test-kill-repl" :status 'connected)) (hive-mcp-cider-kill-session "victim") (should (car prompted)) (should-not (buffer-live-p buf)) (let* ((deadline (+ (float-time) 5)))
+    (while (and (process-live-p proc) (< (float-time) deadline))
+    (accept-process-output nil 0.05))
+    (should-not (process-live-p proc))) (should-not (hive-mcp-cider-sessions-exists-p "victim")))
+  (when (process-live-p proc)
+    (delete-process proc))
+  (let* ((kill-buffer-query-functions nil))
+    (when (buffer-live-p buf)
+    (kill-buffer buf)))
+  (hive-mcp-cider-sessions-clear-all))))
+
+(ert-deftest hive-mcp-cider-test-kill-all-sessions-never-prompts nil "kill-all-sessions tears every session down without a prompt." (hive-mcp-cider-sessions-clear-all) (let* ((a (generate-new-buffer "test-kill-all-a"))
+        (b (generate-new-buffer "test-kill-all-b")))
+    (unwind-protect
+    (cl-letf (((symbol-function 'cider-quit) (lambda (&rest _)
+    (yes-or-no-p "Really quit? ")))) (hive-mcp-cider-sessions-register "a" (hive-mcp-cider-sessions-make-session 7996 :cider-buffer "test-kill-all-a")) (hive-mcp-cider-sessions-register "b" (hive-mcp-cider-sessions-make-session 7997 :cider-buffer "test-kill-all-b")) (hive-mcp-cider-kill-all-sessions) (should (equal 0 (hive-mcp-cider-sessions-count-sessions))) (should-not (buffer-live-p a)) (should-not (buffer-live-p b)))
+  (when (buffer-live-p a)
+    (kill-buffer a))
+  (when (buffer-live-p b)
+    (kill-buffer b))
+  (hive-mcp-cider-sessions-clear-all))))
+
+(ert-deftest hive-mcp-cider-test-call-without-prompts-refuses nil "Every minibuffer prompt inside call-without-prompts signals instead of waiting." (should-error (hive-mcp-cider-call-without-prompts (lambda ()
+    (y-or-n-p "q? ")))) (should-error (hive-mcp-cider-call-without-prompts (lambda ()
+    (yes-or-no-p "q? ")))) (should-error (hive-mcp-cider-call-without-prompts (lambda ()
+    (completing-read "q? " '("a"))))) (should (eq 'done (hive-mcp-cider-call-without-prompts (lambda ()
+    'done)))))
+
+(ert-deftest hive-mcp-cider-test-spawn-retry-replaces-entry nil "A retry of a registered spawn re-registers it on a new port instead of\nsignalling that the session already exists." (hive-mcp-cider-sessions-clear-all) (let* ((dir (make-temp-file "hive-mcp-cider-retry" t)))
+    (unwind-protect
+    (cl-letf (((symbol-function 'hive-mcp-cider-nrepl-launch-process) (lambda (&rest _)
+    nil)) ((symbol-function 'hive-mcp-cider-connection-arm-connect-timer) (lambda (&rest _)
+    nil)) ((symbol-function 'hive-mcp-cider-nrepl-port-open-p) (lambda (_port)
+    nil))) (hive-mcp-cider--spawn-attempt 0 "retry" 'clj 7990 dir nil nil nil nil nil) (should (equal 7990 (hive-mcp-cider-sessions-get-prop "retry" :port))) (hive-mcp-cider--spawn-attempt 1 "retry" 'clj nil dir nil nil nil nil nil) (should (hive-mcp-cider-sessions-exists-p "retry")) (should (eq 'starting (hive-mcp-cider-sessions-get-prop "retry" :status))) (should-not (equal 7990 (hive-mcp-cider-sessions-get-prop "retry" :port))))
+  (hive-mcp-cider-sessions-clear-all)
+  (delete-directory dir t))))
+
 (provide 'hive-mcp-cider-test)
 ;;; hive-mcp-cider-test.el ends here
