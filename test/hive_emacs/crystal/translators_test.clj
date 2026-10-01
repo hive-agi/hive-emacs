@@ -106,5 +106,8 @@
               {:op :crystal/git-commits :since "midnight'; touch /tmp/pwned; echo '"}
               {:op :crystal/git-commits :since "$(id)"}
               {:op :crystal/git-commits :since (apply str (repeat 41 "1"))}
+              {:op :crystal/git-commits :since "x' ; touch /tmp/pwned ; '"}
+              {:op :crystal/git-commits :since "midnight\n"}
+              {:op :crystal/git-commits :since (apply str (repeat 41 "a"))}
               {:op :crystal/no-such-op}]]
     (is (contains? (vcore/plan registry emacs op) :error) (pr-str op))))

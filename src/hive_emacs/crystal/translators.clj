@@ -44,7 +44,7 @@
 
 (def ^:private SinceStr
   "What may sit inside the single-quoted --since shell word: an ISO instant or a git date word."
-  [:re #"^[0-9A-Za-z:.+\- ]{1,40}$"])
+  [:re #"^[0-9A-Za-z:.+\- ]{1,40}\z"])
 
 (defn- maybe-arg
   "VALUE as a literal when present, otherwise nil."

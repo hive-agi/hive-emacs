@@ -50,10 +50,12 @@ temp file the test creates and deletes."
 
 (ert-deftest hive-mcp-config-adopt-test-cljel-dir-literal-rung nil
   "With nothing set, resolution reaches the shipped literal."
-  (let [hive-mcp-cider-nrepl-cljel-project-dir nil
-        hive-mcp-cider-nrepl-project-dir nil
-        hive-mcp-config-file nil
-        process-environment (cons "HIVE_CLJEL_PROJECT_DIR=" process-environment)]
+  ;; binding, not let: the defcustom shares its name with the function under
+  ;; test, and a let-bound local in call position compiles to a funcall.
+  (binding [hive-mcp-cider-nrepl-cljel-project-dir nil
+            hive-mcp-cider-nrepl-project-dir nil
+            hive-mcp-config-file nil
+            process-environment (cons "HIVE_CLJEL_PROJECT_DIR=" process-environment)]
     (should (equal (expand-file-name "~/PP/clojure-elisp")
                    (hive-mcp-cider-nrepl-project-dir 'cljel)))))
 
@@ -62,29 +64,29 @@ temp file the test creates and deletes."
   (-with-temp-config
    "{:cider {:nrepl {:cljel-project-dir \"/from/file\"}}}"
    (lambda ()
-     (let [hive-mcp-cider-nrepl-cljel-project-dir nil
-           hive-mcp-cider-nrepl-project-dir nil
-           process-environment (cons "HIVE_CLJEL_PROJECT_DIR=" process-environment)]
+     (binding [hive-mcp-cider-nrepl-cljel-project-dir nil
+               hive-mcp-cider-nrepl-project-dir nil
+               process-environment (cons "HIVE_CLJEL_PROJECT_DIR=" process-environment)]
        (should (equal "/from/file" (hive-mcp-cider-nrepl-project-dir 'cljel)))))))
 
 (ert-deftest hive-mcp-config-adopt-test-cljel-dir-env-beats-file nil
   (-with-temp-config
    "{:cider {:nrepl {:cljel-project-dir \"/from/file\"}}}"
    (lambda ()
-     (let [hive-mcp-cider-nrepl-cljel-project-dir nil
-           hive-mcp-cider-nrepl-project-dir nil
-           process-environment (cons "HIVE_CLJEL_PROJECT_DIR=/from/env"
-                                     process-environment)]
+     (binding [hive-mcp-cider-nrepl-cljel-project-dir nil
+               hive-mcp-cider-nrepl-project-dir nil
+               process-environment (cons "HIVE_CLJEL_PROJECT_DIR=/from/env"
+                                         process-environment)]
        (should (equal "/from/env" (hive-mcp-cider-nrepl-project-dir 'cljel)))))))
 
 (ert-deftest hive-mcp-config-adopt-test-cljel-dir-custom-beats-env nil
   (-with-temp-config
    "{:cider {:nrepl {:cljel-project-dir \"/from/file\"}}}"
    (lambda ()
-     (let [hive-mcp-cider-nrepl-cljel-project-dir "/from/custom"
-           hive-mcp-cider-nrepl-project-dir nil
-           process-environment (cons "HIVE_CLJEL_PROJECT_DIR=/from/env"
-                                     process-environment)]
+     (binding [hive-mcp-cider-nrepl-cljel-project-dir "/from/custom"
+               hive-mcp-cider-nrepl-project-dir nil
+               process-environment (cons "HIVE_CLJEL_PROJECT_DIR=/from/env"
+                                         process-environment)]
        (should (equal "/from/custom" (hive-mcp-cider-nrepl-project-dir 'cljel)))))))
 
 ;; ============================================================================
@@ -96,34 +98,34 @@ temp file the test creates and deletes."
 Nil through every rung means the fallback is disabled and start-default errors
 instead of guessing, which is the contract the old defcustom documented and
 its own test pins. The machine path moved to the config file, not to source."
-  (let [hive-mcp-cider-nrepl-default-project-dir nil
-        hive-mcp-cider-nrepl-project-dir nil
-        hive-mcp-config-file nil
-        process-environment (cons "HIVE_NREPL_DEFAULT_PROJECT_DIR="
-                                  process-environment)]
+  (binding [hive-mcp-cider-nrepl-default-project-dir nil
+            hive-mcp-cider-nrepl-project-dir nil
+            hive-mcp-config-file nil
+            process-environment (cons "HIVE_NREPL_DEFAULT_PROJECT_DIR="
+                                      process-environment)]
     (should (null (hive-mcp-cider-nrepl-default-project-dir nil)))))
 
 (ert-deftest hive-mcp-config-adopt-test-default-dir-chain nil
   (-with-temp-config
    "{:cider {:nrepl {:default-project-dir \"/from/file\"}}}"
    (lambda ()
-     (let [hive-mcp-cider-nrepl-default-project-dir nil
-           hive-mcp-cider-nrepl-project-dir nil
-           process-environment (cons "HIVE_NREPL_DEFAULT_PROJECT_DIR="
-                                     process-environment)]
+     (binding [hive-mcp-cider-nrepl-default-project-dir nil
+               hive-mcp-cider-nrepl-project-dir nil
+               process-environment (cons "HIVE_NREPL_DEFAULT_PROJECT_DIR="
+                                         process-environment)]
        (should (equal "/from/file" (hive-mcp-cider-nrepl-default-project-dir nil))))
-     (let [hive-mcp-cider-nrepl-default-project-dir nil
-           hive-mcp-cider-nrepl-project-dir nil
-           process-environment (cons "HIVE_NREPL_DEFAULT_PROJECT_DIR=/from/env"
-                                     process-environment)]
+     (binding [hive-mcp-cider-nrepl-default-project-dir nil
+               hive-mcp-cider-nrepl-project-dir nil
+               process-environment (cons "HIVE_NREPL_DEFAULT_PROJECT_DIR=/from/env"
+                                         process-environment)]
        (should (equal "/from/env" (hive-mcp-cider-nrepl-default-project-dir nil))))
-     (let [hive-mcp-cider-nrepl-default-project-dir "/from/custom"
-           hive-mcp-cider-nrepl-project-dir nil
-           process-environment (cons "HIVE_NREPL_DEFAULT_PROJECT_DIR=/from/env"
-                                     process-environment)]
+     (binding [hive-mcp-cider-nrepl-default-project-dir "/from/custom"
+               hive-mcp-cider-nrepl-project-dir nil
+               process-environment (cons "HIVE_NREPL_DEFAULT_PROJECT_DIR=/from/env"
+                                         process-environment)]
        (should (equal "/from/custom" (hive-mcp-cider-nrepl-default-project-dir nil))))
-     (let [hive-mcp-cider-nrepl-default-project-dir "/from/custom"
-           hive-mcp-cider-nrepl-project-dir nil]
+     (binding [hive-mcp-cider-nrepl-default-project-dir "/from/custom"
+               hive-mcp-cider-nrepl-project-dir nil]
        (should (equal "/explicit"
                       (hive-mcp-cider-nrepl-default-project-dir "/explicit")))))))
 

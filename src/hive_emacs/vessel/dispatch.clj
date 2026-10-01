@@ -15,7 +15,8 @@
             [hive-emacs.crystal.translators :as crystal]
             [hive-emacs.vessel :as vessel]
             [hive-spi.editor.services :as svc]
-            [hive-vessel.core :as vcore]))
+            [hive-vessel.core :as vcore]
+            [hive-emacs.editor.translators :as editor]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -35,9 +36,11 @@
   "Every op translator set hive-emacs contributes, in registration order:
    the :swarm/* / :cider/* ops from hive-emacs.swarm.translators, :project/*
    from hive-emacs.project.translators, :kanban/* from
-   hive-emacs.kanban.translators, and :crystal/* from
-   hive-emacs.crystal.translators."
-  (vec (concat swarm/translators project/translators kanban/translators crystal/translators)))
+   hive-emacs.kanban.translators, :crystal/* from
+   hive-emacs.crystal.translators, and the :editor/* probes from
+   hive-emacs.editor.translators."
+  (vec (concat swarm/translators project/translators kanban/translators
+               crystal/translators editor/translators)))
 
 (defn registry
   "The hive-vessel registry :dispatch plans against."

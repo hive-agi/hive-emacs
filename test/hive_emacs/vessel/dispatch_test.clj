@@ -149,7 +149,8 @@
                        [{:op :project/info} "projectile-api-project-info"]
                        [{:op :kanban/move-to-done :task-id "t1"} "kanban-move"]
                        [{:op :crystal/available?} "featurep"]
-                       [{:op :crystal/git-commits :since "midnight"} "git log"]]]
+                       [{:op :crystal/git-commits :since "midnight"} "git log"]
+                       [{:op :editor/feature? :feature "hive-mcp"} "(featurep 'hive-mcp)"]]]
     (testing (pr-str op)
       (let [{:keys [ret calls]} (dispatch-with {:success true :result "ok"} op 1000)]
         (is (:success ret))
