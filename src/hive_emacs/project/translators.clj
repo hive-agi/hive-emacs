@@ -52,8 +52,6 @@
             body)
       body)))
 
-(def ^:private Str [:string])
-
 (defn- lowering
   "A translator lowering OP through CODE-FN, gated by ACCEPTS when given."
   ([op code-fn] (lowering op code-fn nil))
