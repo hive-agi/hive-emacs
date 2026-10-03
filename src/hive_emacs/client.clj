@@ -330,7 +330,7 @@
        ;; Circuit is closed or half-open — proceed with the call
        (let [half-open? (= :half-open (:state @circuit-breaker))
              timeout-ms (min (or timeout-ms *default-timeout-ms*) *max-timeout-ms*)
-             _          (log/debug :emacsclient-exec
+             _          (log/trace :emacsclient-exec
                                    (cond-> {:timeout-ms   timeout-ms
                                             :code-chars   (count code)
                                             :code-preview (subs code 0 (min 100 (count code)))}
@@ -361,7 +361,7 @@
          (cond
            (:success response)
            (do
-             (log/debug :emacsclient-success {:duration-ms duration})
+             (log/trace :emacsclient-success {:duration-ms duration})
              (when (not= :closed (:state @circuit-breaker))
                (recover-breaker!))
              response)
