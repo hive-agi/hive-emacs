@@ -13,10 +13,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ ! -d "$CLEL_DIR" ]]; then
-  echo "clojure-elisp checkout not found: $CLEL_DIR" >&2
-  exit 2
-fi
+# shellcheck source=clel-pin.sh
+source "$SCRIPT_DIR/clel-pin.sh"
+clel_pin_verify "$CLEL_DIR" "$PROJECT_DIR/version.edn" || exit 2
 
 mkdir -p "$PARITY_TMP/src"
 cp -R "$SOURCE_DIR/." "$PARITY_TMP/src/"

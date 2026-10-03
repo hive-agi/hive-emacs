@@ -58,14 +58,17 @@ jobs:
       - name: Checkout hive-emacs
         uses: actions/checkout@v4
 
-      # Pinned to the compiler the committed elisp/ was built with (v0.7.2,
-      # runtime feature 'clojure-elisp-runtime, shipped in elisp/). Keep in step
-      # with build.sh's pin.
-      - name: Checkout clojure-elisp v0.7.2
+      - name: Read the pinned clojure-elisp compiler
+        id: clel
+        run: |
+          echo "sha=$(bash scripts/clel-pin.sh sha)" >> "$GITHUB_OUTPUT"
+          echo "clojure-elisp $(bash scripts/clel-pin.sh version)"
+
+      - name: Checkout clojure-elisp
         uses: actions/checkout@v4
         with:
           repository: BuddhiLW/clojure-elisp
-          ref: d638956d165b30c82ec05be46cb85373f18c3a87
+          ref: ${{ steps.clel.outputs.sha }}
           path: .cache/clojure-elisp
 
       - name: Setup Java
@@ -94,6 +97,9 @@ jobs:
         env:
           CLEL_HOME: ${{ github.workspace }}/.cache/clojure-elisp
         run: bb build
+
+      - name: Check committed .el match the pinned compiler's output
+        run: git diff --exit-code -- elisp src/cljel
 
       - name: Check ERT artifacts define nothing outside their own prefix
         run: bb lint:ert-defs

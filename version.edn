@@ -3,4 +3,5 @@
  :license  {:name "MIT" :url "https://opensource.org/licenses/MIT"}
  :scm-url  "https://github.com/hive-agi/hive-emacs"
  :src-dirs ["src" "resources" "elisp"]
- :publish  :clojars}
+ :publish  :clojars
+ :clel     {:version "0.7.2" :sha "d638956d165b30c82ec05be46cb85373f18c3a87"}}
