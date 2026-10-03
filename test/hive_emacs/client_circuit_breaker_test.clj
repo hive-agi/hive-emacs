@@ -150,8 +150,21 @@
     (let [cb (client/circuit-breaker-state)]
       (is (= :open (:state cb)))
       (is (= "still dead" (:last-error cb)))
-      ;; From half-open, backoff resets to initial (not doubled)
-      (is (= client/initial-backoff-ms (:backoff-ms cb))))))
+      ;; From half-open, backoff doubles so an absent daemon is probed less and less
+      (is (= (* 2 client/initial-backoff-ms) (:backoff-ms cb))))))
+
+(deftest repeated-probe-failures-back-off-to-max
+  (testing "An absent daemon is probed at doubling intervals until max-backoff-ms"
+    (#'client/trip-breaker! "dead" :socket-not-found)
+    (let [backoffs (doall
+                    (for [_ (range 10)]
+                      (do (swap! @#'client/circuit-breaker assoc :tripped-at 0)
+                          (is (true? (#'client/maybe-half-open!)))
+                          (#'client/trip-breaker! "still dead" :socket-not-found)
+                          (:backoff-ms (client/circuit-breaker-state)))))]
+      (is (apply <= backoffs))
+      (is (= [2000 4000 8000 16000 32000] (take 5 backoffs)))
+      (is (= client/max-backoff-ms (last backoffs))))))
 
 ;;; =============================================================================
 ;;; Guard Check Tests (check-circuit-breaker)
@@ -302,19 +315,20 @@
     (#'client/maybe-half-open!)
     (is (= :half-open (:state (client/circuit-breaker-state))))
 
-    ;; 4. Probe fails -> back to open with reset backoff
+    ;; 4. Probe fails -> back to open with doubled backoff
     (#'client/trip-breaker! "still dead" :connection-refused)
     (is (= :open (:state (client/circuit-breaker-state))))
-    (is (= client/initial-backoff-ms (:backoff-ms (client/circuit-breaker-state)))
-        "Backoff resets to initial from half-open failure")
+    (is (= (* 2 client/initial-backoff-ms) (:backoff-ms (client/circuit-breaker-state)))
+        "Backoff doubles on half-open failure")
 
     ;; 5. Second attempt: wait, transition to half-open, succeed
     (swap! @#'client/circuit-breaker assoc
-           :tripped-at (- (System/currentTimeMillis) (* 2 client/initial-backoff-ms)))
+           :tripped-at (- (System/currentTimeMillis) (* 4 client/initial-backoff-ms)))
     (#'client/maybe-half-open!)
     (is (= :half-open (:state (client/circuit-breaker-state))))
     (#'client/recover-breaker!)
-    (is (= :closed (:state (client/circuit-breaker-state))))))
+    (is (= :closed (:state (client/circuit-breaker-state))))
+    (is (= client/initial-backoff-ms (:backoff-ms (client/circuit-breaker-state))))))
 
 (deftest crash-count-accumulates-across-cycles
   (testing "Crash count accumulates across open/half-open/open cycles"
