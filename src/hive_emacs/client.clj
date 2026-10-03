@@ -131,6 +131,7 @@
 
 (defn- transition-breaker!
   "Atomically transition the circuit breaker, logging the change.
+   Leaving or entering :closed logs at info; open/half-open probe churn logs at debug.
    Returns the new state."
   [new-state-fn reason]
   (let [old @circuit-breaker
@@ -138,26 +139,23 @@
         old-state (:state old)
         new-state (:state new)]
     (when (not= old-state new-state)
-      (log/info "Circuit breaker:" (name old-state) "->" (name new-state)
-                (when reason (str "(" reason ")"))))
+      (log/log (if (some #{:closed} [old-state new-state]) :info :debug)
+               "Circuit breaker:" (name old-state) "->" (name new-state)
+               (when reason (str "(" reason ")"))))
     new))
 
 (defn- trip-breaker!
   "Transition circuit breaker to :open state on failure.
-   If already open, doubles the backoff (exponential backoff).
-   If transitioning from :half-open, resets backoff to initial."
+   From :closed, backoff starts at initial-backoff-ms.
+   From :open or a failed :half-open probe, backoff doubles, capped at max-backoff-ms."
   [error-str death-tag]
   (transition-breaker!
    (fn [cb]
      (let [now (System/currentTimeMillis)
-           prev-state (:state cb)
-           new-backoff (case prev-state
-                         ;; First failure or from half-open probe failure: start fresh
-                         :closed    initial-backoff-ms
-                         :half-open initial-backoff-ms
-                         ;; Already open: double the backoff (exponential)
-                         :open      (min max-backoff-ms
-                                         (* 2 (or (:backoff-ms cb) initial-backoff-ms))))]
+           new-backoff (case (:state cb)
+                         :closed initial-backoff-ms
+                         (min max-backoff-ms
+                              (* 2 (or (:backoff-ms cb) initial-backoff-ms))))]
        (assoc cb
               :state :open
               :tripped-at now
@@ -195,8 +193,8 @@
       (let [new-cb (assoc cb :state :half-open)]
         (if (compare-and-set! circuit-breaker cb new-cb)
           (do
-            (log/info "Circuit breaker:" "open" "->" "half-open"
-                      "(backoff" backoff "ms elapsed, probing)")
+            (log/debug "Circuit breaker:" "open" "->" "half-open"
+                       "(backoff" backoff "ms elapsed, probing)")
             true)
           ;; Lost the race — another thread already transitioned
           false))
@@ -299,6 +297,9 @@
    IEmacsDaemon integration: On daemon death detection (matching daemon-dead-patterns),
    reports the error to the daemon store for lifecycle tracking.
 
+   Failures of a half-open probe log at debug: the outage was already
+   reported at warn when the breaker first opened.
+
    Returns a map with :success, :result or :error keys.
    On timeout, returns {:success false :error \"Timeout...\" :timed-out true}
    On circuit-open, returns {:success false :error \"Circuit breaker open...\" :circuit-open true}"
@@ -314,7 +315,7 @@
              remaining-ms (max 0 (- (or (:backoff-ms cb) initial-backoff-ms)
                                     (- (System/currentTimeMillis)
                                        (or (:tripped-at cb) 0))))]
-         (log/debug :circuit-breaker-blocked
+         (log/trace :circuit-breaker-blocked
                     {:backoff-ms (:backoff-ms cb)
                      :remaining-ms remaining-ms
                      :crash-count (:crash-count cb)
@@ -329,6 +330,7 @@
 
        ;; Circuit is closed or half-open — proceed with the call
        (let [half-open? (= :half-open (:state @circuit-breaker))
+             fail-level (if half-open? :debug :warn)
              timeout-ms (min (or timeout-ms *default-timeout-ms*) *max-timeout-ms*)
              _          (log/trace :emacsclient-exec
                                    (cond-> {:timeout-ms   timeout-ms
@@ -368,22 +370,24 @@
 
            (:timed-out response)
            (do
-             (log/warn :emacsclient-timeout
-                       {:timeout-ms timeout-ms
-                        :code-preview (subs code 0 (min 100 (count code)))})
+             (log/log fail-level :emacsclient-timeout
+                      {:timeout-ms timeout-ms
+                       :code-preview (subs code 0 (min 100 (count code)))})
              (when half-open?
                (trip-breaker! (:error response) :timeout))
              response)
 
            :else
            (do
-             (log/warn :emacsclient-failure
-                       {:duration-ms duration :error (:error response)})
+             (log/log fail-level :emacsclient-failure
+                      {:duration-ms duration :error (:error response)})
              (if-let [[_ death-tag]
                       (detect-daemon-death (:error response))]
                (do
-                 (log/warn :daemon-death-detected
-                           {:tag death-tag :error (:error response)})
+                 (when-not half-open?
+                   (log/warn :daemon-death-detected
+                             {:tag death-tag
+                              :note "emacsclient calls suspended with exponential backoff; probe failures log at debug"}))
                  (report-daemon-error! (:error response) death-tag)
                  (trip-breaker! (:error response) death-tag))
                (when half-open?
