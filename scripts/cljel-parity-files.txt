@@ -71,3 +71,5 @@ hive_mcp/transform.cljel
 hive_mcp/transient.cljel
 hive_mcp/triggers.cljel
 hive_mcp/workflows.cljel
+hive_mcp/addons/cider_test.cljel
+hive_mcp/attention.cljel
