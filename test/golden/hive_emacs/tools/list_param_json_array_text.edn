@@ -1,0 +1,11 @@
+{:bare-alias nil,
+ :colon-aliases nil,
+ :edn-map-text nil,
+ :empty-array [],
+ :json-object nil,
+ :malformed nil,
+ :nil nil,
+ :not-a-string nil,
+ :one-alias ["dev"],
+ :padded ["test"],
+ :two-entries ["-Srepro" "-J-Xmx2g"]}
