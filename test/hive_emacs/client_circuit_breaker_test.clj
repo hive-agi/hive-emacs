@@ -13,23 +13,32 @@
    5. :open    -> :open       exponential backoff doubling
    6. :closed  stays :closed  on successful calls
    7. Calls blocked when :open and backoff hasn't elapsed"
-  (:require [clojure.java.shell :as shell]
-            [clojure.test :refer [deftest testing is use-fixtures]]
+  (:require [clojure.test :refer [deftest testing is use-fixtures]]
             [hive-emacs.client :as client]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
 ;;; =============================================================================
 
+(defn- refuse-live-emacsclient
+  "The default transport under test: reaching it means a test would have
+   spawned a real emacsclient against whatever daemon answers on this host."
+  [argv]
+  (throw (ex-info "test reached a live emacsclient"
+                  {:error :test/live-emacsclient :argv argv})))
+
 (defn reset-breaker-fixture
-  "Reset circuit breaker to :closed before each test."
+  "Reset circuit breaker to :closed before each test, with a transport that
+   refuses to spawn a process unless the test installs a stub."
   [f]
   (client/reset-circuit-breaker!)
-  (try
-    (f)
-    (finally
-      (client/shutdown-executor!)
-      (client/reset-circuit-breaker!))))
+  (let [previous (client/set-transport! refuse-live-emacsclient)]
+    (try
+      (f)
+      (finally
+        (client/set-transport! previous)
+        (client/shutdown-executor!)
+        (client/reset-circuit-breaker!)))))
 
 (use-fixtures :each reset-breaker-fixture)
 
@@ -150,8 +159,21 @@
     (let [cb (client/circuit-breaker-state)]
       (is (= :open (:state cb)))
       (is (= "still dead" (:last-error cb)))
-      ;; From half-open, backoff resets to initial (not doubled)
-      (is (= client/initial-backoff-ms (:backoff-ms cb))))))
+      ;; From half-open, backoff doubles so an absent daemon is probed less and less
+      (is (= (* 2 client/initial-backoff-ms) (:backoff-ms cb))))))
+
+(deftest repeated-probe-failures-back-off-to-max
+  (testing "An absent daemon is probed at doubling intervals until max-backoff-ms"
+    (#'client/trip-breaker! "dead" :socket-not-found)
+    (let [backoffs (doall
+                    (for [_ (range 10)]
+                      (do (swap! @#'client/circuit-breaker assoc :tripped-at 0)
+                          (is (true? (#'client/maybe-half-open!)))
+                          (#'client/trip-breaker! "still dead" :socket-not-found)
+                          (:backoff-ms (client/circuit-breaker-state)))))]
+      (is (apply <= backoffs))
+      (is (= [2000 4000 8000 16000 32000] (take 5 backoffs)))
+      (is (= client/max-backoff-ms (last backoffs))))))
 
 ;;; =============================================================================
 ;;; Guard Check Tests (check-circuit-breaker)
@@ -201,15 +223,36 @@
 
 (deftest eval-runs-on-bounded-weave-pool
   (testing "successful emacsclient effects use the owned bounded executor"
-    (with-redefs [shell/sh
-                  (fn [& _]
-                    {:exit 0 :out "\"ready\"\n" :err ""})]
+    (let [argvs (atom [])]
+      (client/set-transport! (fn [argv]
+                               (swap! argvs conj argv)
+                               {:exit 0 :out "\"ready\"\n" :err ""}))
       (let [result (client/eval-elisp-with-timeout "t" 1000)
             stats (client/executor-stats)]
         (is (:success result))
         (is (= "ready" (:result result)))
+        (is (= 1 (count @argvs)))
+        (is (= ["--eval" "t"] (take-last 2 (first @argvs))))
         (is (= 2 (:max-pool-size stats)))
         (is (<= (:queued stats) 16))))))
+
+(deftest a-failing-emacsclient-reports-its-stderr
+  (client/set-transport! (fn [_] {:exit 1 :out "" :err "boom\n"}))
+  (let [result (client/eval-elisp-with-timeout "t" 1000)]
+    (is (false? (:success result)))
+    (is (re-find #"boom" (str (:error result))))))
+
+(deftest emacsclient-argv-adds-the-socket-only-when-named
+  (is (= ["emacsclient" "--eval" "(+ 1 2)"]
+         (client/emacsclient-argv "emacsclient" nil "(+ 1 2)")))
+  (is (= ["emacsclient" "-s" "hive" "--eval" "(+ 1 2)"]
+         (client/emacsclient-argv "emacsclient" "hive" "(+ 1 2)"))))
+
+(deftest no-test-in-this-namespace-reaches-a-live-emacsclient
+  (let [e (try (refuse-live-emacsclient ["emacsclient" "--eval" "t"]) nil
+               (catch clojure.lang.ExceptionInfo e e))]
+    (is (= :test/live-emacsclient (:error (ex-data e)))
+        "the fixture's default transport refuses to spawn a process")))
 
 (deftest eval-elisp!-returns-circuit-open-map
   (testing "eval-elisp! returns {:error :circuit-open ...} when breaker is open"
@@ -302,19 +345,20 @@
     (#'client/maybe-half-open!)
     (is (= :half-open (:state (client/circuit-breaker-state))))
 
-    ;; 4. Probe fails -> back to open with reset backoff
+    ;; 4. Probe fails -> back to open with doubled backoff
     (#'client/trip-breaker! "still dead" :connection-refused)
     (is (= :open (:state (client/circuit-breaker-state))))
-    (is (= client/initial-backoff-ms (:backoff-ms (client/circuit-breaker-state)))
-        "Backoff resets to initial from half-open failure")
+    (is (= (* 2 client/initial-backoff-ms) (:backoff-ms (client/circuit-breaker-state)))
+        "Backoff doubles on half-open failure")
 
     ;; 5. Second attempt: wait, transition to half-open, succeed
     (swap! @#'client/circuit-breaker assoc
-           :tripped-at (- (System/currentTimeMillis) (* 2 client/initial-backoff-ms)))
+           :tripped-at (- (System/currentTimeMillis) (* 4 client/initial-backoff-ms)))
     (#'client/maybe-half-open!)
     (is (= :half-open (:state (client/circuit-breaker-state))))
     (#'client/recover-breaker!)
-    (is (= :closed (:state (client/circuit-breaker-state))))))
+    (is (= :closed (:state (client/circuit-breaker-state))))
+    (is (= client/initial-backoff-ms (:backoff-ms (client/circuit-breaker-state))))))
 
 (deftest crash-count-accumulates-across-cycles
   (testing "Crash count accumulates across open/half-open/open cycles"

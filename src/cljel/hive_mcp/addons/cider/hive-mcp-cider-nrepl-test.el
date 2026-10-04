@@ -53,19 +53,19 @@
     (should (equal "npx" (car cmd)))
     (should (member ":app" cmd))))
 
-(ert-deftest hive-mcp-cider-nrepl-test-default-dir-explicit-wins nil "An explicit DIR outranks both defcustoms." (let* ((hive-mcp-cider-nrepl-project-dir "/tmp/configured")
+(ert-deftest hive-mcp-cider-nrepl-test-default-dir-explicit-wins nil "An explicit DIR outranks both defcustoms." (let ((hive-mcp-cider-nrepl-project-dir "/tmp/configured")
         (hive-mcp-cider-nrepl-default-project-dir "/tmp/fallback"))
     (should (equal (expand-file-name "/tmp/explicit") (hive-mcp-cider-nrepl-default-project-dir "/tmp/explicit")))))
 
-(ert-deftest hive-mcp-cider-nrepl-test-default-dir-project-then-fallback nil "Without DIR the project defcustom wins, and the fallback covers its nil." (let* ((hive-mcp-cider-nrepl-default-project-dir "/tmp/fallback"))
-    (let* ((hive-mcp-cider-nrepl-project-dir "/tmp/configured"))
+(ert-deftest hive-mcp-cider-nrepl-test-default-dir-project-then-fallback nil "Without DIR the project defcustom wins, and the fallback covers its nil." (let ((hive-mcp-cider-nrepl-default-project-dir "/tmp/fallback"))
+    (let ((hive-mcp-cider-nrepl-project-dir "/tmp/configured"))
     (should (equal (expand-file-name "/tmp/configured") (hive-mcp-cider-nrepl-default-project-dir nil))))
-    (let* ((hive-mcp-cider-nrepl-project-dir nil))
+    (let ((hive-mcp-cider-nrepl-project-dir nil))
     (should (equal (expand-file-name "/tmp/fallback") (hive-mcp-cider-nrepl-default-project-dir nil))))))
 
-(ert-deftest hive-mcp-cider-nrepl-test-default-dir-nil-when-unset nil "Nothing configured resolves to nil — never to an accidental default." (let* ((hive-mcp-cider-nrepl-project-dir nil)
+(ert-deftest hive-mcp-cider-nrepl-test-default-dir-nil-when-unset nil "Nothing configured resolves to nil — never to an accidental default." (let ((hive-mcp-cider-nrepl-project-dir nil)
         (hive-mcp-cider-nrepl-default-project-dir nil))
-    (should-not (hive-mcp-cider-nrepl-default-project-dir nil))) (let* ((hive-mcp-cider-nrepl-project-dir "")
+    (should-not (hive-mcp-cider-nrepl-default-project-dir nil))) (let ((hive-mcp-cider-nrepl-project-dir "")
         (hive-mcp-cider-nrepl-default-project-dir nil))
     (should-not (hive-mcp-cider-nrepl-default-project-dir nil))))
 
