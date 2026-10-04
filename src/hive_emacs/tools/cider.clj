@@ -21,7 +21,8 @@
             [hive-emacs.attention :as attention]
             [hive-emacs.bridge-loader :as bridge]
             [hive-emacs.cider.spawn :as spawn]
-            [hive-emacs.cider.introspection :as intro]))
+            [hive-emacs.cider.introspection :as intro]
+            [hive-emacs.tools.list-param :as list-param]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -605,12 +606,16 @@
 
 (defn spawn-list-param
   "A spawn list param as a vector of non-blank strings, or nil when empty.
-   A sequential passes through. A lone string is ONE entry, except under
-   SPLIT-RE, which splits it (aliases given as \"dev,test\" or \":dev:test\")."
+   A sequential passes through, and so does a string holding a JSON array's
+   text (`list-param/json-array-text`). Any other lone string is ONE entry,
+   except under SPLIT-RE, which splits it (aliases given as \"dev,test\" or
+   \":dev:test\")."
   ([v] (spawn-list-param v nil))
   ([v split-re]
-   (let [entries (cond
+   (let [decoded (list-param/json-array-text v)
+         entries (cond
                    (nil? v) nil
+                   decoded (map str decoded)
                    (string? v) (if split-re (str/split v split-re) [v])
                    (sequential? v) (map str v)
                    :else [(str v)])
