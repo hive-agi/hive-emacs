@@ -268,15 +268,39 @@
       (catch Exception _ s))
     s))
 
+(defn emacsclient-argv
+  "The emacsclient command line evaluating `code`, with `-s socket` when a
+   socket name is given. Pure."
+  [path socket code]
+  (cond-> [path]
+    socket (conj "-s" socket)
+    true   (conj "--eval" code)))
+
+(defn- shell-run
+  "The production transport: run `argv` as a process,
+   answering {:exit :out :err}."
+  [argv]
+  (apply sh argv))
+
+(defonce ^:private transport (atom #'shell-run))
+
+(defn set-transport!
+  "Install `f`, (fn [argv] {:exit :out :err}), as the emacsclient transport
+   and return the one it replaces. Held in an atom rather than a dynamic var
+   because the call runs on the owned executor thread, where a binding does
+   not reach."
+  [f]
+  (let [previous @transport]
+    (reset! transport f)
+    previous))
+
 (defn- execute-emacsclient
   [code timeout-ms]
   (guarded/guarded-await!
    (ensure-emacsclient-executor!)
    (fn []
      (let [{:keys [exit out err]}
-           (apply sh (cond-> [*emacsclient-path*]
-                       *emacs-socket-name* (conj "-s" *emacs-socket-name*)
-                       true (conj "--eval" code)))]
+           (@transport (emacsclient-argv *emacsclient-path* *emacs-socket-name* code))]
        (if (zero? exit)
          {:success true
           :result (unwrap-emacs-string (str/trim out))}
