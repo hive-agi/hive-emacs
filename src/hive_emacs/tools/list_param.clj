@@ -13,13 +13,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (defn json-array-text
-  "The entries of S when S is the JSON text of an array, else nil. Never throws.
-
-   Read as a lone entry instead, that text became the alias NAME `[\"dev\"]`:
-   `-M:[\"dev\"]` plus a `{:aliases {:[\"dev\"] {:main-opts []}}}` neutralizer,
-   which parseedn reads as an empty keyword `:` followed by a vector and a
-   map, so the merged -Sdeps printed `: [\"dev\"], {:main-opts []} nil` and the
-   clojure CLI died on `Invalid token: :`."
+  "The entries of S when S is the JSON text of an array, else nil. Never throws."
   [s]
   (when (string? s)
     (let [t (str/trim s)]
