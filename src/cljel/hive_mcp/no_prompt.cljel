@@ -1,0 +1,41 @@
+(ns hive-mcp-no-prompt
+  "Refuse interactive prompts during agent-originated evaluation.
+
+Agents reach the shared Emacs daemon through emacsclient. A minibuffer prompt
+raised there (a grammar install offer, a server download question) has no one
+to answer it and blocks every client until a human does. `call' runs a thunk
+with the prompting functions rebound to signal `hive-mcp-prompt-refused',
+whose data names the prompt, so the agent gets an error instead of a hang."
+  (:require [cl-lib]
+            [subr-x]))
+
+(define-error 'hive-mcp-prompt-refused "Interactive prompt refused")
+
+(defn refusal-message [prompt]
+  "The refusal text for PROMPT: \"Emacs asked: PROMPT; refused for agent calls\".
+PROMPT is trimmed; a non-string PROMPT is printed with `format' %s."
+  (format "Emacs asked: %s; refused for agent calls"
+          (string-trim (format "%s" prompt))))
+
+(defn refuse [&rest args]
+  "Signal `hive-mcp-prompt-refused' naming the prompt, the first of ARGS.
+Accepts any arity so it can stand in for every prompting function."
+  (signal 'hive-mcp-prompt-refused (list (refusal-message (car args)))))
+
+(defn call [thunk]
+  "Call THUNK and return its value. While it runs, `y-or-n-p', `yes-or-no-p',
+`read-string', `read-from-minibuffer', `completing-read', `read-answer',
+`read-char-choice', `read-passwd' and `read-number' signal
+`hive-mcp-prompt-refused' instead of prompting, and kill-buffer queries are off.
+The original definitions are restored on exit, normal or not."
+  (let [kill-buffer-query-functions nil]
+    (cl-letf (((symbol-function 'y-or-n-p) #'refuse)
+              ((symbol-function 'yes-or-no-p) #'refuse)
+              ((symbol-function 'read-string) #'refuse)
+              ((symbol-function 'read-from-minibuffer) #'refuse)
+              ((symbol-function 'completing-read) #'refuse)
+              ((symbol-function 'read-answer) #'refuse)
+              ((symbol-function 'read-char-choice) #'refuse)
+              ((symbol-function 'read-passwd) #'refuse)
+              ((symbol-function 'read-number) #'refuse))
+      (funcall thunk))))

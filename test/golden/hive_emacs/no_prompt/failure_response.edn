@@ -1,0 +1,8 @@
+{:blank {:success false, :error ""},
+ :nil-stderr {:success false, :error ""},
+ :plain-error {:success false, :error "boom"},
+ :refusal
+ {:success false,
+  :error
+  "*ERROR*: Interactive prompt refused: \"Emacs asked: Install now? (y or n); refused for agent calls\"",
+  :prompt-refused true}}

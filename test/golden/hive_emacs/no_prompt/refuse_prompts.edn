@@ -1,0 +1,10 @@
+{:atom
+ "(progn (require 'hive-mcp-no-prompt nil t) (funcall (if (fboundp 'hive-mcp-no-prompt-call) #'hive-mcp-no-prompt-call #'funcall) (lambda () t\n)))",
+ :call
+ "(progn (require 'hive-mcp-no-prompt nil t) (funcall (if (fboundp 'hive-mcp-no-prompt-call) #'hive-mcp-no-prompt-call #'funcall) (lambda () (+ 1 2)\n)))",
+ :empty
+ "(progn (require 'hive-mcp-no-prompt nil t) (funcall (if (fboundp 'hive-mcp-no-prompt-call) #'hive-mcp-no-prompt-call #'funcall) (lambda () \n)))",
+ :find-file
+ "(progn (require 'hive-mcp-no-prompt nil t) (funcall (if (fboundp 'hive-mcp-no-prompt-call) #'hive-mcp-no-prompt-call #'funcall) (lambda () (find-file \"/tmp/a.clj\")\n)))",
+ :trailing-comment
+ "(progn (require 'hive-mcp-no-prompt nil t) (funcall (if (fboundp 'hive-mcp-no-prompt-call) #'hive-mcp-no-prompt-call #'funcall) (lambda () (message \"hi\") ; a comment\n)))"}
