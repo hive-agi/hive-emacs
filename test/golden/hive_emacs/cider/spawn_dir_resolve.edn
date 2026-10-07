@@ -1,0 +1,7 @@
+{:blank-project-dir [:ok "/repo/b"],
+ :directory-only [:ok "/repo/b"],
+ :missing-directory [:err :cider/bad-project-dir],
+ :missing-project-dir [:err :cider/bad-project-dir],
+ :neither [:ok nil],
+ :project-dir [:ok "/repo/a"],
+ :project-dir-wins [:ok "/repo/a"]}
