@@ -16,7 +16,10 @@
             [hive-emacs.vessel :as vessel]
             [hive-spi.editor.services :as svc]
             [hive-vessel.core :as vcore]
-            [hive-emacs.editor.translators :as editor]))
+            [hive-emacs.editor.translators :as editor]
+            [hive-emacs.magit.translators :as magit]
+            [hive-emacs.memory.translators :as memory]
+            [hive-emacs.projectile.translators :as projectile]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -33,14 +36,10 @@
     (vessel/bridge-evaluator code timeout-ms)))
 
 (def translators
-  "Every op translator set hive-emacs contributes, in registration order:
-   the :swarm/* / :cider/* ops from hive-emacs.swarm.translators, :project/*
-   from hive-emacs.project.translators, :kanban/* from
-   hive-emacs.kanban.translators, :crystal/* from
-   hive-emacs.crystal.translators, and the :editor/* probes from
-   hive-emacs.editor.translators."
+  "All registered Emacs op translators, including closed magit, projectile and legacy-memory ops."
   (vec (concat swarm/translators project/translators kanban/translators
-               crystal/translators editor/translators)))
+               crystal/translators editor/translators magit/translators
+               projectile/translators memory/translators)))
 
 (defn registry
   "The hive-vessel registry :dispatch plans against."

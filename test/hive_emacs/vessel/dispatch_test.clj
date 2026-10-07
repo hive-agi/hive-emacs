@@ -147,6 +147,23 @@
 (deftest every-op-namespace-dispatches
   (doseq [[op needle] [[{:op :swarm/slave-ready? :slave-id "s1"} "slave-ready-p"]
                        [{:op :project/info} "projectile-api-project-info"]
+                       [{:op :project/files :pattern nil} "projectile-api-project-files"]
+                       [{:op :project/find-file :filename "a.clj"} "projectile-api-find-file"]
+                       [{:op :project/search :pattern "needle"} "projectile-api-search"]
+                       [{:op :project/recent} "projectile-api-recent-files"]
+                       [{:op :project/list-projects} "projectile-api-list-projects"]
+                       [{:op :magit/status :directory "/tmp/repo"} "magit-api-status"]
+                       [{:op :magit/branches :directory "/tmp/repo"} "magit-api-branches"]
+                       [{:op :magit/log :directory "/tmp/repo" :count 3} "magit-api-log"]
+                       [{:op :magit/diff :directory "/tmp/repo" :target "staged"} "magit-api-diff"]
+                       [{:op :magit/stage :directory "/tmp/repo" :files :all} "magit-api-stage"]
+                       [{:op :magit/stage-verify :directory "/tmp/repo" :paths ["a"]} "git diff --cached"]
+                       [{:op :magit/commit :directory "/tmp/repo" :message "m" :all false} "magit-api-commit"]
+                       [{:op :magit/push :directory "/tmp/repo" :set-upstream false :remote nil} "magit-api-push"]
+                       [{:op :magit/pull :directory "/tmp/repo"} "magit-api-pull"]
+                       [{:op :magit/fetch :directory "/tmp/repo" :remote nil} "magit-api-fetch"]
+                       [{:op :magit/feature-branches :directory "/tmp/repo"} "feature-branches"]
+                       [{:op :memory/legacy-export :project-id "hive"} "hive-mcp-memory-query"]
                        [{:op :kanban/move-to-done :task-id "t1"} "kanban-move"]
                        [{:op :crystal/available?} "featurep"]
                        [{:op :crystal/git-commits :since "midnight"} "git log"]
@@ -155,8 +172,7 @@
       (let [{:keys [ret calls]} (dispatch-with {:success true :result "ok"} op 1000)]
         (is (:success ret))
         (is (seq calls))
-        (is (some #(str/includes? (first %) needle) calls)
-            (pr-str calls))))))
+        (is (some #(str/includes? (first %) needle) calls) (pr-str calls))))))
 
 (deftest register-publishes-and-unregister-retracts-the-key
   (is (= #{:dispatch} (svc/capabilities :vessel)))
