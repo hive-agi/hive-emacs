@@ -11,6 +11,7 @@
 (let* ((this-dir (file-name-directory (or load-file-name buffer-file-name))))
     (add-to-list 'load-path (expand-file-name "cider" this-dir)))
 (require 'hive-mcp-api)
+(require 'hive-mcp-no-prompt)
 (require 'hive-mcp-cider-sessions)
 (require 'hive-mcp-cider-runtime)
 (require 'hive-mcp-cider-nrepl)
@@ -120,14 +121,9 @@
   (error (ignore-errors (hive-mcp-cider-sessions-update-props name :status 'error :reason (error-message-string err)))
       (error "Session '%s' connect failed: %s" name (error-message-string err))))))
 
-(defun hive-mcp-cider--refuse-prompt (&rest args)
-  "Signal instead of prompting: teardown runs where no frame can answer."
-  (error "hive-mcp-cider: teardown refused an interactive prompt: %S" (car args)))
-
 (defun hive-mcp-cider-call-without-prompts (thunk)
-  "Call THUNK with kill-buffer queries off and every minibuffer prompt refused."
-  (let* ((kill-buffer-query-functions nil))
-    (cl-letf (((symbol-function 'y-or-n-p) #'hive-mcp-cider--refuse-prompt) ((symbol-function 'yes-or-no-p) #'hive-mcp-cider--refuse-prompt) ((symbol-function 'read-from-minibuffer) #'hive-mcp-cider--refuse-prompt) ((symbol-function 'completing-read) #'hive-mcp-cider--refuse-prompt)) (funcall thunk))))
+  "Call THUNK with kill-buffer queries off and every minibuffer prompt refused,\nas `hive-mcp-no-prompt-call' does: a prompt signals `hive-mcp-prompt-refused'."
+  (hive-mcp-no-prompt-call thunk))
 
 (defun hive-mcp-cider--teardown-session (name session)
   "Cancel SESSION's timer, close its CIDER connection, stop its nREPL process\nand unregister NAME. A failing step is logged; the remaining steps still run."

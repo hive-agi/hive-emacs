@@ -12,7 +12,8 @@
             [hive-emacs.runtime-ports :as ports]
             [hive-weave.guarded :as guarded]
             [hive-weave.pool :as weave-pool]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-emacs.no-prompt :as no-prompt]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -300,11 +301,12 @@
    (ensure-emacsclient-executor!)
    (fn []
      (let [{:keys [exit out err]}
-           (@transport (emacsclient-argv *emacsclient-path* *emacs-socket-name* code))]
+           (@transport (emacsclient-argv *emacsclient-path* *emacs-socket-name*
+                                         (no-prompt/refuse-prompts code)))]
        (if (zero? exit)
          {:success true
           :result (unwrap-emacs-string (str/trim out))}
-         {:success false :error (str/trim err)})))
+         (no-prompt/failure-response err))))
    {:timeout-ms timeout-ms
     :name "emacsclient-eval"
     :alert! #(ports/emit! :emacs/execution %)}))

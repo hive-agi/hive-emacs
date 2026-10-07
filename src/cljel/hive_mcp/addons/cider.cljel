@@ -19,6 +19,7 @@ Architecture: Facade pattern — delegates to sub-modules:
 - ui:             Transient menu and minor mode"
   (:load-path ["cider"])
   (:require [hive-mcp-api :as api]
+            [hive-mcp-no-prompt]
             [hive-mcp-cider-sessions]
             [hive-mcp-cider-runtime]
             [hive-mcp-cider-nrepl]
@@ -224,18 +225,10 @@ cljel target whose upgrade never confirmed reports clj rather than lying."
            :reason (error-message-string err)))
        (error "Session '%s' connect failed: %s" name (error-message-string err))))))
 
-(defn- -refuse-prompt [&rest args]
-  "Signal instead of prompting: teardown runs where no frame can answer."
-  (error "hive-mcp-cider: teardown refused an interactive prompt: %S" (car args)))
-
 (defn call-without-prompts [thunk]
-  "Call THUNK with kill-buffer queries off and every minibuffer prompt refused."
-  (let [kill-buffer-query-functions nil]
-    (cl-letf (((symbol-function 'y-or-n-p) #'-refuse-prompt)
-              ((symbol-function 'yes-or-no-p) #'-refuse-prompt)
-              ((symbol-function 'read-from-minibuffer) #'-refuse-prompt)
-              ((symbol-function 'completing-read) #'-refuse-prompt))
-      (funcall thunk))))
+  "Call THUNK with kill-buffer queries off and every minibuffer prompt refused,
+as `hive-mcp-no-prompt-call' does: a prompt signals `hive-mcp-prompt-refused'."
+  (hive-mcp-no-prompt-call thunk))
 
 (defn- -teardown-session [name session]
   "Cancel SESSION's timer, close its CIDER connection, stop its nREPL process
