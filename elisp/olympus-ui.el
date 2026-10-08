@@ -147,28 +147,30 @@
 (defun olympus-ui--status--gtface (status)
   "Return the face for a ling STATUS keyword, symbol, or string."
   (let* ((s (olympus-ui--normalize-status status)))
-    (pcase s
-  ((quote idle) 'olympus-ui-status-idle)
-  ((quote working) 'olympus-ui-status-working)
-  ((quote blocked) 'olympus-ui-status-blocked)
-  ((quote error) 'olympus-ui-status-error)
-  ((quote spawning) 'olympus-ui-status-spawning)
-  ((quote starting) 'olympus-ui-status-spawning)
-  ((quote initializing) 'olympus-ui-status-spawning)
-  (_ 'olympus-ui-status-idle))))
+    (let* ((pcase-dispatch-value-239 s))
+    (cond
+  ((equal pcase-dispatch-value-239 'idle) 'olympus-ui-status-idle)
+  ((equal pcase-dispatch-value-239 'working) 'olympus-ui-status-working)
+  ((equal pcase-dispatch-value-239 'blocked) 'olympus-ui-status-blocked)
+  ((equal pcase-dispatch-value-239 'error) 'olympus-ui-status-error)
+  ((equal pcase-dispatch-value-239 'spawning) 'olympus-ui-status-spawning)
+  ((equal pcase-dispatch-value-239 'starting) 'olympus-ui-status-spawning)
+  ((equal pcase-dispatch-value-239 'initializing) 'olympus-ui-status-spawning)
+  (t 'olympus-ui-status-idle)))))
 
 (defun olympus-ui--status--gticon (status)
   "Return a status icon character for STATUS."
   (let* ((s (olympus-ui--normalize-status status)))
-    (pcase s
-  ((quote idle) "○")
-  ((quote working) "●")
-  ((quote blocked) "◐")
-  ((quote error) "✗")
-  ((quote spawning) "◌")
-  ((quote starting) "◌")
-  ((quote initializing) "◌")
-  (_ "?"))))
+    (let* ((pcase-dispatch-value-252 s))
+    (cond
+  ((equal pcase-dispatch-value-252 'idle) "○")
+  ((equal pcase-dispatch-value-252 'working) "●")
+  ((equal pcase-dispatch-value-252 'blocked) "◐")
+  ((equal pcase-dispatch-value-252 'error) "✗")
+  ((equal pcase-dispatch-value-252 'spawning) "◌")
+  ((equal pcase-dispatch-value-252 'starting) "◌")
+  ((equal pcase-dispatch-value-252 'initializing) "◌")
+  (t "?")))))
 
 (defun olympus-ui--ensure-api ()
   "Ensure hive-mcp-api is available and a CIDER REPL exists.\nChecks for any live CIDER REPL buffer, bypassing sesman project linking\nso Olympus works regardless of which buffer context it's called from."

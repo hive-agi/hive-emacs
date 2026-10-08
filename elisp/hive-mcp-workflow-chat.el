@@ -66,21 +66,23 @@
 
 (defun hive-mcp-workflow-chat--role-face (role)
   "Return the face for ROLE."
-  (pcase (hive-mcp-workflow-chat--role-key role)
-  ("assistant" 'hive-mcp-workflow-chat-assistant)
-  ("user" 'hive-mcp-workflow-chat-user)
-  ("tool" 'hive-mcp-workflow-chat-tool)
-  ("system" 'hive-mcp-workflow-chat-system)
-  (_ 'default)))
+  (let* ((pcase-dispatch-value-94 (hive-mcp-workflow-chat--role-key role)))
+    (cond
+  ((equal pcase-dispatch-value-94 "assistant") 'hive-mcp-workflow-chat-assistant)
+  ((equal pcase-dispatch-value-94 "user") 'hive-mcp-workflow-chat-user)
+  ((equal pcase-dispatch-value-94 "tool") 'hive-mcp-workflow-chat-tool)
+  ((equal pcase-dispatch-value-94 "system") 'hive-mcp-workflow-chat-system)
+  (t 'default))))
 
 (defun hive-mcp-workflow-chat--role-badge (role)
   "Return a short badge string for ROLE."
-  (pcase (hive-mcp-workflow-chat--role-key role)
-  ("assistant" "● assistant")
-  ("user" "▷ user")
-  ("tool" "⚙ tool")
-  ("system" "◈ system")
-  (_ (format "◇ %s" (hive-mcp-workflow-chat--role-key role)))))
+  (let* ((pcase-dispatch-value-103 (hive-mcp-workflow-chat--role-key role)))
+    (cond
+  ((equal pcase-dispatch-value-103 "assistant") "● assistant")
+  ((equal pcase-dispatch-value-103 "user") "▷ user")
+  ((equal pcase-dispatch-value-103 "tool") "⚙ tool")
+  ((equal pcase-dispatch-value-103 "system") "◈ system")
+  (t (format "◇ %s" (hive-mcp-workflow-chat--role-key role))))))
 
 (defvar hive-mcp-workflow-chat-mode-map (let* ((map (make-sparse-keymap)))
     (define-key map "q" #'quit-window)

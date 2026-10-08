@@ -130,12 +130,13 @@ Returns a list of matching symbols with basic info."
          all-symbols (apropos-internal regexp)
          filtered (cl-remove-if-not
                    (lambda (sym)
-                           (pcase type
-                                  ("function" (fboundp sym))
-                                  ("variable" (boundp sym))
-                                  ("command" (commandp sym))
-                                  ("face" (facep sym))
-                                  (_ t)))
+                           (let [pcase-dispatch-value-133 type]
+                           (elisp-cond
+                                  ((equal pcase-dispatch-value-133 "function") (fboundp sym))
+                                  ((equal pcase-dispatch-value-133 "variable") (boundp sym))
+                                  ((equal pcase-dispatch-value-133 "command") (commandp sym))
+                                  ((equal pcase-dispatch-value-133 "face") (facep sym))
+                                  (t t))))
                    all-symbols)
          limited (seq-take filtered hive-mcp-docs-max-results)]
     (list :pattern pattern

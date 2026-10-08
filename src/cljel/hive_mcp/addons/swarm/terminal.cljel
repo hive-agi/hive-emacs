@@ -205,13 +205,14 @@ All operations are NON-BLOCKING to prevent freezing single-threaded Emacs.")
 
 (defn backend-available-p [backend]
   "Check if BACKEND is available."
-  (pcase backend
-    ('claude-code-ide (require 'claude-code-ide nil t))
-    ('vterm (and (require 'vterm nil t)
+  (let [pcase-dispatch-value-208 backend]
+  (elisp-cond
+    ((equal pcase-dispatch-value-208 'claude-code-ide) (require 'claude-code-ide nil t))
+    ((equal pcase-dispatch-value-208 'vterm) (and (require 'vterm nil t)
                  (fboundp 'vterm-mode)
                  (fboundp 'vterm-send-string)))
-    ('eat (require 'eat nil t))
-    (_ nil)))
+    ((equal pcase-dispatch-value-208 'eat) (require 'eat nil t))
+    (t nil))))
 
 (defn detect-buffer-backend [buffer]
   "Detect terminal backend used in BUFFER."
@@ -410,17 +411,18 @@ Returns immediately - uses timers for delayed operations."
   (let [backend (or backend
                     (hive-mcp-swarm-terminal/detect-buffer-backend buffer)
                     hive-mcp-swarm-terminal-backend)]
-    (pcase backend
-      ('claude-code-ide
+    (let [pcase-dispatch-value-413 backend]
+    (elisp-cond
+      ((equal pcase-dispatch-value-413 'claude-code-ide)
        (-send-claude-code-ide buffer text))
-      ('vterm
+      ((equal pcase-dispatch-value-413 'vterm)
        (-send-vterm buffer text))
-      ('eat
+      ((equal pcase-dispatch-value-413 'eat)
        (-send-eat buffer text))
-      ('ollama
+      ((equal pcase-dispatch-value-413 'ollama)
        (-send-ollama buffer text))
-      (_
-       (error "Unknown terminal backend: %s" backend)))))
+      (t
+       (error "Unknown terminal backend: %s" backend))))))
 
 (defn ready-p [buffer]
   "Check if terminal BUFFER is ready for input (non-blocking check)."

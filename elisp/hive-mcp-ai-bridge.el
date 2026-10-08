@@ -192,12 +192,13 @@
 
 (defun hive-mcp-ai-bridge-ai-format-context-for (package context)
   "Format CONTEXT for specific AI PACKAGE.\nReturns appropriately formatted string."
-  (pcase package
-  ((quote gptel) context)
-  ((quote aider) (replace-regexp-in-string "^# " "## " context))
-  ((quote ellama) context)
-  ((quote org-ai) (replace-regexp-in-string "^## " "** " (replace-regexp-in-string "^# " "* " context)))
-  (_ context)))
+  (let* ((pcase-dispatch-value-316 package))
+    (cond
+  ((equal pcase-dispatch-value-316 'gptel) context)
+  ((equal pcase-dispatch-value-316 'aider) (replace-regexp-in-string "^# " "## " context))
+  ((equal pcase-dispatch-value-316 'ellama) context)
+  ((equal pcase-dispatch-value-316 'org-ai) (replace-regexp-in-string "^## " "** " (replace-regexp-in-string "^# " "* " context)))
+  (t context))))
 
 (defvar hive-mcp-ai-pre-request-hook nil
   "Hook run before any AI request.\nFunctions receive (source prompt) arguments.")

@@ -96,14 +96,15 @@ Dispatches to appropriate handler based on event type."
                   event)]
     (-log "Processing event: %s" type-str)
     (condition-case err
-                    (pcase type-str
-                           ("hook/commit" (-handle-commit data))
-                           ("hook/wrap" (-handle-wrap data))
-                           ("hook/notify" (-handle-notify data))
+                    (let [pcase-dispatch-value-99 type-str]
+                    (elisp-cond
+                           ((equal pcase-dispatch-value-99 "hook/commit") (-handle-commit data))
+                           ((equal pcase-dispatch-value-99 "hook/wrap") (-handle-wrap data))
+                           ((equal pcase-dispatch-value-99 "hook/notify") (-handle-notify data))
           ;; Check for custom handlers
-                           (_
+                           (t
                             (when-let* [handler (cdr (assoc type-str hive-mcp-hooks--handler-alist))]
-                                       (funcall handler data))))
+                                       (funcall handler data)))))
                     (error
                      (message "[hive-mcp-hooks] Error processing %s: %s"
                               type-str (error-message-string err))))))
@@ -131,8 +132,9 @@ DATA may contain:
                        default-directory)]
     (-log "Commit hook: action=%s dir=%s" action directory)
     (let [default-directory directory]
-      (pcase action
-             ("stage"
+      (let [pcase-dispatch-value-134 action]
+      (elisp-cond
+             ((equal pcase-dispatch-value-134 "stage")
               (if files
              ;; Stage specific files
                 (dolist (file files)
@@ -140,15 +142,15 @@ DATA may contain:
            ;; Stage all if enabled
                 (when hive-mcp-hooks-commit-auto-stage
                   (-git-stage-all))))
-             ("commit"
+             ((equal pcase-dispatch-value-134 "commit")
               (when commit-msg
                 (-git-commit commit-msg)))
-             ("amend"
+             ((equal pcase-dispatch-value-134 "amend")
               (-git-amend commit-msg))
-             ("status"
+             ((equal pcase-dispatch-value-134 "status")
               (-show-git-status directory))
-             (_
-              (-log "Unknown commit action: %s" action))))))
+             (t
+              (-log "Unknown commit action: %s" action)))))))
 
 (defn- -handle-wrap [data]
   "Handle a hook/wrap event with DATA.
@@ -165,23 +167,24 @@ DATA may contain:
                           (cdr (assoc 'save-buffers data))
                           hive-mcp-hooks-wrap-auto-save)]
     (-log "Wrap hook: action=%s session=%s" action session-id)
-    (pcase action
-           ("gather"
+    (let [pcase-dispatch-value-168 action]
+    (elisp-cond
+           ((equal pcase-dispatch-value-168 "gather")
        ;; Prepare for wrap - save buffers, collect state
             (when save-buffers
               (save-some-buffers t))
             (-notify "Wrap: Gathering session data..."))
-           ("crystallize"
+           ((equal pcase-dispatch-value-168 "crystallize")
        ;; Crystallization phase
             (-notify "Wrap: Crystallizing session..."))
-           ("complete"
+           ((equal pcase-dispatch-value-168 "complete")
        ;; Wrap completed
             (when save-buffers
               (save-some-buffers t))
             (-notify "Wrap: Session complete for %s"
                      (or session-id "current session")))
-           (_
-            (-log "Unknown wrap action: %s" action)))))
+           (t
+            (-log "Unknown wrap action: %s" action))))))
 
 (defn- -handle-notify [data]
   "Handle a hook/notify event with DATA.
@@ -198,13 +201,14 @@ DATA may contain:
          title (or (cdr (assoc "title" data))
                    (cdr (assoc 'title data)))]
     (-log "Notify: [%s] %s" level msg)
-    (pcase level
-           ("error"
+    (let [pcase-dispatch-value-201 level]
+    (elisp-cond
+           ((equal pcase-dispatch-value-201 "error")
             (-notify-error msg title))
-           ("warning"
+           ((equal pcase-dispatch-value-201 "warning")
             (-notify-warning msg title))
-           (_
-            (-notify msg)))))
+           (t
+            (-notify msg))))))
 
 ;; ============================================================================
 ;; Git Operations

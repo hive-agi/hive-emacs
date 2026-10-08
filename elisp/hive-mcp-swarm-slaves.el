@@ -99,12 +99,13 @@
 
 (defun hive-mcp-swarm-slaves--depth-label (depth)
   "Return human-readable label for DEPTH level."
-  (pcase depth
-  (0 "master")
-  (1 "child")
-  (2 "grandchild")
-  (3 "great-grandchild")
-  (_ (format "depth-%d" depth))))
+  (let* ((pcase-dispatch-value-93 depth))
+    (cond
+  ((equal pcase-dispatch-value-93 0) "master")
+  ((equal pcase-dispatch-value-93 1) "child")
+  ((equal pcase-dispatch-value-93 2) "grandchild")
+  ((equal pcase-dispatch-value-93 3) "great-grandchild")
+  (t (format "depth-%d" depth)))))
 
 (defun hive-mcp-swarm-slaves-check-depth ()
   "Check if we can spawn at current depth.\nReturns the current depth if allowed, signals error if blocked."
@@ -198,9 +199,10 @@
     (plist-put slave :buffer buffer)
     (let* ((default-directory work-dir)
         (process-environment (append (list (format "CLAUDE_SWARM_DEPTH=%d" (plist-get slave :depth)) (format "CLAUDE_SWARM_MASTER=%s" (or hive-mcp-swarm--session-id "direct")) (format "CLAUDE_SWARM_SLAVE_ID=%s" slave-id)) process-environment))
-        (permission-flag (pcase hive-mcp-swarm-prompt-mode
-  ((quote bypass) "--permission-mode bypassPermissions")
-  (_ "")))
+        (permission-flag (let* ((pcase-dispatch-value-318 hive-mcp-swarm-prompt-mode))
+    (cond
+  ((equal pcase-dispatch-value-318 'bypass) "--permission-mode bypassPermissions")
+  (t ""))))
         (claude-cmd (if system-prompt (let* ((prompt-file (make-temp-file "swarm-prompt-" nil ".md")))
     (with-temp-file prompt-file (insert system-prompt))
     (format "cd %s && %s %s --system-prompt %s" (shell-quote-argument work-dir) hive-mcp-swarm-claude-command permission-flag (shell-quote-argument prompt-file))) (format "cd %s && %s %s" (shell-quote-argument work-dir) hive-mcp-swarm-claude-command permission-flag))))

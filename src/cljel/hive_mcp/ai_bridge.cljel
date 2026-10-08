@@ -313,22 +313,23 @@ Returns slave-id or nil."
 (defn ai-format-context-for [package context]
   "Format CONTEXT for specific AI PACKAGE.
 Returns appropriately formatted string."
-  (pcase package
-         ('gptel
+  (let [pcase-dispatch-value-316 package]
+  (elisp-cond
+         ((equal pcase-dispatch-value-316 'gptel)
       ;; gptel uses markdown
           context)
-         ('aider
+         ((equal pcase-dispatch-value-316 'aider)
       ;; Aider expects specific format
           (replace-regexp-in-string "^# " "## " context))
-         ('ellama
+         ((equal pcase-dispatch-value-316 'ellama)
       ;; ellama uses llm.el format
           context)
-         ('org-ai
+         ((equal pcase-dispatch-value-316 'org-ai)
       ;; org-ai uses org-mode format
           (replace-regexp-in-string "^## " "** "
                                     (replace-regexp-in-string "^# " "* " context)))
-         (_
-          context)))
+         (t
+          context))))
 
 ;; ============================================================================
 ;; Hooks Infrastructure

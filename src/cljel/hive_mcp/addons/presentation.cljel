@@ -191,8 +191,9 @@ Format args: theme, title, author")
 
 (defn- -generate-header [format title &optional subtitle]
   "Generate presentation header for FORMAT with TITLE and optional SUBTITLE."
-  (pcase format
-    ('beamer
+  (let [pcase-dispatch-value-194 format]
+  (elisp-cond
+    ((equal pcase-dispatch-value-194 'beamer)
      (format hive-mcp-presentation--beamer-header
              title
              hive-mcp-presentation-email
@@ -201,12 +202,12 @@ Format args: theme, title, author")
              hive-mcp-presentation-email
              (or subtitle "")
              hive-mcp-presentation-beamer-theme))
-    ('revealjs
+    ((equal pcase-dispatch-value-194 'revealjs)
      (format hive-mcp-presentation--revealjs-header
              hive-mcp-presentation-reveal-theme
              title
              hive-mcp-presentation-author))
-    (_ (error "Unknown format: %s" format))))
+    (t (error "Unknown format: %s" format)))))
 
 ;; ============================================================================
 ;; Interactive Commands
@@ -235,12 +236,13 @@ Format args: theme, title, author")
   (let [format (-detect-format)]
     (end-of-line)
     (insert "\n")
-    (insert (pcase format
-              ('beamer (format hive-mcp-presentation--beamer-slide
+    (insert (let [pcase-dispatch-value-238 format]
+            (elisp-cond
+              ((equal pcase-dispatch-value-238 'beamer) (format hive-mcp-presentation--beamer-slide
                                title (or content "")))
-              ('revealjs (format hive-mcp-presentation--revealjs-slide
+              ((equal pcase-dispatch-value-238 'revealjs) (format hive-mcp-presentation--revealjs-slide
                                  title (or content "")))
-              (_ (format "** %s\n%s\n" title (or content "")))))))
+              (t (format "** %s\n%s\n" title (or content ""))))))))
 
 (defn insert-two-column [title left-title left-content right-title right-content]
   "Insert a two-column slide with TITLE.
@@ -255,15 +257,16 @@ RIGHT-TITLE and RIGHT-CONTENT for right column."
   (let [format (-detect-format)]
     (end-of-line)
     (insert "\n")
-    (pcase format
-      ('beamer
+    (let [pcase-dispatch-value-258 format]
+    (elisp-cond
+      ((equal pcase-dispatch-value-258 'beamer)
        (insert (format hive-mcp-presentation--beamer-two-column
                        title left-title left-content right-title right-content)))
-      ('revealjs
+      ((equal pcase-dispatch-value-258 'revealjs)
        (insert (format "** %s\n#+ATTR_REVEAL: :frag (appear)\n- %s: %s\n- %s: %s\n"
                        title left-title left-content right-title right-content)))
-      (_ (insert (format "** %s\n- %s: %s\n- %s: %s\n"
-                         title left-title left-content right-title right-content))))))
+      (t (insert (format "** %s\n- %s: %s\n- %s: %s\n"
+                         title left-title left-content right-title right-content)))))))
 
 (defn insert-code-slide [title language code]
   "Insert a code slide with TITLE showing CODE in LANGUAGE."
@@ -275,15 +278,16 @@ RIGHT-TITLE and RIGHT-CONTENT for right column."
   (let [format (-detect-format)]
     (end-of-line)
     (insert "\n")
-    (pcase format
-      ('beamer
+    (let [pcase-dispatch-value-278 format]
+    (elisp-cond
+      ((equal pcase-dispatch-value-278 'beamer)
        (insert (format "*** %s\n#+begin_src %s :results output :exports both :eval no\n%s\n#+end_src\n"
                        title language code)))
-      ('revealjs
+      ((equal pcase-dispatch-value-278 'revealjs)
        (insert (format "** %s\n#+begin_src %s :eval no\n%s\n#+end_src\n"
                        title language code)))
-      (_ (insert (format "** %s\n#+begin_src %s\n%s\n#+end_src\n"
-                         title language code))))))
+      (t (insert (format "** %s\n#+begin_src %s\n%s\n#+end_src\n"
+                         title language code)))))))
 
 (defn insert-image-slide [title image-path &optional caption]
   "Insert an image slide with TITLE showing IMAGE-PATH with optional CAPTION."
@@ -295,15 +299,16 @@ RIGHT-TITLE and RIGHT-CONTENT for right column."
         rel-path (file-relative-name image-path)]
     (end-of-line)
     (insert "\n")
-    (pcase format
-      ('beamer
+    (let [pcase-dispatch-value-298 format]
+    (elisp-cond
+      ((equal pcase-dispatch-value-298 'beamer)
        (insert (format "*** %s\n#+ATTR_LATEX: :width 0.8\\textwidth\n[[file:%s]]\n%s\n"
                        title rel-path (if (string-empty-p caption) "" caption))))
-      ('revealjs
+      ((equal pcase-dispatch-value-298 'revealjs)
        (insert (format "** %s\n#+ATTR_HTML: :width 600px\n[[file:%s]]\n%s\n"
                        title rel-path (if (string-empty-p caption) "" caption))))
-      (_ (insert (format "** %s\n[[file:%s]]\n%s\n"
-                         title rel-path (if (string-empty-p caption) "" caption)))))))
+      (t (insert (format "** %s\n[[file:%s]]\n%s\n"
+                         title rel-path (if (string-empty-p caption) "" caption))))))))
 
 (defn insert-quote-slide [title quote author]
   "Insert a quote slide with TITLE showing QUOTE by AUTHOR."
@@ -314,8 +319,9 @@ RIGHT-TITLE and RIGHT-CONTENT for right column."
   (let [format (-detect-format)]
     (end-of-line)
     (insert "\n")
-    (pcase format
-      ('beamer
+    (let [pcase-dispatch-value-317 format]
+    (elisp-cond
+      ((equal pcase-dispatch-value-317 'beamer)
        (insert (format "*** %s
 \\begin{modern-quote}
 %s
@@ -324,11 +330,11 @@ RIGHT-TITLE and RIGHT-CONTENT for right column."
 \\textbf{--- %s}
 #+LaTeX: \\par\\end{raggedleft}
 " title quote author)))
-      ('revealjs
+      ((equal pcase-dispatch-value-317 'revealjs)
        (insert (format "** %s\n#+begin_quote\n%s\n\n--- *%s*\n#+end_quote\n"
                        title quote author)))
-      (_ (insert (format "** %s\n#+begin_quote\n%s\n--- %s\n#+end_quote\n"
-                         title quote author))))))
+      (t (insert (format "** %s\n#+begin_quote\n%s\n--- %s\n#+end_quote\n"
+                         title quote author)))))))
 
 (defn insert-iframe-slide [title url]
   "Insert an iframe background slide with TITLE showing URL (Reveal.js only)."
@@ -338,12 +344,13 @@ RIGHT-TITLE and RIGHT-CONTENT for right column."
   (let [format (-detect-format)]
     (end-of-line)
     (insert "\n")
-    (pcase format
-      ('revealjs
+    (let [pcase-dispatch-value-341 format]
+    (elisp-cond
+      ((equal pcase-dispatch-value-341 'revealjs)
        (insert (format hive-mcp-presentation--revealjs-iframe title url)))
-      (_
+      (t
        (insert (format "** %s\nSee: %s\n" title url))
-       (message "Note: iframe backgrounds are only supported in Reveal.js")))))
+       (message "Note: iframe backgrounds are only supported in Reveal.js"))))))
 
 ;; ============================================================================
 ;; Export and Preview Functions
@@ -353,17 +360,19 @@ RIGHT-TITLE and RIGHT-CONTENT for right column."
   "Export the current presentation to its target format."
   (interactive)
   (let [format (-detect-format)]
-    (pcase format
-      ('beamer (org-beamer-export-to-pdf))
-      ('revealjs (org-reveal-export-to-html))
-      (_ (org-export-dispatch)))))
+    (let [pcase-dispatch-value-356 format]
+    (elisp-cond
+      ((equal pcase-dispatch-value-356 'beamer) (org-beamer-export-to-pdf))
+      ((equal pcase-dispatch-value-356 'revealjs) (org-reveal-export-to-html))
+      (t (org-export-dispatch))))))
 
 (defn preview []
   "Preview the current presentation in PDF viewer or browser."
   (interactive)
   (let [format (-detect-format)]
-    (pcase format
-      ('beamer
+    (let [pcase-dispatch-value-365 format]
+    (elisp-cond
+      ((equal pcase-dispatch-value-365 'beamer)
        (let [pdf-file (elisp-concat (file-name-sans-extension buffer-file-name) ".pdf")]
          (if (file-exists-p pdf-file)
              (find-file-other-window pdf-file)
@@ -371,7 +380,7 @@ RIGHT-TITLE and RIGHT-CONTENT for right column."
              (org-beamer-export-to-pdf)
              (find-file-other-window
               (elisp-concat (file-name-sans-extension buffer-file-name) ".pdf"))))))
-      ('revealjs
+      ((equal pcase-dispatch-value-365 'revealjs)
        (let [html-file (elisp-concat (file-name-sans-extension buffer-file-name) ".html")]
          (unless (file-exists-p html-file)
            (if (fboundp 'org-reveal-export-to-html)
@@ -379,8 +388,8 @@ RIGHT-TITLE and RIGHT-CONTENT for right column."
              (error "ox-reveal not installed. Run: M-x package-install RET ox-reveal")))
          (browse-url-of-file html-file)
          (message "Opened in browser: %s" html-file)))
-      (_ (message "Unknown format, using org-export-dispatch")
-         (org-export-dispatch)))))
+      (t (message "Unknown format, using org-export-dispatch")
+         (org-export-dispatch))))))
 
 (defn export-and-preview []
   "Export the presentation and immediately preview it.
@@ -396,8 +405,9 @@ Use after making changes to see updates immediately."
   (interactive)
   (save-buffer)
   (let [format (-detect-format)]
-    (pcase format
-      ('beamer
+    (let [pcase-dispatch-value-399 format]
+    (elisp-cond
+      ((equal pcase-dispatch-value-399 'beamer)
        (org-beamer-export-to-pdf)
        (let [pdf-file (elisp-concat (file-name-sans-extension buffer-file-name) ".pdf")]
          ;; Revert PDF buffer if already open
@@ -405,7 +415,7 @@ Use after making changes to see updates immediately."
            (with-current-buffer pdf-buf
              (revert-buffer t t t)))
          (message "Beamer PDF refreshed: %s" pdf-file)))
-      ('revealjs
+      ((equal pcase-dispatch-value-399 'revealjs)
        (if (fboundp 'org-reveal-export-to-html)
            (progn
              (org-reveal-export-to-html)
@@ -413,7 +423,7 @@ Use after making changes to see updates immediately."
                (browse-url-of-file html-file)
                (message "Reveal.js refreshed and opened: %s" html-file)))
          (error "ox-reveal not installed")))
-      (_ (error "Unknown presentation format")))))
+      (t (error "Unknown presentation format"))))))
 
 (defn open-file [file]
   "Open presentation FILE, export it, and preview.
@@ -541,25 +551,27 @@ Use this from Claude to refresh a presentation after edits."
   "API: Export FILE to HTML and return the output path."
   (find-file file)
   (let [format (-detect-format)]
-    (pcase format
-      ('revealjs
+    (let [pcase-dispatch-value-544 format]
+    (elisp-cond
+      ((equal pcase-dispatch-value-544 'revealjs)
        (org-reveal-export-to-html)
        (elisp-concat (file-name-sans-extension file) ".html"))
-      ('beamer
+      ((equal pcase-dispatch-value-544 'beamer)
        (error "Use api-export-pdf for Beamer presentations"))
-      (_ (error "Unknown format")))))
+      (t (error "Unknown format"))))))
 
 (defn api-export-pdf [file]
   "API: Export FILE to PDF and return the output path."
   (find-file file)
   (let [format (-detect-format)]
-    (pcase format
-      ('beamer
+    (let [pcase-dispatch-value-556 format]
+    (elisp-cond
+      ((equal pcase-dispatch-value-556 'beamer)
        (org-beamer-export-to-pdf)
        (elisp-concat (file-name-sans-extension file) ".pdf"))
-      ('revealjs
+      ((equal pcase-dispatch-value-556 'revealjs)
        (error "Use api-export-html for Reveal.js presentations"))
-      (_ (error "Unknown format")))))
+      (t (error "Unknown format"))))))
 
 (defn api-open-browser [file]
   "API: Open the HTML version of FILE in browser."

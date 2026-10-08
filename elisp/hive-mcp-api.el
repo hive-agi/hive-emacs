@@ -366,10 +366,11 @@
   (hive-mcp-api--validate-string message "message")
   (when type
     (hive-mcp-api--validate-notification-type type))
-  (pcase type
-  ("error" (user-error "%s" message))
-  ("warning" (display-warning 'hive-mcp message :warning))
-  (_ (message "[MCP] %s" message)))
+  (let* ((pcase-dispatch-value-563 type))
+    (cond
+  ((equal pcase-dispatch-value-563 "error") (user-error "%s" message))
+  ((equal pcase-dispatch-value-563 "warning") (display-warning 'hive-mcp message :warning))
+  (t (message "[MCP] %s" message))))
   t)
 
 (defun hive-mcp-api-prompt (prompt &optional default)
