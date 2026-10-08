@@ -36,7 +36,15 @@
     (vessel/bridge-evaluator code timeout-ms)))
 
 (def translators
-  "All registered Emacs op translators, including closed magit, projectile and legacy-memory ops."
+  "Every op translator set hive-emacs contributes, in registration order:
+   the :swarm/* / :cider/* ops from hive-emacs.swarm.translators, :project/*
+   from hive-emacs.project.translators, :kanban/* from
+   hive-emacs.kanban.translators, :crystal/* from
+   hive-emacs.crystal.translators, the :editor/* probes from
+   hive-emacs.editor.translators, the closed :magit/* ops from
+   hive-emacs.magit.translators, the :project/* file and search ops from
+   hive-emacs.projectile.translators, and :memory/legacy-export from
+   hive-emacs.memory.translators. None of them is a generic eval op."
   (vec (concat swarm/translators project/translators kanban/translators
                crystal/translators editor/translators magit/translators
                projectile/translators memory/translators)))
