@@ -103,6 +103,28 @@
   (let* ((port hive-mcp-cider-nrepl-process-spawner))
     (clel-apply port name buffer (hive-mcp-cider-nrepl-oom-guard-command command))))
 
+(defun hive-mcp-cider-nrepl-oom-guard-shell-command (cmd &optional adj system)
+  "Wrap the shell-command string CMD so the shell running it raises its own\noom_score_adj to ADJ. The argv (\"sh\" \"-c\" CMD) goes through\n`oom-guard-command' and the result is joined with `shell-quote-argument', so\nthe score is written by the same guard every other nREPL launch uses. The\nJVM CMD starts is a child (or the exec) of that shell and inherits the score.\nWhen the guard leaves the argv unchanged (any system other than gnu/linux, a\nnil ADJ, one outside 1..1000) or CMD is not a non-empty string, CMD is\nreturned unchanged. Pure."
+  (let* ((argv (list "sh" "-c" cmd))
+        (guarded (when (and (stringp cmd) (> (length cmd) 0))
+    (hive-mcp-cider-nrepl-oom-guard-command argv adj system))))
+    (if (and guarded (not (eq guarded argv))) (mapconcat #'shell-quote-argument guarded " ") cmd)))
+
+(defun hive-mcp-cider-nrepl-jack-in-guard-args (args)
+  "`:filter-args' advice for `nrepl-start-server-process'.\nARGS is (DIRECTORY CMD ON-PORT-CALLBACK); CMD is replaced by\n`oom-guard-shell-command' of itself, everything else passes through. Pure."
+  (cons (car args) (cons (hive-mcp-cider-nrepl-oom-guard-shell-command (car (cdr args))) (cdr (cdr args)))))
+
+(defvar hive-mcp-cider-nrepl-jack-in-guard-target 'nrepl-start-server-process
+  "Process port of the cider-jack-in path: the function CIDER starts its\njack-in server through, called as (DIRECTORY CMD ON-PORT-CALLBACK).\n`install-jack-in-guard' advises it; a test points it at a recording stub.")
+
+(defun hive-mcp-cider-nrepl-install-jack-in-guard (&optional target)
+  "Advise TARGET (default `hive-mcp-cider-nrepl-jack-in-guard-target') with\n`jack-in-guard-args', so every cider-jack-in server raises its own\noom_score_adj like the nREPLs hive spawns directly. Idempotent."
+  (advice-add (or target hive-mcp-cider-nrepl-jack-in-guard-target) :filter-args #'hive-mcp-cider-nrepl-jack-in-guard-args))
+
+(defun hive-mcp-cider-nrepl-uninstall-jack-in-guard (&optional target)
+  "Remove the advice `install-jack-in-guard' put on TARGET."
+  (advice-remove (or target hive-mcp-cider-nrepl-jack-in-guard-target) #'hive-mcp-cider-nrepl-jack-in-guard-args))
+
 (defun hive-mcp-cider-nrepl-alias-names (aliases)
   "Normalize ALIASES to a list of bare alias name strings.\nNil and empty entries are dropped; a leading colon is stripped. Pure."
   (delq nil (mapcar (lambda (a)

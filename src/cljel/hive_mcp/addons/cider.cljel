@@ -285,6 +285,8 @@ The native runtimes' source extensions register ahead of the cider check —
   (if (not (featurep 'cider))
       (message "hive-mcp-cider: cider package not found, addon disabled")
     (require 'hive-mcp-api nil t)
+    ;; cider-jack-in builds its own command; guard it like hive's own spawns.
+    (hive-mcp-cider-nrepl-install-jack-in-guard)
     (message "hive-mcp-cider: initialized")))
 
 (defn- -addon-async-init []
@@ -299,6 +301,7 @@ The native runtimes' source extensions register ahead of the cider check —
   "Shutdown — stops nREPL server and cleans up timers."
   (hive-mcp-cider-connection-stop-auto-connect)
   (hive-mcp-cider-nrepl-stop-default)
+  (hive-mcp-cider-nrepl-uninstall-jack-in-guard)
   (message "hive-mcp-cider: shutdown complete"))
 
 ;; ============================================================================

@@ -344,5 +344,46 @@
     (should (member "clojure" captured)))
   (delete-directory dir t))))
 
+(ert-deftest hive-mcp-cider-nrepl-test-oom-guard-shell-command-wraps-on-linux nil "A jack-in shell-command string becomes sh -c <guard> sh -c <cmd>, every\nword shell-quoted, so the guard writes the score and execs the original\ncommand line unchanged." (let* ((cmd "clojure -Sdeps '{:deps {}}' -M:dev -m nrepl.cmdline")
+        (wrapped (hive-mcp-cider-nrepl-oom-guard-shell-command cmd 500 'gnu/linux)))
+    (should (string-prefix-p "sh -c " wrapped))
+    (should (string-match-p "oom_score_adj" wrapped))
+    (should (string-match-p (regexp-quote (shell-quote-argument cmd)) wrapped))
+    (should (equal (mapconcat #'shell-quote-argument (hive-mcp-cider-nrepl-oom-guard-command (list "sh" "-c" cmd) 500 'gnu/linux) " ") wrapped))))
+
+(ert-deftest hive-mcp-cider-nrepl-test-oom-guard-shell-command-degrades nil "Off Linux, disabled, empty or non-string, the command is returned unchanged." (let* ((cmd "clojure -M:dev"))
+    (should (equal cmd (hive-mcp-cider-nrepl-oom-guard-shell-command cmd 500 'darwin)))
+    (should (equal cmd (let* ((hive-mcp-cider-nrepl-oom-score-adj nil))
+    (hive-mcp-cider-nrepl-oom-guard-shell-command cmd nil 'gnu/linux))))
+    (should (equal cmd (hive-mcp-cider-nrepl-oom-guard-shell-command cmd 2000 'gnu/linux)))
+    (should (equal "" (hive-mcp-cider-nrepl-oom-guard-shell-command "" 500 'gnu/linux)))
+    (should-not (hive-mcp-cider-nrepl-oom-guard-shell-command nil 500 'gnu/linux))))
+
+(defvar hive-mcp-cider-nrepl-test--jack-in-calls nil
+  "Calls recorded by `hive-mcp-cider-nrepl-test--jack-in-port'.")
+
+(defun hive-mcp-cider-nrepl-test--jack-in-port (directory cmd on-port) "Recording stub with the signature of `nrepl-start-server-process'." (setq hive-mcp-cider-nrepl-test--jack-in-calls (cons (list directory cmd on-port) hive-mcp-cider-nrepl-test--jack-in-calls)) 'stub-server)
+
+(ert-deftest hive-mcp-cider-nrepl-test-jack-in-guard-through-port nil "Installed on the jack-in process port, the guard rewrites only CMD; the\ndirectory and callback reach the port untouched, and uninstall restores the\nbare command." (let* ((hive-mcp-cider-nrepl-test--jack-in-calls nil)
+        (hive-mcp-cider-nrepl-jack-in-guard-target 'hive-mcp-cider-nrepl-test--jack-in-port)
+        (hive-mcp-cider-nrepl-oom-score-adj 500)
+        (system-type 'gnu/linux)
+        (cb (lambda (_)
+    nil)))
+    (unwind-protect
+    (progn
+  (hive-mcp-cider-nrepl-install-jack-in-guard)
+  (hive-mcp-cider-nrepl-install-jack-in-guard)
+  (should (eq 'stub-server (hive-mcp-cider-nrepl-test--jack-in-port "/proj/" "clojure -M:dev" cb)))
+  (let* ((call (car hive-mcp-cider-nrepl-test--jack-in-calls)))
+    (should (equal "/proj/" (car call)))
+    (should (eq cb (clel-nth call 2)))
+    (should (string-prefix-p "sh -c " (clel-nth call 1)))
+    (should (string-match-p "oom_score_adj" (clel-nth call 1)))
+    (should-not (string-match-p "oom_score_adj.*oom_score_adj" (clel-nth call 1)))))
+  (hive-mcp-cider-nrepl-uninstall-jack-in-guard))
+    (hive-mcp-cider-nrepl-test--jack-in-port "/proj/" "clojure -M:dev" cb)
+    (should (equal "clojure -M:dev" (clel-nth (car hive-mcp-cider-nrepl-test--jack-in-calls) 1)))))
+
 (provide 'hive-mcp-cider-nrepl-test)
 ;;; hive-mcp-cider-nrepl-test.el ends here

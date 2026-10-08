@@ -163,6 +163,7 @@
   (hive-mcp-cider-runtime-install-source-extensions)
   (if (not (featurep 'cider)) (message "hive-mcp-cider: cider package not found, addon disabled") (progn
   (require 'hive-mcp-api nil t)
+  (hive-mcp-cider-nrepl-install-jack-in-guard)
   (message "hive-mcp-cider: initialized"))))
 
 (defun hive-mcp-cider--addon-async-init ()
@@ -177,6 +178,7 @@
   "Shutdown — stops nREPL server and cleans up timers."
   (hive-mcp-cider-connection-stop-auto-connect)
   (hive-mcp-cider-nrepl-stop-default)
+  (hive-mcp-cider-nrepl-uninstall-jack-in-guard)
   (message "hive-mcp-cider: shutdown complete"))
 
 (with-eval-after-load 'hive-mcp-addons
