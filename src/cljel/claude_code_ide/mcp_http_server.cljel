@@ -149,15 +149,16 @@ with the appropriate session context."
   "Dispatch MCP method calls.
 METHOD is the JSON-RPC method name.
 PARAMS is the parameters alist."
-  (pcase method
-    ("initialize"
+  (let [pcase-dispatch-value-152 method]
+  (elisp-cond
+    ((equal pcase-dispatch-value-152 "initialize")
      (claude-code-ide-mcp-http-server--handle-initialize params))
-    ("tools/list"
+    ((equal pcase-dispatch-value-152 "tools/list")
      (claude-code-ide-mcp-http-server--handle-tools-list params))
-    ("tools/call"
+    ((equal pcase-dispatch-value-152 "tools/call")
      (claude-code-ide-mcp-http-server--handle-tools-call params))
-    (_
-     (signal 'json-rpc-error (list -32601 "Method not found")))))
+    (t
+     (signal 'json-rpc-error (list -32601 "Method not found"))))))
 
 (defn- -handle-initialize [_params]
   "Handle the initialize method."

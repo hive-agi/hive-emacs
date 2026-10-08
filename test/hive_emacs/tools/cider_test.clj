@@ -8,7 +8,8 @@
             [clojure.test :refer [deftest is]]
             [hive-emacs.tools.cider :as cider]
             [hive-emacs.cider.spawn :as spawn]
-            [clojure.data.json :as json]))
+            [clojure.data.json :as json]
+            [hive-emacs.cider.spawn-dir :as spawn-dir]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -40,7 +41,8 @@
 
 (deftest spawn-forwards-full-cli-surface
   (let [{:keys [calls eval-fn]} (ok-stub)]
-    (binding [cider/*eval-fn* eval-fn]
+    (binding [cider/*eval-fn* eval-fn
+              spawn-dir/*directory?* #{"/p"}]
       (cider/handle-spawn {:name "dev"
                            :project_dir "/p"
                            :repl_type "clj"
@@ -68,7 +70,7 @@
     (spawn/reset-watches!)
     (try
       (binding [cider/*eval-fn* eval-fn
-                cider/*attention-fn* (constantly nil)]
+                cider/*attention-fn* (constantly nil) spawn-dir/*directory?* #{"/p"}]
         (let [response (cider/handle-spawn {:name "slow" :project_dir "/p" :port 7990})
               text (str (:text response) (get-in response [:content 0 :text]))]
           (is (:isError response))

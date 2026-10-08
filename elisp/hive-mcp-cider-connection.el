@@ -249,12 +249,13 @@
         (ready-p (lambda ()
     (hive-mcp-cider-connection--connection-ready-p conn)))
         (on-handshake (lambda (ready)
-    (if (not ready) (hive-mcp-cider-connection--settle on-settled (hive-mcp-cider-connection-handshake-failed-props port "nREPL handshake did not complete")) (pcase repl-type
-  ((quote cljs) (hive-mcp-cider-connection--upgrade-cljs conn old-name port on-settled))
-  ((quote cljel) (hive-mcp-cider-connection--upgrade-cljel conn port on-settled))
-  ((quote cljw) (hive-mcp-cider-connection--settle on-settled (hive-mcp-cider-connection-settled-props (buffer-name conn) 'cljw)))
-  ((quote cljrs) (hive-mcp-cider-connection--settle on-settled (hive-mcp-cider-connection-settled-props (buffer-name conn) 'cljrs)))
-  (_ (hive-mcp-cider-connection--settle on-settled (hive-mcp-cider-connection-settled-props (buffer-name conn) 'clj))))))))
+    (if (not ready) (hive-mcp-cider-connection--settle on-settled (hive-mcp-cider-connection-handshake-failed-props port "nREPL handshake did not complete")) (let* ((pcase-dispatch-value-353 repl-type))
+    (cond
+  ((equal pcase-dispatch-value-353 'cljs) (hive-mcp-cider-connection--upgrade-cljs conn old-name port on-settled))
+  ((equal pcase-dispatch-value-353 'cljel) (hive-mcp-cider-connection--upgrade-cljel conn port on-settled))
+  ((equal pcase-dispatch-value-353 'cljw) (hive-mcp-cider-connection--settle on-settled (hive-mcp-cider-connection-settled-props (buffer-name conn) 'cljw)))
+  ((equal pcase-dispatch-value-353 'cljrs) (hive-mcp-cider-connection--settle on-settled (hive-mcp-cider-connection-settled-props (buffer-name conn) 'cljrs)))
+  (t (hive-mcp-cider-connection--settle on-settled (hive-mcp-cider-connection-settled-props (buffer-name conn) 'clj)))))))))
     (hive-mcp-cider-connection--poll-async ready-p hive-mcp-cider-connection-handshake-timeout hive-mcp-cider-connection-readiness-interval on-handshake)
     conn))
 
@@ -408,10 +409,11 @@
 
 (defun hive-mcp-cider-connection--session-settled-live-p (name)
   "Return non-nil when session NAME's REPL is live and needs no pending upgrade.\nA cljel session counts only once its compilation session is active; a cljs\nsession is left to its own settle callback."
-  (and (hive-mcp-cider-connection--session-buffer-alive-p name) (pcase (hive-mcp-cider-sessions-get-prop name :repl-type)
-  ((quote cljs) nil)
-  ((quote cljel) (hive-mcp-cider-connection--cljel-ready-p (get-buffer (hive-mcp-cider-sessions-get-prop name :cider-buffer))))
-  (_ t))))
+  (and (hive-mcp-cider-connection--session-buffer-alive-p name) (let* ((pcase-dispatch-value-621 (hive-mcp-cider-sessions-get-prop name :repl-type)))
+    (cond
+  ((equal pcase-dispatch-value-621 'cljs) nil)
+  ((equal pcase-dispatch-value-621 'cljel) (hive-mcp-cider-connection--cljel-ready-p (get-buffer (hive-mcp-cider-sessions-get-prop name :cider-buffer))))
+  (t t)))))
 
 (defun hive-mcp-cider-connection--revive-timed-out-sessions ()
   "Re-arm the connect timer of every 'timeout session whose nREPL is alive.\nReturns the list of revived names."

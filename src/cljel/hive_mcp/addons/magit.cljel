@@ -366,13 +366,14 @@ DIRECTORY overrides `default-directory' if provided."
 DIRECTORY overrides `default-directory' if provided."
   (let [default-directory (or directory default-directory)]
     (-ensure-repo)
-    (pcase target
-      ((or 'nil 'staged) (-diff-staged))
-      ('unstaged (-diff-unstaged))
-      ('all (elisp-concat (-diff-staged)
+    (let [pcase-dispatch-value-369 target]
+    (elisp-cond
+      ((or (equal pcase-dispatch-value-369 'nil) (equal pcase-dispatch-value-369 'staged)) (-diff-staged))
+      ((equal pcase-dispatch-value-369 'unstaged) (-diff-unstaged))
+      ((equal pcase-dispatch-value-369 'all) (elisp-concat (-diff-staged)
                     "\n---\n"
                     (-diff-unstaged)))
-      (_ (-diff-staged)))))
+      (t (-diff-staged))))))
 
 (defn api-stage [files &optional directory]
   "Stage FILES for commit.

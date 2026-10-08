@@ -350,13 +350,14 @@ is current at connect time."
                (-settle on-settled
                         (handshake-failed-props
                          port "nREPL handshake did not complete"))
-             (pcase repl-type
-               ('cljs (-upgrade-cljs conn old-name port on-settled))
-               ('cljel (-upgrade-cljel conn port on-settled))
-               ('cljw (-settle on-settled (settled-props (buffer-name conn) 'cljw)))
-               ('cljrs (-settle on-settled (settled-props (buffer-name conn) 'cljrs)))
-               (_ (-settle on-settled
-                           (settled-props (buffer-name conn) 'clj))))))]
+             (let [pcase-dispatch-value-353 repl-type]
+             (elisp-cond
+               ((equal pcase-dispatch-value-353 'cljs) (-upgrade-cljs conn old-name port on-settled))
+               ((equal pcase-dispatch-value-353 'cljel) (-upgrade-cljel conn port on-settled))
+               ((equal pcase-dispatch-value-353 'cljw) (-settle on-settled (settled-props (buffer-name conn) 'cljw)))
+               ((equal pcase-dispatch-value-353 'cljrs) (-settle on-settled (settled-props (buffer-name conn) 'cljrs)))
+               (t (-settle on-settled
+                           (settled-props (buffer-name conn) 'clj)))))))]
     (-poll-async ready-p
                  hive-mcp-cider-connection-handshake-timeout
                  hive-mcp-cider-connection-readiness-interval
@@ -618,11 +619,12 @@ registry on a dead-buffer cache miss."
 A cljel session counts only once its compilation session is active; a cljs
 session is left to its own settle callback."
   (and (-session-buffer-alive-p name)
-       (pcase (hive-mcp-cider-sessions-get-prop name :repl-type)
-         ('cljs nil)
-         ('cljel (-cljel-ready-p
+       (let [pcase-dispatch-value-621 (hive-mcp-cider-sessions-get-prop name :repl-type)]
+       (elisp-cond
+         ((equal pcase-dispatch-value-621 'cljs) nil)
+         ((equal pcase-dispatch-value-621 'cljel) (-cljel-ready-p
                   (get-buffer (hive-mcp-cider-sessions-get-prop name :cider-buffer))))
-         (_ t))))
+         (t t)))))
 
 (defn- -revive-timed-out-sessions []
   "Re-arm the connect timer of every 'timeout session whose nREPL is alive.

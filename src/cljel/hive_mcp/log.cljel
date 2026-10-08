@@ -141,12 +141,13 @@ Keys are tool names, values are plists with :count, :total-ms, :max-ms.")
 
 (defn -level-face [level]
   "Return face for LEVEL."
-  (pcase level
-    ('debug 'font-lock-comment-face)
-    ('info 'default)
-    ('warn 'warning)
-    ('error 'error)
-    (_ 'default)))
+  (let [pcase-dispatch-value-144 level]
+  (elisp-cond
+    ((equal pcase-dispatch-value-144 'debug) 'font-lock-comment-face)
+    ((equal pcase-dispatch-value-144 'info) 'default)
+    ((equal pcase-dispatch-value-144 'warn) 'warning)
+    ((equal pcase-dispatch-value-144 'error) 'error)
+    (t 'default))))
 
 (defn -write-to-buffer [formatted-msg level]
   "Write FORMATTED-MSG with LEVEL to the dedicated log buffer."

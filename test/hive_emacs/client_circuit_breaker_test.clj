@@ -14,7 +14,8 @@
    6. :closed  stays :closed  on successful calls
    7. Calls blocked when :open and backoff hasn't elapsed"
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
-            [hive-emacs.client :as client]))
+            [hive-emacs.client :as client]
+            [hive-emacs.no-prompt :as no-prompt]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
@@ -232,7 +233,7 @@
         (is (:success result))
         (is (= "ready" (:result result)))
         (is (= 1 (count @argvs)))
-        (is (= ["--eval" "t"] (take-last 2 (first @argvs))))
+        (is (= ["--eval" (no-prompt/refuse-prompts "t")] (take-last 2 (first @argvs))))
         (is (= 2 (:max-pool-size stats)))
         (is (<= (:queued stats) 16))))))
 

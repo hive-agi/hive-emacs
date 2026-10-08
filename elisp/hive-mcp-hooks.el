@@ -66,12 +66,13 @@
         (data (or (cdr (assoc "data" event)) (cdr (assoc 'data event)) event)))
     (hive-mcp-hooks--log "Processing event: %s" type-str)
     (condition-case err
-    (pcase type-str
-  ("hook/commit" (hive-mcp-hooks--handle-commit data))
-  ("hook/wrap" (hive-mcp-hooks--handle-wrap data))
-  ("hook/notify" (hive-mcp-hooks--handle-notify data))
-  (_ (when-let* ((handler (cdr (assoc type-str hive-mcp-hooks--handler-alist))))
-    (funcall handler data))))
+    (let* ((pcase-dispatch-value-99 type-str))
+    (cond
+  ((equal pcase-dispatch-value-99 "hook/commit") (hive-mcp-hooks--handle-commit data))
+  ((equal pcase-dispatch-value-99 "hook/wrap") (hive-mcp-hooks--handle-wrap data))
+  ((equal pcase-dispatch-value-99 "hook/notify") (hive-mcp-hooks--handle-notify data))
+  (t (when-let* ((handler (cdr (assoc type-str hive-mcp-hooks--handler-alist))))
+    (funcall handler data)))))
   (error (message "[hive-mcp-hooks] Error processing %s: %s" type-str (error-message-string err))))))
 
 (defun hive-mcp-hooks--handle-commit (data)
@@ -82,15 +83,16 @@
         (directory (or (cdr (assoc "directory" data)) (cdr (assoc 'directory data)) default-directory)))
     (hive-mcp-hooks--log "Commit hook: action=%s dir=%s" action directory)
     (let* ((default-directory directory))
-    (pcase action
-  ("stage" (if files (dolist (file files)
+    (let* ((pcase-dispatch-value-134 action))
+    (cond
+  ((equal pcase-dispatch-value-134 "stage") (if files (dolist (file files)
     (hive-mcp-hooks--git-stage file)) (when hive-mcp-hooks-commit-auto-stage
     (hive-mcp-hooks--git-stage-all))))
-  ("commit" (when commit-msg
+  ((equal pcase-dispatch-value-134 "commit") (when commit-msg
     (hive-mcp-hooks--git-commit commit-msg)))
-  ("amend" (hive-mcp-hooks--git-amend commit-msg))
-  ("status" (hive-mcp-hooks--show-git-status directory))
-  (_ (hive-mcp-hooks--log "Unknown commit action: %s" action))))))
+  ((equal pcase-dispatch-value-134 "amend") (hive-mcp-hooks--git-amend commit-msg))
+  ((equal pcase-dispatch-value-134 "status") (hive-mcp-hooks--show-git-status directory))
+  (t (hive-mcp-hooks--log "Unknown commit action: %s" action)))))))
 
 (defun hive-mcp-hooks--handle-wrap (data)
   "Handle a hook/wrap event with DATA.\nDATA may contain:\n  - action: 'gather', 'crystallize', 'complete'\n  - session-id: current session identifier\n  - save-buffers: whether to save modified buffers"
@@ -98,13 +100,18 @@
         (session-id (or (cdr (assoc "session-id" data)) (cdr (assoc 'session-id data))))
         (save-buffers (or (cdr (assoc "save-buffers" data)) (cdr (assoc 'save-buffers data)) hive-mcp-hooks-wrap-auto-save)))
     (hive-mcp-hooks--log "Wrap hook: action=%s session=%s" action session-id)
-    (pcase action
-  ("gather" (when save-buffers
-    (save-some-buffers t)) (hive-mcp-hooks--notify "Wrap: Gathering session data..."))
-  ("crystallize" (hive-mcp-hooks--notify "Wrap: Crystallizing session..."))
-  ("complete" (when save-buffers
-    (save-some-buffers t)) (hive-mcp-hooks--notify "Wrap: Session complete for %s" (or session-id "current session")))
-  (_ (hive-mcp-hooks--log "Unknown wrap action: %s" action)))))
+    (let* ((pcase-dispatch-value-168 action))
+    (cond
+  ((equal pcase-dispatch-value-168 "gather") (progn
+  (when save-buffers
+    (save-some-buffers t))
+  (hive-mcp-hooks--notify "Wrap: Gathering session data...")))
+  ((equal pcase-dispatch-value-168 "crystallize") (hive-mcp-hooks--notify "Wrap: Crystallizing session..."))
+  ((equal pcase-dispatch-value-168 "complete") (progn
+  (when save-buffers
+    (save-some-buffers t))
+  (hive-mcp-hooks--notify "Wrap: Session complete for %s" (or session-id "current session"))))
+  (t (hive-mcp-hooks--log "Unknown wrap action: %s" action))))))
 
 (defun hive-mcp-hooks--handle-notify (data)
   "Handle a hook/notify event with DATA.\nDATA may contain:\n  - message: notification message (required)\n  - level: 'info', 'warning', 'error' (default: info)\n  - title: notification title (optional)"
@@ -112,10 +119,11 @@
         (level (or (cdr (assoc "level" data)) (cdr (assoc 'level data)) "info"))
         (title (or (cdr (assoc "title" data)) (cdr (assoc 'title data)))))
     (hive-mcp-hooks--log "Notify: [%s] %s" level msg)
-    (pcase level
-  ("error" (hive-mcp-hooks--notify-error msg title))
-  ("warning" (hive-mcp-hooks--notify-warning msg title))
-  (_ (hive-mcp-hooks--notify msg)))))
+    (let* ((pcase-dispatch-value-201 level))
+    (cond
+  ((equal pcase-dispatch-value-201 "error") (hive-mcp-hooks--notify-error msg title))
+  ((equal pcase-dispatch-value-201 "warning") (hive-mcp-hooks--notify-warning msg title))
+  (t (hive-mcp-hooks--notify msg))))))
 
 (defun hive-mcp-hooks--git-stage (file)
   "Stage FILE for commit."

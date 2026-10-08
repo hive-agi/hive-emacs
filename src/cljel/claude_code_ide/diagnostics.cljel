@@ -39,39 +39,41 @@ Can be one of:
 (defn- -severity-to-vscode [severity]
   "Convert diagnostic SEVERITY to VS Code format.
 Returns: 1 (Error), 2 (Warning), 3 (Information), 4 (Hint)."
-  (pcase severity
+  (let [pcase-dispatch-value-42 severity]
+  (elisp-cond
     ;; Flycheck severities
-    ('error 1)
-    ('warning 2)
-    ('info 3)
-    ('hint 4)
+    ((equal pcase-dispatch-value-42 'error) 1)
+    ((equal pcase-dispatch-value-42 'warning) 2)
+    ((equal pcase-dispatch-value-42 'info) 3)
+    ((equal pcase-dispatch-value-42 'hint) 4)
     ;; Flymake severities
-    ('flymake-error 1)
-    (':error 1)
-    ('flymake-warning 2)
-    (':warning 2)
-    ('flymake-note 3)
-    (':note 3)
+    ((equal pcase-dispatch-value-42 'flymake-error) 1)
+    ((equal pcase-dispatch-value-42 ':error) 1)
+    ((equal pcase-dispatch-value-42 'flymake-warning) 2)
+    ((equal pcase-dispatch-value-42 ':warning) 2)
+    ((equal pcase-dispatch-value-42 'flymake-note) 3)
+    ((equal pcase-dispatch-value-42 ':note) 3)
     ;; Default
-    (_ 3)))
+    (t 3))))
 
 (defn- -severity-to-string [severity]
   "Convert diagnostic SEVERITY to VS Code string format."
-  (pcase severity
+  (let [pcase-dispatch-value-60 severity]
+  (elisp-cond
     ;; Flycheck severities
-    ('error "Error")
-    ('warning "Warning")
-    ('info "Information")
-    ('hint "Hint")
+    ((equal pcase-dispatch-value-60 'error) "Error")
+    ((equal pcase-dispatch-value-60 'warning) "Warning")
+    ((equal pcase-dispatch-value-60 'info) "Information")
+    ((equal pcase-dispatch-value-60 'hint) "Hint")
     ;; Flymake severities
-    ('flymake-error "Error")
-    (':error "Error")
-    ('flymake-warning "Warning")
-    (':warning "Warning")
-    ('flymake-note "Information")
-    (':note "Information")
+    ((equal pcase-dispatch-value-60 'flymake-error) "Error")
+    ((equal pcase-dispatch-value-60 ':error) "Error")
+    ((equal pcase-dispatch-value-60 'flymake-warning) "Warning")
+    ((equal pcase-dispatch-value-60 ':warning) "Warning")
+    ((equal pcase-dispatch-value-60 'flymake-note) "Information")
+    ((equal pcase-dispatch-value-60 ':note) "Information")
     ;; Default
-    (_ "Information")))
+    (t "Information"))))
 
 (defn- -get-flycheck-diagnostics [buffer]
   "Get Flycheck diagnostics for BUFFER in VS Code format."
@@ -147,10 +149,11 @@ Returns diagnostics in VS Code format."
              (t nil))))
     ;; Get diagnostics based on backend
     (or (vconcat
-         (pcase backend
-           ('flycheck (claude-code-ide-diagnostics--get-flycheck-diagnostics buffer))
-           ('flymake (claude-code-ide-diagnostics--get-flymake-diagnostics buffer))
-           (_ nil)))
+         (let [pcase-dispatch-value-150 backend]
+         (elisp-cond
+           ((equal pcase-dispatch-value-150 'flycheck) (claude-code-ide-diagnostics--get-flycheck-diagnostics buffer))
+           ((equal pcase-dispatch-value-150 'flymake) (claude-code-ide-diagnostics--get-flymake-diagnostics buffer))
+           (t nil))))
         [])))
 
 ;;; MCP Handler

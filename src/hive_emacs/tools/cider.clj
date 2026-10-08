@@ -22,7 +22,8 @@
             [hive-emacs.bridge-loader :as bridge]
             [hive-emacs.cider.spawn :as spawn]
             [hive-emacs.cider.introspection :as intro]
-            [hive-emacs.tools.list-param :as list-param]))
+            [hive-emacs.tools.list-param :as list-param]
+            [hive-emacs.cider.spawn-dir :as spawn-dir]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -507,7 +508,7 @@
    "port" {:type "integer"
            :description "connect: nREPL port; spawn: explicit port"}
    "project_dir" {:type "string"
-                  :description "spawn: nREPL root. connect: labels the REPL buffer, for a session whose project differs from the caller's. eval: routes to that project's nREPL session (spawning auto-<hash> if none). Defaults to the caller's cwd."}
+                  :description "spawn: nREPL root (`directory` is accepted as an alias; a path that is not an existing directory is refused). connect: labels the REPL buffer, for a session whose project differs from the caller's. eval: routes to that project's nREPL session (spawning auto-<hash> if none). Defaults to the caller's cwd."}
    "agent_id" {:type "string"
                :description "spawn/connect: agent ID to link the session"}
    "repl_type" {:type "string"
@@ -638,39 +639,43 @@
     r))
 
 (defn handle-spawn
-  "Spawn a new named CIDER session with its own nREPL server.
-   Full CLI surface: extra_args (raw, pre--M), aliases (-M selection),
-   extra_deps (EDN strings merged into -Sdeps), middleware (appended).
-   local.deps.edn in the project dir is always auto-detected.
+  "Spawn a new named CIDER session with its own nREPL server, in project_dir
+   (or directory). Full CLI surface: extra_args (raw, pre--M), aliases (-M
+   selection), extra_deps (EDN strings merged into -Sdeps), middleware
+   (appended). local.deps.edn in the project dir is always auto-detected.
 
    An ok answers \"starting\" and is also WATCHED: the session's outcome
    arrives on a later tool response as the ---CIDER-SPAWN--- block. An
    emacsclient timeout is watched too, since Emacs may still run the spawn;
-   any other err short-circuits the watch."
-  [{:keys [name project_dir agent_id repl_type port extra_args aliases extra_deps middleware]}]
+   any other err, a missing directory included, short-circuits the watch."
+  [{:keys [name agent_id repl_type port extra_args aliases extra_deps middleware] :as params}]
   (log/info "cider-spawn" {:name name :repl_type repl_type :agent_id agent_id :port port
                            :aliases aliases})
-  (if (str/blank? name)
-    (tool/mcp-error "Error: spawn requires a non-blank 'name'")
-    (let [port (cond-> port (string? port) parse-long)
-          elisp (el/require-and-call-plist-json
-                  'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
-                  {:name       name
-                   :repl-type  (when repl_type (symbol repl_type))
-                   :port       port
-                   :project-dir project_dir
-                   :agent-id   agent_id
-                   :extra-args (spawn-list-param extra_args)
-                   :aliases    (spawn-list-param aliases #"[,:\s]+")
-                   :extra-deps (spawn-list-param extra_deps)
-                   :middleware (spawn-list-param middleware)})
-          ack {:name name :port port :repl-type (or repl_type "clj")
-               :project-dir project_dir}]
-      (result->mcp
-       (-> (try-result :cider/spawn-failed #(elisp->result elisp nil))
-           (result/map-ok (partial spawn/watch-spawn! *eval-fn*))
-           (->> (watch-timed-out-spawn *eval-fn* ack))
-           with-waiting-prompt)))))
+  (let [dir (spawn-dir/resolve-dir params)]
+    (cond
+      (str/blank? name) (tool/mcp-error "Error: spawn requires a non-blank 'name'")
+      (result/err? dir) (result->mcp dir)
+      :else
+      (let [project_dir (:ok dir)
+            port  (cond-> port (string? port) parse-long)
+            elisp (el/require-and-call-plist-json
+                    'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
+                    {:name       name
+                     :repl-type  (when repl_type (symbol repl_type))
+                     :port       port
+                     :project-dir project_dir
+                     :agent-id   agent_id
+                     :extra-args (spawn-list-param extra_args)
+                     :aliases    (spawn-list-param aliases #"[,:\s]+")
+                     :extra-deps (spawn-list-param extra_deps)
+                     :middleware (spawn-list-param middleware)})
+            ack {:name name :port port :repl-type (or repl_type "clj")
+                 :project-dir project_dir}]
+        (result->mcp
+         (-> (try-result :cider/spawn-failed #(elisp->result elisp nil))
+             (result/map-ok (partial spawn/watch-spawn! *eval-fn*))
+             (->> (watch-timed-out-spawn *eval-fn* ack))
+             with-waiting-prompt))))))
 
 (defn handle-connect
   "Connect to an existing nREPL server as a named session.

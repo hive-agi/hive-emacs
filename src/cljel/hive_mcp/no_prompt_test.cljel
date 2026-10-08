@@ -1,0 +1,52 @@
+(ns hive-mcp-no-prompt-test
+  "ERT contract tests for hive-mcp-no-prompt: prompts signal, never block."
+  (:require [cl-lib]))
+
+(require 'ert)
+(require 'hive-mcp-no-prompt)
+
+(ert-deftest hive-mcp-no-prompt-test-returns-thunk-value nil
+  "A thunk that never prompts runs normally and its value is returned."
+  (should (equal 42 (hive-mcp-no-prompt-call (lambda () (* 6 7))))))
+
+(ert-deftest hive-mcp-no-prompt-test-every-prompt-signals-with-its-text nil
+  "Each covered prompting function signals `hive-mcp-prompt-refused' whose
+message names the prompt and says it was refused."
+  (dolist (f '(y-or-n-p yes-or-no-p read-string read-from-minibuffer
+               completing-read read-answer read-char-choice read-passwd
+               read-number))
+    (let [err (should-error
+               (hive-mcp-no-prompt-call
+                (lambda () (funcall f "Install now? (y or n) " nil)))
+               :type 'hive-mcp-prompt-refused)
+          msg (error-message-string err)]
+      (should (string-match-p "Emacs asked: Install now\\? (y or n); refused for agent calls"
+                              msg)))))
+
+(ert-deftest hive-mcp-no-prompt-test-treesit-style-install-prompt-refused nil
+  "A file-visit hook that offers an install via `y-or-n-p' is refused, and
+the refusal is not mistaken for a `n' answer."
+  (let [installed (list nil)]
+    (should-error
+     (hive-mcp-no-prompt-call
+      (lambda ()
+        (when (y-or-n-p "Missing tree-sitter grammars: clojure. Install now? ")
+          (setcar installed t))
+        (setcar installed 'declined)))
+     :type 'hive-mcp-prompt-refused)
+    (should (null (car installed)))))
+
+(ert-deftest hive-mcp-no-prompt-test-restores-definitions nil
+  "The prompting functions are restored after a normal and a signalling exit."
+  (let [before (symbol-function 'y-or-n-p)]
+    (hive-mcp-no-prompt-call (lambda () nil))
+    (should (eq before (symbol-function 'y-or-n-p)))
+    (ignore-errors (hive-mcp-no-prompt-call (lambda () (y-or-n-p "x? "))))
+    (should (eq before (symbol-function 'y-or-n-p)))))
+
+(ert-deftest hive-mcp-no-prompt-test-is-an-error nil
+  "The refusal is a kind of `error', so `condition-case error' catches it."
+  (should (eq 'caught
+              (condition-case _
+                  (hive-mcp-no-prompt-call (lambda () (yes-or-no-p "Sure? ")))
+                (error 'caught)))))

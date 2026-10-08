@@ -236,28 +236,30 @@ Handles keywords (:idle), symbols (idle), and strings (\"idle\")."
 (defn -status->face [status]
   "Return the face for a ling STATUS keyword, symbol, or string."
   (let [s (olympus-ui/-normalize-status status)]
-    (pcase s
-      ('idle 'olympus-ui-status-idle)
-      ('working 'olympus-ui-status-working)
-      ('blocked 'olympus-ui-status-blocked)
-      ('error 'olympus-ui-status-error)
-      ('spawning 'olympus-ui-status-spawning)
-      ('starting 'olympus-ui-status-spawning)
-      ('initializing 'olympus-ui-status-spawning)
-      (_ 'olympus-ui-status-idle))))
+    (let [pcase-dispatch-value-239 s]
+    (elisp-cond
+      ((equal pcase-dispatch-value-239 'idle) 'olympus-ui-status-idle)
+      ((equal pcase-dispatch-value-239 'working) 'olympus-ui-status-working)
+      ((equal pcase-dispatch-value-239 'blocked) 'olympus-ui-status-blocked)
+      ((equal pcase-dispatch-value-239 'error) 'olympus-ui-status-error)
+      ((equal pcase-dispatch-value-239 'spawning) 'olympus-ui-status-spawning)
+      ((equal pcase-dispatch-value-239 'starting) 'olympus-ui-status-spawning)
+      ((equal pcase-dispatch-value-239 'initializing) 'olympus-ui-status-spawning)
+      (t 'olympus-ui-status-idle)))))
 
 (defn -status->icon [status]
   "Return a status icon character for STATUS."
   (let [s (olympus-ui/-normalize-status status)]
-    (pcase s
-      ('idle "○")
-      ('working "●")
-      ('blocked "◐")
-      ('error "✗")
-      ('spawning "◌")
-      ('starting "◌")
-      ('initializing "◌")
-      (_ "?"))))
+    (let [pcase-dispatch-value-252 s]
+    (elisp-cond
+      ((equal pcase-dispatch-value-252 'idle) "○")
+      ((equal pcase-dispatch-value-252 'working) "●")
+      ((equal pcase-dispatch-value-252 'blocked) "◐")
+      ((equal pcase-dispatch-value-252 'error) "✗")
+      ((equal pcase-dispatch-value-252 'spawning) "◌")
+      ((equal pcase-dispatch-value-252 'starting) "◌")
+      ((equal pcase-dispatch-value-252 'initializing) "◌")
+      (t "?")))))
 
 ;; ============================================================================
 ;; MCP Integration
