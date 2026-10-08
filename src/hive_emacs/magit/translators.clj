@@ -6,9 +6,6 @@
 (defn- call [f & args]
   (str "(" f (apply str (map #(str " " %) args)) ")"))
 
-(defn- json [f & args]
-  (call "json-encode" (apply call f args)))
-
 (defn- maybe-string [x] (if (some? x) (el/string-literal x) "nil"))
 (defn- required [code]
   (call "progn" (call "require" "'hive-mcp-magit" "nil" "t") code))

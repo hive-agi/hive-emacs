@@ -1,5 +1,5 @@
 (ns hive-emacs.vessel.remaining-translators-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [is]]
             [clojure.test.check.generators :as gen]
             [hive-test.trifecta :refer [deftrifecta]]
             [hive-emacs.vessel.dispatch :as dispatch]
