@@ -1,0 +1,4 @@
+{:default {:result true :calls [{:app "hive-mcp"} {:summary "Ready" :body "Hello" :level :info}]}
+ :warning {:result true :calls [{:app "custom"} {:summary "Careful" :body "Disk" :level :warn}]}
+ :error-failed {:result false :calls [{:app "hive-mcp"} {:summary "Oops" :body nil :level :error}]}
+ :unknown-type {:result true :calls [{:app "hive-mcp"} {:summary "Other" :body nil :level :info}]}}
