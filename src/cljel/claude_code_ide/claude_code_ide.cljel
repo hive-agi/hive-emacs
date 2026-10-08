@@ -451,7 +451,7 @@ width has actually changed."
                         (setq dimensions-stable nil)
                         (set-window-parameter win 'claude-code-ide-cached-width new-width)))))
     ;; Decide whether to allow reflow
-    (cond
+    (elisp-cond
       ;; Not in a Claude buffer - pass through
       ((not (claude-code-ide--session-buffer-p (current-buffer)))
        base-result)
@@ -680,7 +680,7 @@ If SYSTEM-PROMPT-FILE is provided, add the --system-prompt flag with the file pa
           (setq claude-cmd (elisp-concat claude-cmd " --mcp-config \"" json-str "\""))
           ;; Add allowedTools flag if configured
           (let [allowed-tools
-                (cond
+                (elisp-cond
                   ;; Auto mode: get all emacs-tools names
                   ((eq claude-code-ide-mcp-allowed-tools 'auto)
                    (mapconcat 'identity (claude-code-ide-mcp-server-get-tool-names "mcp__emacs-tools__") " "))
@@ -706,7 +706,7 @@ WINDOW-LIST contains windows requiring position synchronization."
                       ;; Update window point to match terminal state
                       (set-window-point win terminal-point)
                       ;; Apply smart positioning strategy
-                      (cond
+                      (elisp-cond
                         ;; Terminal at bottom: maintain bottom alignment
                         ((>= terminal-point (- (point-max) 2))
                          (with-selected-window win
@@ -750,7 +750,7 @@ Returns a cons cell of (buffer . process) on success."
     (claude-code-ide-debug "Session ID: %s" session-id)
     (claude-code-ide-debug "Terminal backend: %s" claude-code-ide-terminal-backend)
 
-    (cond
+    (elisp-cond
       ;; vterm backend
       ((eq claude-code-ide-terminal-backend 'vterm)
        (let* [vterm-buffer-name buffer-name
@@ -879,7 +879,7 @@ If RESUME is non-nil, start Claude with the -r (resume) flag."
                            ;; Display the buffer in a side window
                            (claude-code-ide--display-buffer-in-side-window buffer)
                            (claude-code-ide-log "Claude Code %sstarted in %s with MCP on port %d%s"
-                                                (cond (continue "continued and ")
+                                                (elisp-cond (continue "continued and ")
                                                       (resume "resumed and ")
                                                       (t ""))
                                                 (file-name-nondirectory (directory-file-name working-dir))
@@ -1055,7 +1055,7 @@ If no Claude windows are visible, show the most recently accessed one."
                          (setq found-visible t))))
              claude-code-ide--processes)
 
-    (cond
+    (elisp-cond
       ;; We found and closed visible windows
       (found-visible
        (message "Closed all Claude Code windows"))
