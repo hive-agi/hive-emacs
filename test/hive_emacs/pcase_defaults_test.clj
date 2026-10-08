@@ -14,9 +14,13 @@
   (boolean (and (str/includes? source "(pcase ")
                 (str/includes? source "(_ "))))
 
+(defn- no-literal-wildcard-default? [source]
+  (not (bare-wildcard? source)))
+
 (deftrifecta no-literal-wildcard-default
-  (fn [source] (not (bare-wildcard? source)))
-  {:cases {:legacy "(pcase backend ('eat 1) (_ (error \"unsupported\")))"
+  hive-emacs.pcase-defaults-test/no-literal-wildcard-default?
+  {:golden-path "test/golden/hive_emacs/pcase_defaults/no_literal_wildcard_default.edn"
+   :cases {:legacy "(pcase backend ('eat 1) (_ (error \"unsupported\")))"
            :fixed "(elisp-cond ((equal backend 'eat) 1) (t (error \"unsupported\")))"
            :nil-default "(pcase backend ('eat 1) (_ nil))"
            :no-default "(pcase backend ('eat 1))"}
