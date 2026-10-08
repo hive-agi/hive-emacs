@@ -3,7 +3,8 @@
    
    Provides OS-level notifications that appear in the system notification area,
    independent of Emacs. Used for hivemind alerts that require human attention."
-  (:require [clojure.java.shell :as shell]
+  (:require [hive-notify.backends.desktop :as desktop]
+            [hive-spi.notify :as notify]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -14,17 +15,9 @@
 ;; Desktop Notifications via notify-send
 ;; =============================================================================
 
-(def ^:private urgency-levels
-  "Map notification types to notify-send urgency levels."
-  {"info" "normal"
-   "warning" "normal"
-   "error" "critical"})
-
-(def ^:private notification-icons
-  "Icons for notification types."
-  {"info" "dialog-information"
-   "warning" "dialog-warning"
-   "error" "dialog-error"})
+(def ^:dynamic *desktop-backend*
+  "Factory port for the desktop backend; bind to a stub backend in tests."
+  desktop/desktop-backend)
 
 (defn notify!
   "Send a desktop notification via notify-send.
@@ -36,29 +29,24 @@
      :timeout  - Timeout in ms (default: 5000)
      :app-name - Application name (default: \"hive-mcp\")
    
-   Returns true on success, false on failure."
-  [{:keys [summary body type timeout app-name]
-    :or {type "info"
-         timeout 5000
-         app-name "hive-mcp"}}]
+   Returns true on success, false on failure.
+
+   Compatibility note: DesktopBackend currently owns delivery timing and does
+   not expose the legacy :timeout option; it is accepted but not forwarded."
+  [{:keys [summary body type app-name]
+    :or {type "info" app-name "hive-mcp"}}]
   (try
-    (let [urgency (get urgency-levels type "normal")
-          icon (get notification-icons type "dialog-information")
-          args (cond-> ["notify-send"
-                        "-a" app-name
-                        "-u" urgency
-                        "-i" icon
-                        "-t" (str timeout)
-                        (str summary)]
-                 body (conj (str body)))
-          {:keys [exit err]} (apply shell/sh args)]
-      (if (zero? exit)
-        (do
-          (log/debug "Notification sent" {:summary summary :type type})
-          true)
-        (do
-          (log/warn "notify-send failed" {:exit exit :err err})
-          false)))
+    (let [backend (*desktop-backend* {:app app-name})
+          level (get {"info" :info "warning" :warn "error" :error}
+                     type :info)
+          delivered? (boolean (:delivered? (notify/notify! backend
+                                                          {:summary summary
+                                                           :body body
+                                                           :level level})))]
+      (if delivered?
+        (log/debug "Notification sent" {:summary summary :type type})
+        (log/warn "Desktop notification failed" {:summary summary :type type}))
+      delivered?)
     (catch Exception e
       (log/warn "Failed to send notification:" (.getMessage e))
       false)))
