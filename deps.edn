@@ -1,9 +1,5 @@
 {:paths ["src" "resources" "elisp"]
 
- ;; Published hive-notify lives in the hive-agi Maven registry. CI credentials
- ;; are supplied through Maven settings, not checked into this repository.
- :mvn/repos {"hive-gitea" {:url "https://gitea.hive-mcp.com/api/packages/hive-agi/maven"}}
-
  :deps {org.clojure/clojure {:mvn/version "1.12.6"}
         org.clojure/data.json {:mvn/version "2.5.2"}
         com.taoensso/timbre {:mvn/version "6.8.0"}
@@ -29,8 +25,10 @@
         ;; SPI ports (ICiderPort) — the contract the addon reifies.
         io.github.hive-agi/hive-spi {:mvn/version "1.4.2"}
 
-        ;; Published desktop notification backend; no hive-mcp dependency.
-        io.github.hive-agi/hive-notify {:mvn/version "0.1.5"}
+        ;; The 0.1.5 desktop backend source is public; the Gitea Maven
+        ;; artifact requires credentials unavailable to public PR builds.
+        io.github.hive-agi/hive-notify {:git/url "https://github.com/hive-agi/hive-notify.git"
+                                        :git/sha "e51419644a5ad85df4923c0038c8ad8d81003967"}
 
         ;; hive-di — typed env var resolution with ADT backing (defconfig)
         io.github.hive-agi/hive-di {:mvn/version "0.4.18"}
