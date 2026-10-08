@@ -84,6 +84,25 @@
 (defvar hive-mcp-cider-nrepl--default-process nil
   "Process object for the auto-started default nREPL server.")
 
+(defcustom hive-mcp-cider-nrepl-oom-score-adj 500
+  "Linux oom_score_adj every spawned nREPL process is given.\nThe host JVM cannot lower its own score without CAP_SYS_RESOURCE, but any\nprocess may RAISE its own, so a spawned REPL volunteers to be the kernel's\nOOM victim ahead of the host. Nil, or a value outside 1..1000, disables the\nguard. Ignored on every system other than gnu/linux."
+  :group 'hive-mcp-cider
+  :type '(choice (const :tag "Disabled" nil) integer))
+
+(defvar hive-mcp-cider-nrepl-process-spawner #'start-process
+  "Process port: called as (NAME BUFFER PROGRAM &rest ARGS), like `start-process'.\nEvery nREPL launch goes through it, so a test binds a recording stub here\ninstead of replacing `start-process' itself.")
+
+(defun hive-mcp-cider-nrepl-oom-guard-command (command &optional adj system)
+  "Wrap the argv COMMAND so the child raises its own oom_score_adj to ADJ.\nADJ defaults to `hive-mcp-cider-nrepl-oom-score-adj', SYSTEM to\n`system-type'. On gnu/linux with ADJ in 1..1000 the result is\n  (\"sh\" \"-c\" \"echo ADJ > /proc/self/oom_score_adj 2>/dev/null; exec \\\"$0\\\" \\\"$@\\\"\" PROGRAM ARGS...)\nso the shell writes the score and then execs PROGRAM in its own pid: the\nJVM inherits the score, and the argv reaches it unquoted and unchanged.\nA failed write is ignored, so the guard never blocks a launch and never\nneeds root. Any other system, a nil ADJ or one outside 1..1000 returns\nCOMMAND unchanged. Pure."
+  (let* ((value (or adj hive-mcp-cider-nrepl-oom-score-adj))
+        (sys (or system system-type)))
+    (if (and command (eq sys 'gnu/linux) (integerp value) (< 0 value) (<= value 1000)) (append (list "sh" "-c" (format "echo %d > /proc/self/oom_score_adj 2>/dev/null; exec \"$0\" \"$@\"" value)) command) command)))
+
+(defun hive-mcp-cider-nrepl-spawn (name buffer command)
+  "Start COMMAND (an argv list) as process NAME in BUFFER through the process\nport `hive-mcp-cider-nrepl-process-spawner', wrapped by `oom-guard-command'.\nReturns whatever the port returns: the process object."
+  (let* ((port hive-mcp-cider-nrepl-process-spawner))
+    (clel-apply port name buffer (hive-mcp-cider-nrepl-oom-guard-command command))))
+
 (defun hive-mcp-cider-nrepl-alias-names (aliases)
   "Normalize ALIASES to a list of bare alias name strings.\nNil and empty entries are dropped; a leading colon is stripped. Pure."
   (delq nil (mapcar (lambda (a)
@@ -210,7 +229,7 @@
         (process-environment (append (plist-get plan :env) process-environment)))
     (dolist (d (plist-get plan :diagnostics))
     (message "hive-mcp-cider-nrepl [%s]: %s" name (plist-get d :message)))
-    (clel-apply #'start-process (format "nrepl-%s" name) buf-name (plist-get plan :command)))))
+    (hive-mcp-cider-nrepl-spawn (format "nrepl-%s" name) buf-name (plist-get plan :command)))))
 
 (defun hive-mcp-cider-nrepl-stop-process (process)
   "Kill a running nREPL process."
@@ -228,7 +247,7 @@
     (let* ((default-directory (file-name-as-directory resolved))
         (cmd (hive-mcp-cider-nrepl-build-command 'clj hive-mcp-cider-nrepl-port nil nil (hive-mcp-cider-nrepl-local-deps-contents resolved))))
     (message "hive-mcp-cider-nrepl: Starting on port %s in %s..." hive-mcp-cider-nrepl-port default-directory)
-    (setq hive-mcp-cider-nrepl--default-process (clel-apply #'start-process "nrepl-server" "*nREPL-server*" cmd)))))
+    (setq hive-mcp-cider-nrepl--default-process (hive-mcp-cider-nrepl-spawn "nrepl-server" "*nREPL-server*" cmd)))))
 
 (defun hive-mcp-cider-nrepl-stop-default ()
   "Stop the default nREPL server."
