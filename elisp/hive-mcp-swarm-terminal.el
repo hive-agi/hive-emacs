@@ -169,11 +169,12 @@
 
 (defun hive-mcp-swarm-terminal-backend-available-p (backend)
   "Check if BACKEND is available."
-  (pcase backend
-  ((quote claude-code-ide) (require 'claude-code-ide nil t))
-  ((quote vterm) (and (require 'vterm nil t) (fboundp 'vterm-mode) (fboundp 'vterm-send-string)))
-  ((quote eat) (require 'eat nil t))
-  (_ nil)))
+  (let* ((pcase-dispatch-value-208 backend))
+    (cond
+  ((equal pcase-dispatch-value-208 'claude-code-ide) (require 'claude-code-ide nil t))
+  ((equal pcase-dispatch-value-208 'vterm) (and (require 'vterm nil t) (fboundp 'vterm-mode) (fboundp 'vterm-send-string)))
+  ((equal pcase-dispatch-value-208 'eat) (require 'eat nil t))
+  (t nil))))
 
 (defun hive-mcp-swarm-terminal-detect-buffer-backend (buffer)
   "Detect terminal backend used in BUFFER."
@@ -301,12 +302,13 @@
     (hive-mcp-swarm-events-emit-auto-started slave-id task-preview))
     (message "[swarm-terminal] Auto-shout: %s started task" slave-id))))
   (let* ((backend (or backend (hive-mcp-swarm-terminal-detect-buffer-backend buffer) hive-mcp-swarm-terminal-backend)))
-    (pcase backend
-  ((quote claude-code-ide) (hive-mcp-swarm-terminal--send-claude-code-ide buffer text))
-  ((quote vterm) (hive-mcp-swarm-terminal--send-vterm buffer text))
-  ((quote eat) (hive-mcp-swarm-terminal--send-eat buffer text))
-  ((quote ollama) (hive-mcp-swarm-terminal--send-ollama buffer text))
-  (_ (error "Unknown terminal backend: %s" backend)))))
+    (let* ((pcase-dispatch-value-413 backend))
+    (cond
+  ((equal pcase-dispatch-value-413 'claude-code-ide) (hive-mcp-swarm-terminal--send-claude-code-ide buffer text))
+  ((equal pcase-dispatch-value-413 'vterm) (hive-mcp-swarm-terminal--send-vterm buffer text))
+  ((equal pcase-dispatch-value-413 'eat) (hive-mcp-swarm-terminal--send-eat buffer text))
+  ((equal pcase-dispatch-value-413 'ollama) (hive-mcp-swarm-terminal--send-ollama buffer text))
+  (t (error "Unknown terminal backend: %s" backend))))))
 
 (defun hive-mcp-swarm-terminal-ready-p (buffer)
   "Check if terminal BUFFER is ready for input (non-blocking check)."

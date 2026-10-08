@@ -415,17 +415,19 @@ INPUT contains the terminal output stream."
 
 (defn- -terminal-resize-handler []
   "Retrieve the terminal's resize handling function based on backend."
-  (pcase claude-code-ide-terminal-backend
-         ('vterm #'vterm--window-adjust-process-window-size)
-         ('eat #'eat--adjust-process-window-size)
-         (_ (error "Unsupported terminal backend: %s" claude-code-ide-terminal-backend))))
+  (let [pcase-dispatch-value-418 claude-code-ide-terminal-backend]
+  (elisp-cond
+         ((equal pcase-dispatch-value-418 'vterm) #'vterm--window-adjust-process-window-size)
+         ((equal pcase-dispatch-value-418 'eat) #'eat--adjust-process-window-size)
+         (t (error "Unsupported terminal backend: %s" claude-code-ide-terminal-backend)))))
 
 (defn- -terminal-scroll-mode-active-p []
   "Determine if terminal is currently in scroll/copy mode."
-  (pcase claude-code-ide-terminal-backend
-         ('vterm (bound-and-true-p vterm-copy-mode))
-         ('eat (not (bound-and-true-p eat--semi-char-mode)))
-         (_ nil)))
+  (let [pcase-dispatch-value-425 claude-code-ide-terminal-backend]
+  (elisp-cond
+         ((equal pcase-dispatch-value-425 'vterm) (bound-and-true-p vterm-copy-mode))
+         ((equal pcase-dispatch-value-425 'eat) (not (bound-and-true-p eat--semi-char-mode)))
+         (t nil))))
 
 (defn- -session-buffer-p [buffer]
   "Check if BUFFER belongs to a Claude Code session."

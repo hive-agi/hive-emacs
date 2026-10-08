@@ -147,11 +147,12 @@
     hive-mcp-cider-nrepl-native-source-roots))
         (transport (when native-p
     (hive-mcp-cider-runtime-classpath-transport repl-type readers)))
-        (command (pcase repl-type
-  ((quote cljs) (list "npx" "shadow-cljs" "watch" hive-mcp-cider-nrepl-shadow-build))
-  ((or (quote cljw) (quote cljrs)) (append (list (or (hive-mcp-cider-runtime-binary repl-type readers) (symbol-name repl-type)) "nrepl" "--port" port-str) (hive-mcp-cider-runtime-transport-argv transport roots)))
-  ((quote cljel) (append (list "clojure" "-Sdeps" (funcall sdeps-for cljel-deps)) extra-args (list main-flag "-m" "nrepl.cmdline" "--port" port-str "--middleware" (funcall mw-for '("cider.nrepl/cider-middleware" "clojure-elisp.nrepl/wrap-cljel")))))
-  (_ (append (list "clojure" "-Sdeps" (funcall sdeps-for clj-deps)) extra-args (list main-flag "-m" "nrepl.cmdline" "--port" port-str "--middleware" (funcall mw-for '("cider.nrepl/cider-middleware"))))))))
+        (command (let* ((pcase-dispatch-value-246 repl-type))
+    (cond
+  ((equal pcase-dispatch-value-246 'cljs) (list "npx" "shadow-cljs" "watch" hive-mcp-cider-nrepl-shadow-build))
+  ((or (equal pcase-dispatch-value-246 'cljw) (equal pcase-dispatch-value-246 'cljrs)) (append (list (or (hive-mcp-cider-runtime-binary repl-type readers) (symbol-name repl-type)) "nrepl" "--port" port-str) (hive-mcp-cider-runtime-transport-argv transport roots)))
+  ((equal pcase-dispatch-value-246 'cljel) (append (list "clojure" "-Sdeps" (funcall sdeps-for cljel-deps)) extra-args (list main-flag "-m" "nrepl.cmdline" "--port" port-str "--middleware" (funcall mw-for '("cider.nrepl/cider-middleware" "clojure-elisp.nrepl/wrap-cljel")))))
+  (t (append (list "clojure" "-Sdeps" (funcall sdeps-for clj-deps)) extra-args (list main-flag "-m" "nrepl.cmdline" "--port" port-str "--middleware" (funcall mw-for '("cider.nrepl/cider-middleware")))))))))
     (list :command command :env (when native-p
     (hive-mcp-cider-runtime-transport-env transport roots)) :diagnostics (when native-p
     (hive-mcp-cider-runtime-transport-diagnostics transport roots (symbol-name repl-type))))))

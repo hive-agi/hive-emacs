@@ -178,10 +178,11 @@
 (defun hive-mcp-chroma--configure-mcp ()
   "Configure the MCP server to use Chroma."
   (when (fboundp 'hive-mcp--send-request)
-    (hive-mcp--send-request "tools/call" (list :name "cider_eval_silent" :arguments (list :code (format "(do\n        (require '[hive-mcp.chroma :as chroma])\n        (chroma/configure! {:host \"%s\" :port %d})\n        %s\n        :configured)" hive-mcp-chroma-host hive-mcp-chroma-port (pcase hive-mcp-chroma-embedding-provider
-  ((quote ollama) (format "(require '[hive-mcp.embeddings.ollama :as ollama])\n                                                      (chroma/set-embedding-provider!\n                                                        (ollama/->OllamaEmbedder \"%s\"))" hive-mcp-chroma-ollama-model))
-  ((quote mock) "(require '[hive-mcp.test-fixtures :as fixtures])\n                                            (chroma/set-embedding-provider!\n                                              (fixtures/->MockEmbedder))")
-  (_ ""))))) (lambda (response)
+    (hive-mcp--send-request "tools/call" (list :name "cider_eval_silent" :arguments (list :code (format "(do\n        (require '[hive-mcp.chroma :as chroma])\n        (chroma/configure! {:host \"%s\" :port %d})\n        %s\n        :configured)" hive-mcp-chroma-host hive-mcp-chroma-port (let* ((pcase-dispatch-value-251 hive-mcp-chroma-embedding-provider))
+    (cond
+  ((equal pcase-dispatch-value-251 'ollama) (format "(require '[hive-mcp.embeddings.ollama :as ollama])\n                                                      (chroma/set-embedding-provider!\n                                                        (ollama/->OllamaEmbedder \"%s\"))" hive-mcp-chroma-ollama-model))
+  ((equal pcase-dispatch-value-251 'mock) "(require '[hive-mcp.test-fixtures :as fixtures])\n                                            (chroma/set-embedding-provider!\n                                              (fixtures/->MockEmbedder))")
+  (t "")))))) (lambda (response)
     (if (plist-get response :error) (message "Failed to configure Chroma: %s" (plist-get response :error)) (message "Chroma configured with %s embeddings" hive-mcp-chroma-embedding-provider))))))
 
 (defun hive-mcp-chroma-search (query &optional limit type)

@@ -170,10 +170,11 @@
   "Show notification from STEP message, substituting variables from ENV."
   (let* ((msg (hive-mcp-workflows--substitute-vars (plist-get step :message) env))
         (level (or (plist-get step :level) 'info)))
-    (pcase level
-  ((quote error) (user-error "%s" msg))
-  ((quote warning) (display-warning 'hive-mcp msg :warning))
-  (_ (message "[MCP] %s" msg))))
+    (let* ((pcase-dispatch-value-251 level))
+    (cond
+  ((equal pcase-dispatch-value-251 'error) (user-error "%s" msg))
+  ((equal pcase-dispatch-value-251 'warning) (display-warning 'hive-mcp msg :warning))
+  (t (message "[MCP] %s" msg)))))
   env)
 
 (defun hive-mcp-workflows--substitute-vars (template env)

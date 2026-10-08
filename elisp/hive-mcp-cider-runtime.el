@@ -117,10 +117,11 @@
 
 (defun hive-mcp-cider-runtime-binary-source (repl-type)
   "Return the source chain for REPL-TYPE's executable path, or nil.\nThe terminal default is the bare command name, resolved through PATH by\n`binary'. A checkout-specific path belongs in `hive-mcp-config-file' or in\nthe defcustom, never in this default. Nil for a REPL-TYPE that is not a\nnative runtime. Pure."
-  (pcase repl-type
-  ((quote cljw) (hive-mcp-cider-runtime-setting-source 'hive-mcp-cider-nrepl-cljw-binary "HIVE_CLJW_BINARY" '(:cljw :binary) "cljw"))
-  ((quote cljrs) (hive-mcp-cider-runtime-setting-source 'hive-mcp-cider-nrepl-cljrs-binary "HIVE_CLJRS_BINARY" '(:cljrs :binary) "cljrs"))
-  (_ nil)))
+  (let* ((pcase-dispatch-value-243 repl-type))
+    (cond
+  ((equal pcase-dispatch-value-243 'cljw) (hive-mcp-cider-runtime-setting-source 'hive-mcp-cider-nrepl-cljw-binary "HIVE_CLJW_BINARY" '(:cljw :binary) "cljw"))
+  ((equal pcase-dispatch-value-243 'cljrs) (hive-mcp-cider-runtime-setting-source 'hive-mcp-cider-nrepl-cljrs-binary "HIVE_CLJRS_BINARY" '(:cljrs :binary) "cljrs"))
+  (t nil))))
 
 (defun hive-mcp-cider-runtime-binary (repl-type &optional readers)
   "Resolve the executable path for native REPL-TYPE, or nil.\nA resolved value naming no directory is looked up on PATH, so \"cljw\" means\nthe installed cljw and never a file of that name in the working directory.\nREADERS defaults to probe-less readers: a binary path never needs a probe,\nand resolving it without one is what keeps `default-readers' from recurring\nthrough the capability it depends on."
@@ -138,10 +139,11 @@
 
 (defun hive-mcp-cider-runtime-classpath-transport (repl-type &optional readers)
   "Resolve the classpath transport for REPL-TYPE.\n'cljrs is fixed: `--src-path' per root is its only spelling and every build\naccepts it. 'cljw resolves through `cljw-classpath-source'. Any other\nREPL-TYPE has no classpath transport and yields nil."
-  (pcase repl-type
-  ((quote cljrs) (hive-mcp-cider-runtime-transport-argv-repeat "--src-path"))
-  ((quote cljw) (or (hive-mcp-cider-runtime-parse-transport (hive-mcp-config-resolve-source (hive-mcp-cider-runtime-cljw-classpath-source) (or readers (hive-mcp-cider-runtime-default-readers)))) (hive-mcp-cider-runtime-transport-none "classpath transport unresolved")))
-  (_ nil)))
+  (let* ((pcase-dispatch-value-282 repl-type))
+    (cond
+  ((equal pcase-dispatch-value-282 'cljrs) (hive-mcp-cider-runtime-transport-argv-repeat "--src-path"))
+  ((equal pcase-dispatch-value-282 'cljw) (or (hive-mcp-cider-runtime-parse-transport (hive-mcp-config-resolve-source (hive-mcp-cider-runtime-cljw-classpath-source) (or readers (hive-mcp-cider-runtime-default-readers)))) (hive-mcp-cider-runtime-transport-none "classpath transport unresolved")))
+  (t nil))))
 
 (defun hive-mcp-cider-runtime-install-source-extensions ()
   "Register `hive-mcp-cider-runtime-source-extension-modes' in `auto-mode-alist'.\nIdempotent. I/O."

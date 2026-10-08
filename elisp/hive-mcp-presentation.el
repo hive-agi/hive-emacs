@@ -68,10 +68,11 @@
 
 (defun hive-mcp-presentation--generate-header (format title &optional subtitle)
   "Generate presentation header for FORMAT with TITLE and optional SUBTITLE."
-  (pcase format
-  ((quote beamer) (format hive-mcp-presentation--beamer-header title hive-mcp-presentation-email (car (split-string hive-mcp-presentation-author)) hive-mcp-presentation-author hive-mcp-presentation-email (or subtitle "") hive-mcp-presentation-beamer-theme))
-  ((quote revealjs) (format hive-mcp-presentation--revealjs-header hive-mcp-presentation-reveal-theme title hive-mcp-presentation-author))
-  (_ (error "Unknown format: %s" format))))
+  (let* ((pcase-dispatch-value-194 format))
+    (cond
+  ((equal pcase-dispatch-value-194 'beamer) (format hive-mcp-presentation--beamer-header title hive-mcp-presentation-email (car (split-string hive-mcp-presentation-author)) hive-mcp-presentation-author hive-mcp-presentation-email (or subtitle "") hive-mcp-presentation-beamer-theme))
+  ((equal pcase-dispatch-value-194 'revealjs) (format hive-mcp-presentation--revealjs-header hive-mcp-presentation-reveal-theme title hive-mcp-presentation-author))
+  (t (error "Unknown format: %s" format)))))
 
 (defun hive-mcp-presentation-create (title format filename)
   "Create a new presentation with TITLE in FORMAT, saving to FILENAME."
@@ -92,10 +93,11 @@
   (let* ((format (hive-mcp-presentation--detect-format)))
     (end-of-line)
     (insert "\n")
-    (insert (pcase format
-  ((quote beamer) (format hive-mcp-presentation--beamer-slide title (or content "")))
-  ((quote revealjs) (format hive-mcp-presentation--revealjs-slide title (or content "")))
-  (_ (format "** %s\n%s\n" title (or content "")))))))
+    (insert (let* ((pcase-dispatch-value-238 format))
+    (cond
+  ((equal pcase-dispatch-value-238 'beamer) (format hive-mcp-presentation--beamer-slide title (or content "")))
+  ((equal pcase-dispatch-value-238 'revealjs) (format hive-mcp-presentation--revealjs-slide title (or content "")))
+  (t (format "** %s\n%s\n" title (or content ""))))))))
 
 (defun hive-mcp-presentation-insert-two-column (title left-title left-content right-title right-content)
   "Insert a two-column slide with TITLE.\nLEFT-TITLE and LEFT-CONTENT for left column.\nRIGHT-TITLE and RIGHT-CONTENT for right column."
@@ -103,10 +105,11 @@
   (let* ((format (hive-mcp-presentation--detect-format)))
     (end-of-line)
     (insert "\n")
-    (pcase format
-  ((quote beamer) (insert (format hive-mcp-presentation--beamer-two-column title left-title left-content right-title right-content)))
-  ((quote revealjs) (insert (format "** %s\n#+ATTR_REVEAL: :frag (appear)\n- %s: %s\n- %s: %s\n" title left-title left-content right-title right-content)))
-  (_ (insert (format "** %s\n- %s: %s\n- %s: %s\n" title left-title left-content right-title right-content))))))
+    (let* ((pcase-dispatch-value-258 format))
+    (cond
+  ((equal pcase-dispatch-value-258 'beamer) (insert (format hive-mcp-presentation--beamer-two-column title left-title left-content right-title right-content)))
+  ((equal pcase-dispatch-value-258 'revealjs) (insert (format "** %s\n#+ATTR_REVEAL: :frag (appear)\n- %s: %s\n- %s: %s\n" title left-title left-content right-title right-content)))
+  (t (insert (format "** %s\n- %s: %s\n- %s: %s\n" title left-title left-content right-title right-content)))))))
 
 (defun hive-mcp-presentation-insert-code-slide (title language code)
   "Insert a code slide with TITLE showing CODE in LANGUAGE."
@@ -114,10 +117,11 @@
   (let* ((format (hive-mcp-presentation--detect-format)))
     (end-of-line)
     (insert "\n")
-    (pcase format
-  ((quote beamer) (insert (format "*** %s\n#+begin_src %s :results output :exports both :eval no\n%s\n#+end_src\n" title language code)))
-  ((quote revealjs) (insert (format "** %s\n#+begin_src %s :eval no\n%s\n#+end_src\n" title language code)))
-  (_ (insert (format "** %s\n#+begin_src %s\n%s\n#+end_src\n" title language code))))))
+    (let* ((pcase-dispatch-value-278 format))
+    (cond
+  ((equal pcase-dispatch-value-278 'beamer) (insert (format "*** %s\n#+begin_src %s :results output :exports both :eval no\n%s\n#+end_src\n" title language code)))
+  ((equal pcase-dispatch-value-278 'revealjs) (insert (format "** %s\n#+begin_src %s :eval no\n%s\n#+end_src\n" title language code)))
+  (t (insert (format "** %s\n#+begin_src %s\n%s\n#+end_src\n" title language code)))))))
 
 (defun hive-mcp-presentation-insert-image-slide (title image-path &optional caption)
   "Insert an image slide with TITLE showing IMAGE-PATH with optional CAPTION."
@@ -126,10 +130,11 @@
         (rel-path (file-relative-name image-path)))
     (end-of-line)
     (insert "\n")
-    (pcase format
-  ((quote beamer) (insert (format "*** %s\n#+ATTR_LATEX: :width 0.8\\textwidth\n[[file:%s]]\n%s\n" title rel-path (if (string-empty-p caption) "" caption))))
-  ((quote revealjs) (insert (format "** %s\n#+ATTR_HTML: :width 600px\n[[file:%s]]\n%s\n" title rel-path (if (string-empty-p caption) "" caption))))
-  (_ (insert (format "** %s\n[[file:%s]]\n%s\n" title rel-path (if (string-empty-p caption) "" caption)))))))
+    (let* ((pcase-dispatch-value-298 format))
+    (cond
+  ((equal pcase-dispatch-value-298 'beamer) (insert (format "*** %s\n#+ATTR_LATEX: :width 0.8\\textwidth\n[[file:%s]]\n%s\n" title rel-path (if (string-empty-p caption) "" caption))))
+  ((equal pcase-dispatch-value-298 'revealjs) (insert (format "** %s\n#+ATTR_HTML: :width 600px\n[[file:%s]]\n%s\n" title rel-path (if (string-empty-p caption) "" caption))))
+  (t (insert (format "** %s\n[[file:%s]]\n%s\n" title rel-path (if (string-empty-p caption) "" caption))))))))
 
 (defun hive-mcp-presentation-insert-quote-slide (title quote author)
   "Insert a quote slide with TITLE showing QUOTE by AUTHOR."
@@ -137,10 +142,11 @@
   (let* ((format (hive-mcp-presentation--detect-format)))
     (end-of-line)
     (insert "\n")
-    (pcase format
-  ((quote beamer) (insert (format "*** %s\n\\begin{modern-quote}\n%s\n\\end{modern-quote}\n#+LaTeX: \\begin{raggedleft}\n\\textbf{--- %s}\n#+LaTeX: \\par\\end{raggedleft}\n" title quote author)))
-  ((quote revealjs) (insert (format "** %s\n#+begin_quote\n%s\n\n--- *%s*\n#+end_quote\n" title quote author)))
-  (_ (insert (format "** %s\n#+begin_quote\n%s\n--- %s\n#+end_quote\n" title quote author))))))
+    (let* ((pcase-dispatch-value-317 format))
+    (cond
+  ((equal pcase-dispatch-value-317 'beamer) (insert (format "*** %s\n\\begin{modern-quote}\n%s\n\\end{modern-quote}\n#+LaTeX: \\begin{raggedleft}\n\\textbf{--- %s}\n#+LaTeX: \\par\\end{raggedleft}\n" title quote author)))
+  ((equal pcase-dispatch-value-317 'revealjs) (insert (format "** %s\n#+begin_quote\n%s\n\n--- *%s*\n#+end_quote\n" title quote author)))
+  (t (insert (format "** %s\n#+begin_quote\n%s\n--- %s\n#+end_quote\n" title quote author)))))))
 
 (defun hive-mcp-presentation-insert-iframe-slide (title url)
   "Insert an iframe background slide with TITLE showing URL (Reveal.js only)."
@@ -148,34 +154,41 @@
   (let* ((format (hive-mcp-presentation--detect-format)))
     (end-of-line)
     (insert "\n")
-    (pcase format
-  ((quote revealjs) (insert (format hive-mcp-presentation--revealjs-iframe title url)))
-  (_ (insert (format "** %s\nSee: %s\n" title url)) (message "Note: iframe backgrounds are only supported in Reveal.js")))))
+    (let* ((pcase-dispatch-value-341 format))
+    (cond
+  ((equal pcase-dispatch-value-341 'revealjs) (insert (format hive-mcp-presentation--revealjs-iframe title url)))
+  (t (progn
+  (insert (format "** %s\nSee: %s\n" title url))
+  (message "Note: iframe backgrounds are only supported in Reveal.js")))))))
 
 (defun hive-mcp-presentation-export ()
   "Export the current presentation to its target format."
   (interactive)
   (let* ((format (hive-mcp-presentation--detect-format)))
-    (pcase format
-  ((quote beamer) (org-beamer-export-to-pdf))
-  ((quote revealjs) (org-reveal-export-to-html))
-  (_ (org-export-dispatch)))))
+    (let* ((pcase-dispatch-value-356 format))
+    (cond
+  ((equal pcase-dispatch-value-356 'beamer) (org-beamer-export-to-pdf))
+  ((equal pcase-dispatch-value-356 'revealjs) (org-reveal-export-to-html))
+  (t (org-export-dispatch))))))
 
 (defun hive-mcp-presentation-preview ()
   "Preview the current presentation in PDF viewer or browser."
   (interactive)
   (let* ((format (hive-mcp-presentation--detect-format)))
-    (pcase format
-  ((quote beamer) (let* ((pdf-file (concat (file-name-sans-extension buffer-file-name) ".pdf")))
+    (let* ((pcase-dispatch-value-365 format))
+    (cond
+  ((equal pcase-dispatch-value-365 'beamer) (let* ((pdf-file (concat (file-name-sans-extension buffer-file-name) ".pdf")))
     (if (file-exists-p pdf-file) (find-file-other-window pdf-file) (when (y-or-n-p "PDF not found. Export first?")
     (org-beamer-export-to-pdf)
     (find-file-other-window (concat (file-name-sans-extension buffer-file-name) ".pdf"))))))
-  ((quote revealjs) (let* ((html-file (concat (file-name-sans-extension buffer-file-name) ".html")))
+  ((equal pcase-dispatch-value-365 'revealjs) (let* ((html-file (concat (file-name-sans-extension buffer-file-name) ".html")))
     (unless (file-exists-p html-file)
     (if (fboundp 'org-reveal-export-to-html) (org-reveal-export-to-html) (error "ox-reveal not installed. Run: M-x package-install RET ox-reveal")))
     (browse-url-of-file html-file)
     (message "Opened in browser: %s" html-file)))
-  (_ (message "Unknown format, using org-export-dispatch") (org-export-dispatch)))))
+  (t (progn
+  (message "Unknown format, using org-export-dispatch")
+  (org-export-dispatch)))))))
 
 (defun hive-mcp-presentation-export-and-preview ()
   "Export the presentation and immediately preview it.\nFor Beamer: exports to PDF and opens in PDF viewer.\nFor Reveal.js: exports to HTML and opens in browser."
@@ -188,18 +201,21 @@
   (interactive)
   (save-buffer)
   (let* ((format (hive-mcp-presentation--detect-format)))
-    (pcase format
-  ((quote beamer) (org-beamer-export-to-pdf) (let* ((pdf-file (concat (file-name-sans-extension buffer-file-name) ".pdf")))
+    (let* ((pcase-dispatch-value-399 format))
+    (cond
+  ((equal pcase-dispatch-value-399 'beamer) (progn
+  (org-beamer-export-to-pdf)
+  (let* ((pdf-file (concat (file-name-sans-extension buffer-file-name) ".pdf")))
     (when-let* ((pdf-buf (get-file-buffer pdf-file)))
     (with-current-buffer pdf-buf
     (revert-buffer t t t)))
-    (message "Beamer PDF refreshed: %s" pdf-file)))
-  ((quote revealjs) (if (fboundp 'org-reveal-export-to-html) (progn
+    (message "Beamer PDF refreshed: %s" pdf-file))))
+  ((equal pcase-dispatch-value-399 'revealjs) (if (fboundp 'org-reveal-export-to-html) (progn
   (org-reveal-export-to-html)
   (let* ((html-file (concat (file-name-sans-extension buffer-file-name) ".html")))
     (browse-url-of-file html-file)
     (message "Reveal.js refreshed and opened: %s" html-file))) (error "ox-reveal not installed")))
-  (_ (error "Unknown presentation format")))))
+  (t (error "Unknown presentation format"))))))
 
 (defun hive-mcp-presentation-open-file (file)
   "Open presentation FILE, export it, and preview.\nFILE should be an org-mode presentation file."
@@ -277,19 +293,25 @@
   "API: Export FILE to HTML and return the output path."
   (find-file file)
   (let* ((format (hive-mcp-presentation--detect-format)))
-    (pcase format
-  ((quote revealjs) (org-reveal-export-to-html) (concat (file-name-sans-extension file) ".html"))
-  ((quote beamer) (error "Use api-export-pdf for Beamer presentations"))
-  (_ (error "Unknown format")))))
+    (let* ((pcase-dispatch-value-544 format))
+    (cond
+  ((equal pcase-dispatch-value-544 'revealjs) (progn
+  (org-reveal-export-to-html)
+  (concat (file-name-sans-extension file) ".html")))
+  ((equal pcase-dispatch-value-544 'beamer) (error "Use api-export-pdf for Beamer presentations"))
+  (t (error "Unknown format"))))))
 
 (defun hive-mcp-presentation-api-export-pdf (file)
   "API: Export FILE to PDF and return the output path."
   (find-file file)
   (let* ((format (hive-mcp-presentation--detect-format)))
-    (pcase format
-  ((quote beamer) (org-beamer-export-to-pdf) (concat (file-name-sans-extension file) ".pdf"))
-  ((quote revealjs) (error "Use api-export-html for Reveal.js presentations"))
-  (_ (error "Unknown format")))))
+    (let* ((pcase-dispatch-value-556 format))
+    (cond
+  ((equal pcase-dispatch-value-556 'beamer) (progn
+  (org-beamer-export-to-pdf)
+  (concat (file-name-sans-extension file) ".pdf")))
+  ((equal pcase-dispatch-value-556 'revealjs) (error "Use api-export-html for Reveal.js presentations"))
+  (t (error "Unknown format"))))))
 
 (defun hive-mcp-presentation-api-open-browser (file)
   "API: Open the HTML version of FILE in browser."

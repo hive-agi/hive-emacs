@@ -240,12 +240,13 @@ The terminal default is the bare command name, resolved through PATH by
 `binary'. A checkout-specific path belongs in `hive-mcp-config-file' or in
 the defcustom, never in this default. Nil for a REPL-TYPE that is not a
 native runtime. Pure."
-  (pcase repl-type
-    ('cljw (setting-source 'hive-mcp-cider-nrepl-cljw-binary
+  (let [pcase-dispatch-value-243 repl-type]
+  (elisp-cond
+    ((equal pcase-dispatch-value-243 'cljw) (setting-source 'hive-mcp-cider-nrepl-cljw-binary
                            "HIVE_CLJW_BINARY" '(:cljw :binary) "cljw"))
-    ('cljrs (setting-source 'hive-mcp-cider-nrepl-cljrs-binary
+    ((equal pcase-dispatch-value-243 'cljrs) (setting-source 'hive-mcp-cider-nrepl-cljrs-binary
                             "HIVE_CLJRS_BINARY" '(:cljrs :binary) "cljrs"))
-    (_ nil)))
+    (t nil))))
 
 ;; ============================================================================
 ;; Boundary — resolution against the live machine
@@ -279,14 +280,15 @@ through the capability it depends on."
 'cljrs is fixed: `--src-path' per root is its only spelling and every build
 accepts it. 'cljw resolves through `cljw-classpath-source'. Any other
 REPL-TYPE has no classpath transport and yields nil."
-  (pcase repl-type
-    ('cljrs (transport-argv-repeat "--src-path"))
-    ('cljw (or (parse-transport
+  (let [pcase-dispatch-value-282 repl-type]
+  (elisp-cond
+    ((equal pcase-dispatch-value-282 'cljrs) (transport-argv-repeat "--src-path"))
+    ((equal pcase-dispatch-value-282 'cljw) (or (parse-transport
                 (hive-mcp-config-resolve-source
                  (cljw-classpath-source)
                  (or readers (default-readers))))
                (transport-none "classpath transport unresolved")))
-    (_ nil)))
+    (t nil))))
 
 (defn install-source-extensions []
   "Register `hive-mcp-cider-runtime-source-extension-modes' in `auto-mode-alist'.

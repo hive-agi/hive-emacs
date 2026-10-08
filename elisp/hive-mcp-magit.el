@@ -252,11 +252,12 @@
   "Return diff for TARGET (staged, unstaged, or all).\nDIRECTORY overrides `default-directory' if provided."
   (let* ((default-directory (or directory default-directory)))
     (hive-mcp-magit--ensure-repo)
-    (pcase target
-  ((or (quote nil) (quote staged)) (hive-mcp-magit--diff-staged))
-  ((quote unstaged) (hive-mcp-magit--diff-unstaged))
-  ((quote all) (concat (hive-mcp-magit--diff-staged) "\n---\n" (hive-mcp-magit--diff-unstaged)))
-  (_ (hive-mcp-magit--diff-staged)))))
+    (let* ((pcase-dispatch-value-369 target))
+    (cond
+  ((or (equal pcase-dispatch-value-369 'nil) (equal pcase-dispatch-value-369 'staged)) (hive-mcp-magit--diff-staged))
+  ((equal pcase-dispatch-value-369 'unstaged) (hive-mcp-magit--diff-unstaged))
+  ((equal pcase-dispatch-value-369 'all) (concat (hive-mcp-magit--diff-staged) "\n---\n" (hive-mcp-magit--diff-unstaged)))
+  (t (hive-mcp-magit--diff-staged))))))
 
 (defun hive-mcp-magit-api-stage (files &optional directory)
   "Stage FILES for commit.\nDIRECTORY overrides `default-directory' if provided."

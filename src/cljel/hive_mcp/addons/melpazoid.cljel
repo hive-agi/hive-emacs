@@ -125,12 +125,13 @@ RECIPE-STR is the MELPA recipe string."
                    (format "LOCAL_REPO=%s" (shell-quote-argument project-dir))
                    (format "RECIPE='%s' LOCAL_REPO=%s"
                            recipe-str (shell-quote-argument project-dir)))]
-    (pcase hive-mcp-melpazoid-fast-mode
-           ('local
+    (let [pcase-dispatch-value-128 hive-mcp-melpazoid-fast-mode]
+    (elisp-cond
+           ((equal pcase-dispatch-value-128 'local)
        ;; Run melpazoid.py directly - fastest, no Docker
             (format "cd %s && %s python3 melpazoid/melpazoid.py"
                     (shell-quote-argument melpazoid-path) base-env))
-           ('cached
+           ((equal pcase-dispatch-value-128 'cached)
        ;; Use Docker but skip rebuild if image exists
             (if (-docker-image-exists-p)
               (format "cd %s && %s docker run --rm -v %s:/pkg melpazoid:latest python3 melpazoid/melpazoid.py"
@@ -139,10 +140,10 @@ RECIPE-STR is the MELPA recipe string."
                       (shell-quote-argument project-dir))
          ;; Fall back to full build if no image
               (format "cd %s && %s make" (shell-quote-argument melpazoid-path) base-env)))
-           (_
+           (t
        ;; Default: full Docker rebuild
             (format "cd %s && %s make"
-                    (shell-quote-argument melpazoid-path) base-env)))))
+                    (shell-quote-argument melpazoid-path) base-env))))))
 
 (defn- -find-recipe [project-dir]
   "Find MELPA recipe file in PROJECT-DIR."
@@ -221,10 +222,11 @@ If RECIPE is nil, attempts to auto-detect from recipes/ directory."
                         (read-string "MELPA recipe (or empty to skip): "))
          buf (get-buffer-create hive-mcp-melpazoid--buffer-name)
          cmd (-build-command melpazoid-path project-dir recipe-str)
-         mode-label (pcase hive-mcp-melpazoid-fast-mode
-                           ('local "LOCAL (no Docker)")
-                           ('cached "CACHED Docker")
-                           (_ "FULL Docker rebuild"))]
+         mode-label (let [pcase-dispatch-value-224 hive-mcp-melpazoid-fast-mode]
+                    (elisp-cond
+                           ((equal pcase-dispatch-value-224 'local) "LOCAL (no Docker)")
+                           ((equal pcase-dispatch-value-224 'cached) "CACHED Docker")
+                           (t "FULL Docker rebuild")))]
     ;; Prepare buffer
     (with-current-buffer buf
       (let [inhibit-read-only t]
@@ -343,10 +345,11 @@ If RECIPE is nil, attempts to auto-detect from recipes/ directory."
                ('local 'cached)
                ('cached nil)))
   (message "Melpazoid fast-mode: %s"
-           (pcase hive-mcp-melpazoid-fast-mode
-                  ('local "LOCAL (no Docker - fastest)")
-                  ('cached "CACHED (skip Docker rebuild)")
-                  (_ "FULL (Docker rebuild - thorough)"))))
+           (let [pcase-dispatch-value-346 hive-mcp-melpazoid-fast-mode]
+           (elisp-cond
+                  ((equal pcase-dispatch-value-346 'local) "LOCAL (no Docker - fastest)")
+                  ((equal pcase-dispatch-value-346 'cached) "CACHED (skip Docker rebuild)")
+                  (t "FULL (Docker rebuild - thorough)")))))
 
 (defn run-fast []
   "Run melpazoid in local mode (fastest, no Docker)."

@@ -248,15 +248,16 @@ Checks in order:
         :configured)"
                                           hive-mcp-chroma-host
                                           hive-mcp-chroma-port
-                                          (pcase hive-mcp-chroma-embedding-provider
-                                            ('ollama (format "(require '[hive-mcp.embeddings.ollama :as ollama])
+                                          (let [pcase-dispatch-value-251 hive-mcp-chroma-embedding-provider]
+                                          (elisp-cond
+                                            ((equal pcase-dispatch-value-251 'ollama) (format "(require '[hive-mcp.embeddings.ollama :as ollama])
                                                       (chroma/set-embedding-provider!
                                                         (ollama/->OllamaEmbedder \"%s\"))"
                                                              hive-mcp-chroma-ollama-model))
-                                            ('mock "(require '[hive-mcp.test-fixtures :as fixtures])
+                                            ((equal pcase-dispatch-value-251 'mock) "(require '[hive-mcp.test-fixtures :as fixtures])
                                             (chroma/set-embedding-provider!
                                               (fixtures/->MockEmbedder))")
-                                            (_ "")))))
+                                            (t ""))))))
      (lambda (response)
        (if (plist-get response :error)
            (message "Failed to configure Chroma: %s" (plist-get response :error))

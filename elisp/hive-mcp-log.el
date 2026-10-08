@@ -100,12 +100,13 @@
 
 (defun hive-mcp-log--level-face (level)
   "Return face for LEVEL."
-  (pcase level
-  ((quote debug) 'font-lock-comment-face)
-  ((quote info) 'default)
-  ((quote warn) 'warning)
-  ((quote error) 'error)
-  (_ 'default)))
+  (let* ((pcase-dispatch-value-144 level))
+    (cond
+  ((equal pcase-dispatch-value-144 'debug) 'font-lock-comment-face)
+  ((equal pcase-dispatch-value-144 'info) 'default)
+  ((equal pcase-dispatch-value-144 'warn) 'warning)
+  ((equal pcase-dispatch-value-144 'error) 'error)
+  (t 'default))))
 
 (defun hive-mcp-log--write-to-buffer (formatted-msg level)
   "Write FORMATTED-MSG with LEVEL to the dedicated log buffer."
