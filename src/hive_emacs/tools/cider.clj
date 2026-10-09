@@ -630,13 +630,15 @@
 
 (defn watch-timed-out-spawn
   "Railway step over a spawn Result's err. An emacsclient timeout is not a
-   failed spawn: Emacs may still run it. Watch ACK so the outcome is reported,
-   and say so in the message. Any other Result passes through untouched."
-  [eval-fn ack r]
-  (if (and (result/err? r) (:timed-out r))
-    (do (spawn/watch-spawn! eval-fn ack)
-        (update r :message str spawn-timeout-hint))
-    r))
+   failed spawn: Emacs may still run it. Watch ACK, owned by OWNER, so the
+   outcome is reported, and say so in the message. Any other Result passes
+   through untouched."
+  ([eval-fn ack r] (watch-timed-out-spawn eval-fn nil ack r))
+  ([eval-fn owner ack r]
+   (if (and (result/err? r) (:timed-out r))
+     (do (spawn/watch-spawn! eval-fn owner ack)
+         (update r :message str spawn-timeout-hint))
+     r)))
 
 (defn handle-spawn
   "Spawn a new named CIDER session with its own nREPL server, in project_dir
@@ -645,9 +647,10 @@
    (appended). local.deps.edn in the project dir is always auto-detected.
 
    An ok answers \"starting\" and is also WATCHED: the session's outcome
-   arrives on a later tool response as the ---CIDER-SPAWN--- block. An
-   emacsclient timeout is watched too, since Emacs may still run the spawn;
-   any other err, a missing directory included, short-circuits the watch."
+   arrives on a later tool response of the caller that asked (the
+   transport's _caller_id) as the ---CIDER-SPAWN--- block. An emacsclient
+   timeout is watched too, since Emacs may still run the spawn; any other err,
+   a missing directory included, short-circuits the watch."
   [{:keys [name agent_id repl_type port extra_args aliases extra_deps middleware] :as params}]
   (log/info "cider-spawn" {:name name :repl_type repl_type :agent_id agent_id :port port
                            :aliases aliases})
@@ -657,6 +660,7 @@
       (result/err? dir) (result->mcp dir)
       :else
       (let [project_dir (:ok dir)
+            owner (:_caller_id params)
             port  (cond-> port (string? port) parse-long)
             elisp (el/require-and-call-plist-json
                     'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
@@ -673,8 +677,8 @@
                  :project-dir project_dir}]
         (result->mcp
          (-> (try-result :cider/spawn-failed #(elisp->result elisp nil))
-             (result/map-ok (partial spawn/watch-spawn! *eval-fn*))
-             (->> (watch-timed-out-spawn *eval-fn* ack))
+             (result/map-ok (partial spawn/watch-spawn! *eval-fn* owner))
+             (->> (watch-timed-out-spawn *eval-fn* owner ack))
              with-waiting-prompt))))))
 
 (defn handle-connect

@@ -311,16 +311,33 @@
       (reset! arming false)
       false)))
 
+(defn owned
+  "WATCH tagged with OWNER, the caller that asked for the spawn. A blank owner
+   leaves the watch unowned. Pure."
+  [watch owner]
+  (cond-> watch
+    (and (string? owner) (not (str/blank? owner))) (assoc :owner owner)))
+
+(defn visible-to?
+  "Is WATCH's outcome owed to CALLER-ID? Its owner is told and nobody else; an
+   unowned watch (a spawn whose caller is unknown) is told to every caller, as
+   before owners existed. Pure."
+  [watch caller-id]
+  (let [owner (:owner watch)]
+    (or (nil? owner) (= owner caller-id))))
+
 (defn watch-spawn!
-  "Railway step over a spawn Result's ok value: record the spawn so its
-   outcome is reported, make sure the Emacs half is publishing, and pass the
-   value through untouched."
-  [eval-fn payload]
-  (result/rescue payload
-    (when-let [watch (->watch payload (System/currentTimeMillis))]
-      (watch! watch)
-      (arm-publisher! eval-fn))
-    payload))
+  "Railway step over a spawn Result's ok value: record the spawn, owned by
+   OWNER (the caller that asked for it), so its outcome is reported to that
+   caller; make sure the Emacs half is publishing; pass the value through
+   untouched."
+  ([eval-fn payload] (watch-spawn! eval-fn nil payload))
+  ([eval-fn owner payload]
+   (result/rescue payload
+     (when-let [watch (->watch payload (System/currentTimeMillis))]
+       (watch! (owned watch owner))
+       (arm-publisher! eval-fn))
+     payload)))
 
 (defn read-published
   "What the Emacs half has published under ROOT: `:states` by session name, and
@@ -347,11 +364,15 @@
   ([^java.io.File root] (:states (read-published root))))
 
 (defn emitter
-  "Registered `:block/cider-spawn` emitter: request ctx -> body or nil.
-   Nothing is read while no spawn is owed an outcome."
-  [_ctx]
+  "Registered `:block/cider-spawn` emitter: request ctx -> body or nil. Only
+   the spawns the ctx's :caller-id asked for (and unowned ones) are reported to
+   it, and only those count as delivered, so one window never reads, or
+   consumes, another window's spawn outcomes. Nothing is read while no spawn is
+   owed this caller an outcome."
+  [ctx]
   (try
-    (let [current (watches)]
+    (let [caller  (:caller-id ctx)
+          current (into {} (filter (fn [[_ w]] (visible-to? w caller))) (watches))]
       (when (seq current)
         (let [now-ms (System/currentTimeMillis)
               {:keys [states published?]} (read-published)
