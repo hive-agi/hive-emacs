@@ -1,0 +1,13 @@
+{:cljel-composed ["dev"],
+ :cljs-not-composed nil,
+ :dev-test-nrepl ["dev" "test" "nrepl"],
+ :explicit-dedup ["dev"],
+ :explicit-wins ["perf"],
+ :no-nrepl-alias ["dev" "test"],
+ :none-declared nil,
+ :opt-out nil,
+ :test-only ["test"],
+ :text-dev-extra-paths-kept ["dev"],
+ :text-nrepl-main-opts-dropped ["dev" "test"],
+ :text-only-launchers nil,
+ :text-test-kaocha-dropped ["dev"]}
