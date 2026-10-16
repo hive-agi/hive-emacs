@@ -1,0 +1,9 @@
+{:cljel-composed ["dev"],
+ :cljs-not-composed nil,
+ :dev-test-nrepl ["dev" "test" "nrepl"],
+ :explicit-dedup ["dev"],
+ :explicit-wins ["perf"],
+ :no-nrepl-alias ["dev" "test"],
+ :none-declared nil,
+ :opt-out nil,
+ :test-only ["test"]}

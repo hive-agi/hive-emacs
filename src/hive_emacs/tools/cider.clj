@@ -23,7 +23,8 @@
             [hive-emacs.cider.spawn :as spawn]
             [hive-emacs.cider.introspection :as intro]
             [hive-emacs.tools.list-param :as list-param]
-            [hive-emacs.cider.spawn-dir :as spawn-dir]))
+            [hive-emacs.cider.spawn-dir :as spawn-dir]
+            [hive-emacs.cider.alias-compose :as alias-compose]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -646,6 +647,11 @@
    selection), extra_deps (EDN strings merged into -Sdeps), middleware
    (appended). local.deps.edn in the project dir is always auto-detected.
 
+   With no aliases named, those of :dev, :test and :nrepl that the project's
+   deps.edn declares are composed (hive-emacs.cider.alias-compose), so the
+   REPL lands with the project's test/ on its classpath; aliases [\"none\"]
+   ask for a plain -M launch.
+
    An ok answers \"starting\" and is also WATCHED: the session's outcome
    arrives on a later tool response of the caller that asked (the
    transport's _caller_id) as the ---CIDER-SPAWN--- block. An emacsclient
@@ -670,7 +676,10 @@
                      :project-dir project_dir
                      :agent-id   agent_id
                      :extra-args (spawn-list-param extra_args)
-                     :aliases    (spawn-list-param aliases #"[,:\s]+")
+                     :aliases    (alias-compose/for-project
+                                   project_dir
+                                   (spawn-list-param aliases #"[,:\s]+")
+                                   repl_type)
                      :extra-deps (spawn-list-param extra_deps)
                      :middleware (spawn-list-param middleware)})
             ack {:name name :port port :repl-type (or repl_type "clj")

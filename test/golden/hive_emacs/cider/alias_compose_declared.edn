@@ -1,0 +1,6 @@
+{:blank [],
+ :garbage [],
+ :nil [],
+ :none [],
+ :not-map [],
+ :typical ["dev" "nrepl" "test"]}
