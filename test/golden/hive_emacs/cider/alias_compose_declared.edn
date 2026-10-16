@@ -1,6 +1,12 @@
 {:blank [],
+ :dev-extra-paths-kept ["dev"],
+ :empty-main-opts-kept ["dev"],
+ :exec-fn-dropped ["dev"],
  :garbage [],
  :nil [],
  :none [],
  :not-map [],
+ :nrepl-main-opts-dropped ["dev"],
+ :test-cognitect-dropped [],
+ :test-kaocha-dropped ["dev"],
  :typical ["dev" "nrepl" "test"]}

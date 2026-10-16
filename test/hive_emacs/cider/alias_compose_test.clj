@@ -14,9 +14,10 @@
 ;; SPDX-License-Identifier: MIT
 
 (defn compose-case
-  "compose over CASE's declared aliases, explicit aliases and repl type."
-  [{:keys [declared explicit repl-type]}]
-  (ac/compose declared explicit repl-type))
+  "compose over CASE's declared aliases, explicit aliases and repl type. A case
+   carrying :deps-text declares what `declared-aliases` reads from that text."
+  [{:keys [declared deps-text explicit repl-type]}]
+  (ac/compose (if deps-text (ac/declared-aliases deps-text) declared) explicit repl-type))
 
 (def case-gen
   (gen/let [declared (gen/set (gen/elements ["dev" "test" "nrepl" "build" "typed"]))
@@ -35,7 +36,19 @@
            :explicit-dedup     {:declared #{} :explicit ["dev" ":dev" ""] :repl-type "clj"}
            :opt-out            {:declared #{"dev" "test"} :explicit ["none"] :repl-type "clj"}
            :cljs-not-composed  {:declared #{"dev" "test"} :explicit nil :repl-type "cljs"}
-           :cljel-composed     {:declared #{"dev"} :explicit nil :repl-type "cljel"}}
+           :cljel-composed     {:declared #{"dev"} :explicit nil :repl-type "cljel"}
+           ;; from deps.edn text: aliases that declare :main-opts are never composed
+           :text-dev-extra-paths-kept
+           {:deps-text "{:aliases {:dev {:extra-paths [\"dev\"]}}}" :explicit nil :repl-type "clj"}
+           :text-test-kaocha-dropped
+           {:deps-text "{:aliases {:dev {:extra-paths [\"dev\"]} :test {:extra-paths [\"test\"] :main-opts [\"-m\" \"kaocha.runner\"]}}}"
+            :explicit nil :repl-type "clj"}
+           :text-nrepl-main-opts-dropped
+           {:deps-text "{:aliases {:dev {} :test {:extra-paths [\"test\"]} :nrepl {:main-opts [\"-m\" \"nrepl.cmdline\" \"--port\" \"7950\"]}}}"
+            :explicit nil :repl-type "clj"}
+           :text-only-launchers
+           {:deps-text "{:aliases {:test {:main-opts [\"-m\" \"cognitect.test-runner\"]} :nrepl {:main-opts [\"-m\" \"nrepl.cmdline\"]}}}"
+            :explicit nil :repl-type "clj"}}
    :gen case-gen
    :pred (fn [r] (or (nil? r)
                      (and (vector? r) (seq r) (= r (distinct r)))))
@@ -45,7 +58,13 @@
                   (if (seq explicit) (ac/normalize explicit) ["dev" "test" "nrepl"]))]
                ["declaration-order"
                 (fn [{:keys [declared explicit]}]
-                  (if (seq explicit) (ac/normalize explicit) (not-empty (vec (sort declared)))))]]})
+                  (if (seq explicit) (ac/normalize explicit) (not-empty (vec (sort declared)))))]
+               ["composes-launchers"
+                (fn [{:keys [declared deps-text explicit repl-type]}]
+                  (let [every (if deps-text
+                                (->> (re-seq #":(dev|test|nrepl)\b" deps-text) (map second) set)
+                                declared)]
+                    (ac/compose every explicit repl-type)))]]})
 
 (defn declared-case
   [text]
@@ -55,16 +74,31 @@
   hive-emacs.cider.alias-compose-test/declared-case
   {:golden-path "test/golden/hive_emacs/cider/alias_compose_declared.edn"
    :cases {:typical  "{:paths [\"src\"] :aliases {:dev {:extra-paths [\"dev\"]} :test {} :nrepl {}}}"
+           :dev-extra-paths-kept "{:aliases {:dev {:extra-paths [\"dev\" \"test\"]}}}"
+           :test-kaocha-dropped "{:aliases {:dev {:extra-paths [\"dev\"]} :test {:extra-paths [\"test\"] :main-opts [\"-m\" \"kaocha.runner\"]}}}"
+           :test-cognitect-dropped "{:aliases {:test {:main-opts [\"-m\" \"cognitect.test-runner\"]}}}"
+           :nrepl-main-opts-dropped "{:aliases {:dev {} :nrepl {:main-opts [\"-m\" \"nrepl.cmdline\" \"--port\" \"7950\"]}}}"
+           :exec-fn-dropped "{:aliases {:dev {} :build {:exec-fn build/jar}}}"
+           :empty-main-opts-kept "{:aliases {:dev {:main-opts []}}}"
            :none     "{:paths [\"src\"]}"
            :blank    ""
            :nil      nil
            :garbage  "{:aliases {:dev"
            :not-map  "[:aliases]"}
-   :gen (gen/elements ["{:aliases {:a {}}}" "" "{" "{:aliases 3}" nil])
+   :gen (gen/elements ["{:aliases {:a {}}}"
+                       "{:aliases {:a {:main-opts [\"-m\" \"x\"]}}}"
+                       "" "{" "{:aliases 3}" nil])
    :pred (fn [r] (and (vector? r) (every? string? r)))
    :num-tests 50
    :mutations [["keeps-colons"
-                (fn [text] (vec (sort (map #(str ":" %) (ac/declared-aliases text)))))]]})
+                (fn [text] (vec (sort (map #(str ":" %) (ac/declared-aliases text)))))]
+               ["keeps-launchers"
+                (fn [text]
+                  (let [m (when-not (str/blank? text)
+                            (try (clojure.edn/read-string {:default (fn [_ v] v)} text)
+                                 (catch Exception _ nil)))
+                        a (when (map? m) (:aliases m))]
+                    (if (map? a) (vec (sort (map name (keys a)))) [])))]]})
 
 (defn- recording-eval [calls]
   (fn
@@ -85,6 +119,14 @@
 (deftest spawn-composes-the-declared-aliases
   (let [form (spawn-form "{:aliases {:test {} :dev {} :other {}}}" {})]
     (is (str/includes? form ":aliases '(\"dev\" \"test\")") form)))
+
+(deftest spawn-drops-aliases-that-declare-main-opts
+  (let [form (spawn-form (str "{:aliases {:dev {:extra-paths [\"dev\"]}"
+                              " :test {:main-opts [\"-m\" \"kaocha.runner\"]}"
+                              " :nrepl {:main-opts [\"-m\" \"nrepl.cmdline\" \"--port\" \"7950\"]}}}")
+                         {})]
+    (is (str/includes? form ":aliases '(\"dev\")") form)
+    (is (not (str/includes? form "kaocha")) form)))
 
 (deftest spawn-named-aliases-win
   (let [form (spawn-form "{:aliases {:test {} :dev {}}}" {:aliases "perf"})]
