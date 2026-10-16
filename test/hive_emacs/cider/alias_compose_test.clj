@@ -8,7 +8,8 @@
             [clojure.test.check.generators :as gen]
             [hive-emacs.cider.alias-compose :as ac]
             [hive-emacs.tools.cider :as cider]
-            [hive-test.trifecta :refer [deftrifecta]]))
+            [hive-test.trifecta :refer [deftrifecta]]
+            [clojure.edn :as edn]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
