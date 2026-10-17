@@ -24,7 +24,8 @@
             [hive-emacs.cider.introspection :as intro]
             [hive-emacs.tools.list-param :as list-param]
             [hive-emacs.cider.spawn-dir :as spawn-dir]
-            [hive-emacs.cider.alias-compose :as alias-compose]))
+            [hive-emacs.cider.alias-compose :as alias-compose]
+            [hive-emacs.cider.eval-port :as eval-port]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -184,12 +185,13 @@
            sessions))))
 
 (defn- spawn-session-internal
-  "Auto-connect spawn: name (+ optional project-dir) only. Returns true on success."
+  "Auto-connect spawn: name (+ optional project-dir), heap capped at 2g so an
+   unattended JVM cannot take the host. Returns true on success."
   ([session-name] (spawn-session-internal session-name nil))
   ([session-name project-dir]
    (let [elisp (el/require-and-call-plist-json
                  'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
-                 {:name session-name :project-dir project-dir})
+                 {:name session-name :project-dir project-dir :extra-args ["-J-Xmx2g"]})
          {:keys [success]} (*eval-fn* elisp)]
      success)))
 
@@ -300,13 +302,41 @@
       (throw (ex-info (or (:message r) "cider auto-connect failed") r)))))
 
 ;;; =============================================================================
+;;; Port routing: an eval that names an nREPL goes to that nREPL
+;;; =============================================================================
+
+(defn- ensure-port-session*
+  "Result with the name of a connected session on PORT. Reuses one that is
+   connected, else connects to the nREPL listening there as port-<n>. It
+   never spawns: the port names a server that already exists, and a spawn
+   would start a second JVM beside it."
+  [{:keys [port] :as named} directory]
+  (result/let-ok [sessions (list-sessions*)]
+                 (if-let [session (eval-port/session-on-port sessions port)]
+                   (result/ok session)
+                   (let [name  (str "port-" port)
+                         elisp (el/require-and-call-json
+                                 'hive-mcp-cider 'hive-mcp-cider-connect-session
+                                 name "localhost" port "clj" nil directory)
+                         {:keys [success error]} (*eval-fn* elisp 20000)]
+                     (if-not success
+                       (eval-port/unreachable named (str "connect failed: " error))
+                       (result/let-ok [after (list-sessions*)]
+                                      (if-let [session (eval-port/session-on-port after port)]
+                                        (result/ok session)
+                                        (eval-port/unreachable
+                                         named (str "session " name " is "
+                                                    (eval-port/session-state after name))))))))))
+
+;;; =============================================================================
 ;;; Eval handlers
 ;;; =============================================================================
 
 (defn- handle-eval-common
   "Shared eval path: directory resolution (param, then request-context cwd),
-   project-scoped session routing, legacy default-connection fallback.
-   mode is \"silent\" or \"explicit\"."
+   then the nREPL it names (`eval-port/resolve-port`), connected to and never
+   spawned beside; else project-scoped routing that spawns auto-<hash>; with
+   no directory, the legacy default connection. mode: silent or explicit."
   [params mode]
   (let [{:keys [code timeout]} params
         directory (or (:directory params)
@@ -314,6 +344,12 @@
                       (current-directory))
         nrepl-timeout (or timeout 60)
         ec-timeout-ms (+ (* nrepl-timeout 1000) 2000)
+        in-session (fn [session]
+                     (elisp->result
+                       (el/require-and-call-text
+                         'hive-mcp-cider 'hive-mcp-cider-eval-in-session
+                         session code (or timeout nil))
+                       ec-timeout-ms))
         elisp-fn (fn [code]
                    (if (= mode "explicit")
                      (el/require-and-call-text 'hive-mcp-cider 'hive-mcp-cider-eval-explicit code)
@@ -322,16 +358,25 @@
      (try-result :cider/eval-failed
                  (fn []
                    (binding [ec/*max-timeout-ms* (max ec/*max-timeout-ms* ec-timeout-ms)]
-                     (if directory
-                       (result/let-ok [session (ensure-connected* directory)]
-                                      (elisp->result
-                                        (el/require-and-call-text
-                                          'hive-mcp-cider 'hive-mcp-cider-eval-in-session
-                                          session code (or timeout nil))
-                                        ec-timeout-ms))
-                       (with-auto-connect*
-                         (fn [] (elisp->result (elisp-fn code) ec-timeout-ms))
-                         nil))))))))
+                     (result/let-ok [port (eval-port/resolve-port params directory)]
+                                    (cond
+                                      port
+                                      (result/let-ok [session (ensure-port-session* port directory)]
+                                                     (in-session session))
+
+                                      directory
+                                      (let [r (ensure-connected* directory)]
+                                        (if (result/ok? r)
+                                          (in-session (:ok r))
+                                          (update r :message
+                                                  #(str "no port param and no " directory
+                                                        "/.nrepl-port, so eval looked for this directory's auto-<hash> session: "
+                                                        % " Resolution order: " eval-port/order))))
+
+                                      :else
+                                      (with-auto-connect*
+                                        (fn [] (elisp->result (elisp-fn code) ec-timeout-ms))
+                                        nil)))))))))
 
 (defn resolve-named-session
   "Result: ok SESSION-NAME when SESSIONS (the registry listing) holds a session
@@ -507,9 +552,9 @@
    "host" {:type "string"
            :description "connect: nREPL host (default: localhost)"}
    "port" {:type "integer"
-           :description "connect: nREPL port; spawn: explicit port"}
+           :description "connect: nREPL port; spawn: explicit port; eval: the nREPL to evaluate in, connected to and never spawned beside. Eval order: port, then <project_dir>/.nrepl-port, then the project's auto-<hash> session."}
    "project_dir" {:type "string"
-                  :description "spawn: required nREPL root (`directory` is accepted as an alias; a path that is not an existing directory is refused). Pass the worktree path explicitly; no cwd fallback. connect: labels the REPL buffer, for a session whose project differs from the caller's. eval: routes to that project's nREPL session (spawning auto-<hash> if none)."}
+                  :description "spawn: required nREPL root (`directory` is accepted as an alias; a path that is not an existing directory is refused). Pass the worktree path explicitly; no cwd fallback. connect: labels the REPL buffer, for a session whose project differs from the caller's. eval: its .nrepl-port names the nREPL when no port is given; without one, routes to that project's nREPL session (spawning auto-<hash> if none)."}
    "agent_id" {:type "string"
                :description "spawn/connect: agent ID to link the session"}
    "repl_type" {:type "string"
