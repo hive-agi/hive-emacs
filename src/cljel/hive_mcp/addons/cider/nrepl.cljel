@@ -508,8 +508,8 @@ Errors if no dir can be resolved — explicit project routing only.
 Returns the process object."
   (let* [resolved-dir (or dir (project-dir repl-type))]
     (unless resolved-dir
-      (error "hive-mcp-cider-nrepl: no project-dir for session '%s' (type=%s) — pass project-dir explicitly or set `hive-mcp-cider-nrepl-project-dir'"
-             name (symbol-name repl-type)))
+      (error "hive-mcp-cider-nrepl: no project directory for session '%s' (type=%s) — call code command=\"cider spawn\" name=\"%s\" project_dir=\"<worktree path>\" (directory is also accepted)"
+             name (symbol-name repl-type) name))
     (let* [default-directory (file-name-as-directory resolved-dir)
            buf-name (format "*nREPL-%s*" name)
            plan (launch-plan repl-type port

@@ -501,15 +501,15 @@
    "search_docs" {:type "boolean"
                   :description "apropos: also search docstrings"}
    "session_name" {:type "string"
-                   :description "Named session to target: eval routes code there; kill-session kills it; doc/info/complete/apropos introspect inside that session's REPL (a cljel session resolves symbols in Emacs, not in the Clojure host). Omit for the current connection."}
+                   :description "Named session to target: eval routes code there; spawn/connect/kill-session accept it as an alias of name; doc/info/complete/apropos introspect inside that session's REPL (a cljel session resolves symbols in Emacs, not in the Clojure host). Omit for the current connection."}
    "name" {:type "string"
-           :description "spawn/connect: session name"}
+           :description "spawn/connect/kill-session: session name (alias: session_name)"}
    "host" {:type "string"
            :description "connect: nREPL host (default: localhost)"}
    "port" {:type "integer"
            :description "connect: nREPL port; spawn: explicit port"}
    "project_dir" {:type "string"
-                  :description "spawn: nREPL root (`directory` is accepted as an alias; a path that is not an existing directory is refused). connect: labels the REPL buffer, for a session whose project differs from the caller's. eval: routes to that project's nREPL session (spawning auto-<hash> if none). Defaults to the caller's cwd."}
+                  :description "spawn: nREPL root (`directory` is accepted as an alias; a path that is not an existing directory is refused). Defaults to the caller's cwd; pass project_dir explicitly for a worktree. connect: labels the REPL buffer, for a session whose project differs from the caller's. eval: routes to that project's nREPL session (spawning auto-<hash> if none)."}
    "agent_id" {:type "string"
                :description "spawn/connect: agent ID to link the session"}
    "repl_type" {:type "string"
@@ -521,9 +521,8 @@
    "aliases" {:type "array"
               :items {:type "string"}
               :description "spawn only: bare CLI alias names selecting the -M flag for this spawn (e.g. [\"test\"] -> -M:test). Overrides the daemon-wide launch-aliases defcustom."}
-   "extra_deps" {:type "array"
-                 :items {:type "string"}
-                 :description "spawn only: deps EDN maps (as strings) deep-merged into the built-in -Sdeps, after auto-detected local.deps.edn — later entries win key-wise. This is the -Sdeps \"$(cat file)\" equivalent: pass the file's CONTENTS, not a shell form."}
+   "extra_deps" {:anyOf [{:type "object"} {:type "array" :items {:type "string"}}]
+                 :description "spawn only: deps map or array of EDN map strings deep-merged into the built-in -Sdeps after local.deps.edn. Pass the file's CONTENTS, not a shell form."}
    "middleware" {:type "array"
                  :items {:type "string"}
                  :description "spawn only: nREPL middleware symbol strings appended to the built-in list (e.g. [\"refactor-nrepl.middleware/wrap-refactor\"])."}})
@@ -624,6 +623,23 @@
          kept (vec (remove str/blank? entries))]
      (when (seq kept) kept))))
 
+(defn extra-deps-param
+  "Convert a JSON deps map to one EDN string; preserve existing EDN strings."
+  [v]
+  (if (map? v)
+    [(binding [*print-namespace-maps* false]
+       (pr-str
+        (letfn [(edn-map [m parent]
+                  (into {}
+                        (map (fn [[k value]]
+                               (let [key (if (= parent :deps)
+                                           (symbol (str/replace (str k) #"^:" ""))
+                                           (keyword (str/replace (str k) #"^:" "")))]
+                                 [key (if (map? value) (edn-map value key) value)])))
+                        m))]
+          (edn-map v nil))))]
+    (spawn-list-param v)))
+
 (def ^:private spawn-timeout-hint
   (str "\nEmacs did not answer in time; it may be busy in a synchronous call."
        " The spawn may still be starting, so its outcome will arrive as the"
@@ -644,7 +660,7 @@
 (defn handle-spawn
   "Spawn a new named CIDER session with its own nREPL server, in project_dir
    (or directory). Full CLI surface: extra_args (raw, pre--M), aliases (-M
-   selection), extra_deps (EDN strings merged into -Sdeps), middleware
+   selection), extra_deps (EDN strings or a map merged into -Sdeps), middleware
    (appended). local.deps.edn in the project dir is always auto-detected.
 
    With no aliases named, those of :dev, :test and :nrepl that the project's
@@ -665,7 +681,7 @@
       (str/blank? name) (tool/mcp-error "Error: spawn requires a non-blank 'name'")
       (result/err? dir) (result->mcp dir)
       :else
-      (let [project_dir (:ok dir)
+      (let [project_dir (or (:ok dir) (System/getProperty "user.dir"))
             owner (:_caller_id params)
             port  (cond-> port (string? port) parse-long)
             elisp (el/require-and-call-plist-json
@@ -680,7 +696,7 @@
                                    project_dir
                                    (spawn-list-param aliases #"[,:\s]+")
                                    repl_type)
-                     :extra-deps (spawn-list-param extra_deps)
+                     :extra-deps (extra-deps-param extra_deps)
                      :middleware (spawn-list-param middleware)})
             ack {:name name :port port :repl-type (or repl_type "clj")
                  :project-dir project_dir}]
@@ -769,14 +785,17 @@
    {:eval-explicit (fn [params] (handle-eval (assoc params :mode "explicit")))}))
 
 (defn- subdomain-handler
-  "Strip the \"<subdomain> \" prefix off :command before calling INNER."
+  "Strip the \"<subdomain> \" prefix off :command before calling INNER.
+   Session identity accepts either :name or :session_name throughout CIDER."
   [subdomain-name inner]
   (fn [params]
     (let [full   (str (:command params))
-          prefix (str subdomain-name " ")]
-      (inner (assoc params :command (if (str/starts-with? full prefix)
-                                      (subs full (count prefix))
-                                      full))))))
+          prefix (str subdomain-name " ")
+          session (or (not-empty (:session_name params)) (not-empty (:name params)))]
+      (inner (cond-> (assoc params :command (if (str/starts-with? full prefix)
+                                              (subs full (count prefix))
+                                              full))
+               session (assoc :name session :session_name session))))))
 
 (def handle-cider-subdomain
   "Entry point contributed to `code` under \"cider\": strips the prefix and

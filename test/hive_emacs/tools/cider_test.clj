@@ -63,6 +63,26 @@
         (is (str/includes? form "my/lib"))
         (is (str/includes? form ":middleware '(\"refactor-nrepl.middleware/wrap-refactor\")"))))))
 
+(deftest spawn-serializes-extra-deps-map-as-edn
+  (let [{:keys [calls eval-fn]} (ok-stub)]
+    (binding [cider/*eval-fn* eval-fn
+              spawn-dir/*directory?* #{"/p"}]
+      (cider/handle-spawn {:name "deps" :project_dir "/p"
+                           :extra_deps {"deps" {"my/lib" {"local/root" "../lib"}}}})
+      (let [form (first @calls)]
+        (is (str/includes? form "my/lib"))
+        (is (str/includes? form ":local/root"))
+        (is (not (str/includes? form "\"local/root\" :")))))))
+
+(deftest cider-session-name-aliases
+  (let [{:keys [calls eval-fn]} (ok-stub)]
+    (binding [cider/*eval-fn* eval-fn
+              spawn-dir/*directory?* #{"/p"}]
+      (cider/handle-cider-subdomain {:command "cider spawn" :session_name "alias" :project_dir "/p"})
+      (cider/handle-cider-subdomain {:command "cider kill-session" :name "alias"})
+      (is (str/includes? (first @calls) ":name \"alias\""))
+      (is (str/includes? (second @calls) "\"alias\"")))))
+
 (deftest spawn-timeout-is-watched-not-abandoned
   (let [{:keys [eval-fn]} (make-stub (fn [_] {:success false
                                               :error "Emacsclient call timed out after 5000ms"
@@ -100,8 +120,8 @@
       (cider/handle-spawn {:name "bare"})
       (let [form (first @calls)]
         (is (str/includes? form ":name \"bare\""))
+        (is (str/includes? form (str ":project-dir " (pr-str (System/getProperty "user.dir")))))
         (is (not (str/includes? form ":extra-args")))
-        (is (not (str/includes? form ":aliases")))
         (is (not (str/includes? form ":extra-deps")))
         (is (not (str/includes? form ":middleware")))))))
 
