@@ -23,7 +23,9 @@
             [hive-emacs.cider.spawn :as spawn]
             [hive-emacs.cider.introspection :as intro]
             [hive-emacs.tools.list-param :as list-param]
-            [hive-emacs.cider.spawn-dir :as spawn-dir]))
+            [hive-emacs.cider.spawn-dir :as spawn-dir]
+            [hive-emacs.cider.alias-compose :as alias-compose]
+            [hive-emacs.cider.eval-port :as eval-port]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -183,12 +185,13 @@
            sessions))))
 
 (defn- spawn-session-internal
-  "Auto-connect spawn: name (+ optional project-dir) only. Returns true on success."
+  "Auto-connect spawn: name (+ optional project-dir), heap capped at 2g so an
+   unattended JVM cannot take the host. Returns true on success."
   ([session-name] (spawn-session-internal session-name nil))
   ([session-name project-dir]
    (let [elisp (el/require-and-call-plist-json
                  'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
-                 {:name session-name :project-dir project-dir})
+                 {:name session-name :project-dir project-dir :extra-args ["-J-Xmx2g"]})
          {:keys [success]} (*eval-fn* elisp)]
      success)))
 
@@ -299,13 +302,41 @@
       (throw (ex-info (or (:message r) "cider auto-connect failed") r)))))
 
 ;;; =============================================================================
+;;; Port routing: an eval that names an nREPL goes to that nREPL
+;;; =============================================================================
+
+(defn- ensure-port-session*
+  "Result with the name of a connected session on PORT. Reuses one that is
+   connected, else connects to the nREPL listening there as port-<n>. It
+   never spawns: the port names a server that already exists, and a spawn
+   would start a second JVM beside it."
+  [{:keys [port] :as named} directory]
+  (result/let-ok [sessions (list-sessions*)]
+                 (if-let [session (eval-port/session-on-port sessions port)]
+                   (result/ok session)
+                   (let [name  (str "port-" port)
+                         elisp (el/require-and-call-json
+                                 'hive-mcp-cider 'hive-mcp-cider-connect-session
+                                 name "localhost" port "clj" nil directory)
+                         {:keys [success error]} (*eval-fn* elisp 20000)]
+                     (if-not success
+                       (eval-port/unreachable named (str "connect failed: " error))
+                       (result/let-ok [after (list-sessions*)]
+                                      (if-let [session (eval-port/session-on-port after port)]
+                                        (result/ok session)
+                                        (eval-port/unreachable
+                                         named (str "session " name " is "
+                                                    (eval-port/session-state after name))))))))))
+
+;;; =============================================================================
 ;;; Eval handlers
 ;;; =============================================================================
 
 (defn- handle-eval-common
   "Shared eval path: directory resolution (param, then request-context cwd),
-   project-scoped session routing, legacy default-connection fallback.
-   mode is \"silent\" or \"explicit\"."
+   then the nREPL it names (`eval-port/resolve-port`), connected to and never
+   spawned beside; else project-scoped routing that spawns auto-<hash>; with
+   no directory, the legacy default connection. mode: silent or explicit."
   [params mode]
   (let [{:keys [code timeout]} params
         directory (or (:directory params)
@@ -313,6 +344,12 @@
                       (current-directory))
         nrepl-timeout (or timeout 60)
         ec-timeout-ms (+ (* nrepl-timeout 1000) 2000)
+        in-session (fn [session]
+                     (elisp->result
+                       (el/require-and-call-text
+                         'hive-mcp-cider 'hive-mcp-cider-eval-in-session
+                         session code (or timeout nil))
+                       ec-timeout-ms))
         elisp-fn (fn [code]
                    (if (= mode "explicit")
                      (el/require-and-call-text 'hive-mcp-cider 'hive-mcp-cider-eval-explicit code)
@@ -321,16 +358,25 @@
      (try-result :cider/eval-failed
                  (fn []
                    (binding [ec/*max-timeout-ms* (max ec/*max-timeout-ms* ec-timeout-ms)]
-                     (if directory
-                       (result/let-ok [session (ensure-connected* directory)]
-                                      (elisp->result
-                                        (el/require-and-call-text
-                                          'hive-mcp-cider 'hive-mcp-cider-eval-in-session
-                                          session code (or timeout nil))
-                                        ec-timeout-ms))
-                       (with-auto-connect*
-                         (fn [] (elisp->result (elisp-fn code) ec-timeout-ms))
-                         nil))))))))
+                     (result/let-ok [port (eval-port/resolve-port params directory)]
+                                    (cond
+                                      port
+                                      (result/let-ok [session (ensure-port-session* port directory)]
+                                                     (in-session session))
+
+                                      directory
+                                      (let [r (ensure-connected* directory)]
+                                        (if (result/ok? r)
+                                          (in-session (:ok r))
+                                          (update r :message
+                                                  #(str "no port param and no " directory
+                                                        "/.nrepl-port, so eval looked for this directory's auto-<hash> session: "
+                                                        % " Resolution order: " eval-port/order))))
+
+                                      :else
+                                      (with-auto-connect*
+                                        (fn [] (elisp->result (elisp-fn code) ec-timeout-ms))
+                                        nil)))))))))
 
 (defn resolve-named-session
   "Result: ok SESSION-NAME when SESSIONS (the registry listing) holds a session
@@ -374,9 +420,10 @@
 
 (defn handle-eval
   "Evaluate Clojure code via CIDER. mode selects silent (default) or explicit;
-   session_name routes to a named session instead, refusing an unknown name."
-  [{:keys [mode session_name] :as params}]
-  (if-let [session (session-arg session_name)]
+   session_name (or name, the spawn's word for it) routes to a named session
+   instead, refusing an unknown name."
+  [{:keys [mode session_name] spawn-name :name :as params}]
+  (if-let [session (or (session-arg session_name) (session-arg spawn-name))]
     (eval-in-named-session session params)
     (handle-eval-common params (or mode "silent"))))
 
@@ -500,15 +547,15 @@
    "search_docs" {:type "boolean"
                   :description "apropos: also search docstrings"}
    "session_name" {:type "string"
-                   :description "Named session to target: eval routes code there; kill-session kills it; doc/info/complete/apropos introspect inside that session's REPL (a cljel session resolves symbols in Emacs, not in the Clojure host). Omit for the current connection."}
+                   :description "Named session to target: eval routes code there; spawn/connect/kill-session accept it as an alias of name; doc/info/complete/apropos introspect inside that session's REPL (a cljel session resolves symbols in Emacs, not in the Clojure host). Omit for the current connection."}
    "name" {:type "string"
-           :description "spawn/connect: session name"}
+           :description "spawn/connect/kill-session: session name (alias: session_name)"}
    "host" {:type "string"
            :description "connect: nREPL host (default: localhost)"}
    "port" {:type "integer"
-           :description "connect: nREPL port; spawn: explicit port"}
+           :description "connect: nREPL port; spawn: explicit port; eval: the nREPL to evaluate in, connected to and never spawned beside. Eval order: port, then <project_dir>/.nrepl-port, then the project's auto-<hash> session."}
    "project_dir" {:type "string"
-                  :description "spawn: nREPL root (`directory` is accepted as an alias; a path that is not an existing directory is refused). connect: labels the REPL buffer, for a session whose project differs from the caller's. eval: routes to that project's nREPL session (spawning auto-<hash> if none). Defaults to the caller's cwd."}
+                  :description "spawn: required nREPL root (`directory` is accepted as an alias; a path that is not an existing directory is refused). Pass the worktree path explicitly; no cwd fallback. connect: labels the REPL buffer, for a session whose project differs from the caller's. eval: its .nrepl-port names the nREPL when no port is given; without one, routes to that project's nREPL session (spawning auto-<hash> if none)."}
    "agent_id" {:type "string"
                :description "spawn/connect: agent ID to link the session"}
    "repl_type" {:type "string"
@@ -520,9 +567,8 @@
    "aliases" {:type "array"
               :items {:type "string"}
               :description "spawn only: bare CLI alias names selecting the -M flag for this spawn (e.g. [\"test\"] -> -M:test). Overrides the daemon-wide launch-aliases defcustom."}
-   "extra_deps" {:type "array"
-                 :items {:type "string"}
-                 :description "spawn only: deps EDN maps (as strings) deep-merged into the built-in -Sdeps, after auto-detected local.deps.edn — later entries win key-wise. This is the -Sdeps \"$(cat file)\" equivalent: pass the file's CONTENTS, not a shell form."}
+   "extra_deps" {:anyOf [{:type "object"} {:type "array" :items {:type "string"}}]
+                 :description "spawn only: deps map or array of EDN map strings deep-merged into the built-in -Sdeps after local.deps.edn. Pass the file's CONTENTS, not a shell form."}
    "middleware" {:type "array"
                  :items {:type "string"}
                  :description "spawn only: nREPL middleware symbol strings appended to the built-in list (e.g. [\"refactor-nrepl.middleware/wrap-refactor\"])."}})
@@ -623,6 +669,23 @@
          kept (vec (remove str/blank? entries))]
      (when (seq kept) kept))))
 
+(defn extra-deps-param
+  "Convert a JSON deps map to one EDN string; preserve existing EDN strings."
+  [v]
+  (if (map? v)
+    [(binding [*print-namespace-maps* false]
+       (pr-str
+        (letfn [(edn-map [m parent]
+                  (into {}
+                        (map (fn [[k value]]
+                               (let [key (if (= parent :deps)
+                                           (symbol (str/replace (str k) #"^:" ""))
+                                           (keyword (str/replace (str k) #"^:" "")))]
+                                 [key (if (map? value) (edn-map value key) value)])))
+                        m))]
+          (edn-map v nil))))]
+    (spawn-list-param v)))
+
 (def ^:private spawn-timeout-hint
   (str "\nEmacs did not answer in time; it may be busy in a synchronous call."
        " The spawn may still be starting, so its outcome will arrive as the"
@@ -630,24 +693,32 @@
 
 (defn watch-timed-out-spawn
   "Railway step over a spawn Result's err. An emacsclient timeout is not a
-   failed spawn: Emacs may still run it. Watch ACK so the outcome is reported,
-   and say so in the message. Any other Result passes through untouched."
-  [eval-fn ack r]
-  (if (and (result/err? r) (:timed-out r))
-    (do (spawn/watch-spawn! eval-fn ack)
-        (update r :message str spawn-timeout-hint))
-    r))
+   failed spawn: Emacs may still run it. Watch ACK, owned by OWNER, so the
+   outcome is reported, and say so in the message. Any other Result passes
+   through untouched."
+  ([eval-fn ack r] (watch-timed-out-spawn eval-fn nil ack r))
+  ([eval-fn owner ack r]
+   (if (and (result/err? r) (:timed-out r))
+     (do (spawn/watch-spawn! eval-fn owner ack)
+         (update r :message str spawn-timeout-hint))
+     r)))
 
 (defn handle-spawn
   "Spawn a new named CIDER session with its own nREPL server, in project_dir
    (or directory). Full CLI surface: extra_args (raw, pre--M), aliases (-M
-   selection), extra_deps (EDN strings merged into -Sdeps), middleware
+   selection), extra_deps (EDN strings or a map merged into -Sdeps), middleware
    (appended). local.deps.edn in the project dir is always auto-detected.
 
+   With no aliases named, those of :dev, :test and :nrepl that the project's
+   deps.edn declares are composed (hive-emacs.cider.alias-compose), so the
+   REPL lands with the project's test/ on its classpath; aliases [\"none\"]
+   ask for a plain -M launch.
+
    An ok answers \"starting\" and is also WATCHED: the session's outcome
-   arrives on a later tool response as the ---CIDER-SPAWN--- block. An
-   emacsclient timeout is watched too, since Emacs may still run the spawn;
-   any other err, a missing directory included, short-circuits the watch."
+   arrives on a later tool response of the caller that asked (the
+   transport's _caller_id) as the ---CIDER-SPAWN--- block. An emacsclient
+   timeout is watched too, since Emacs may still run the spawn; any other err,
+   a missing directory included, short-circuits the watch."
   [{:keys [name agent_id repl_type port extra_args aliases extra_deps middleware] :as params}]
   (log/info "cider-spawn" {:name name :repl_type repl_type :agent_id agent_id :port port
                            :aliases aliases})
@@ -657,6 +728,7 @@
       (result/err? dir) (result->mcp dir)
       :else
       (let [project_dir (:ok dir)
+            owner (:_caller_id params)
             port  (cond-> port (string? port) parse-long)
             elisp (el/require-and-call-plist-json
                     'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
@@ -666,15 +738,18 @@
                      :project-dir project_dir
                      :agent-id   agent_id
                      :extra-args (spawn-list-param extra_args)
-                     :aliases    (spawn-list-param aliases #"[,:\s]+")
-                     :extra-deps (spawn-list-param extra_deps)
+                     :aliases    (alias-compose/for-project
+                                   project_dir
+                                   (spawn-list-param aliases #"[,:\s]+")
+                                   repl_type)
+                     :extra-deps (extra-deps-param extra_deps)
                      :middleware (spawn-list-param middleware)})
             ack {:name name :port port :repl-type (or repl_type "clj")
                  :project-dir project_dir}]
         (result->mcp
          (-> (try-result :cider/spawn-failed #(elisp->result elisp nil))
-             (result/map-ok (partial spawn/watch-spawn! *eval-fn*))
-             (->> (watch-timed-out-spawn *eval-fn* ack))
+             (result/map-ok (partial spawn/watch-spawn! *eval-fn* owner))
+             (->> (watch-timed-out-spawn *eval-fn* owner ack))
              with-waiting-prompt))))))
 
 (defn handle-connect
@@ -756,14 +831,17 @@
    {:eval-explicit (fn [params] (handle-eval (assoc params :mode "explicit")))}))
 
 (defn- subdomain-handler
-  "Strip the \"<subdomain> \" prefix off :command before calling INNER."
+  "Strip the \"<subdomain> \" prefix off :command before calling INNER.
+   Session identity accepts either :name or :session_name throughout CIDER."
   [subdomain-name inner]
   (fn [params]
     (let [full   (str (:command params))
-          prefix (str subdomain-name " ")]
-      (inner (assoc params :command (if (str/starts-with? full prefix)
-                                      (subs full (count prefix))
-                                      full))))))
+          prefix (str subdomain-name " ")
+          session (or (not-empty (:session_name params)) (not-empty (:name params)))]
+      (inner (cond-> (assoc params :command (if (str/starts-with? full prefix)
+                                              (subs full (count prefix))
+                                              full))
+               session (assoc :name session :session_name session))))))
 
 (def handle-cider-subdomain
   "Entry point contributed to `code` under \"cider\": strips the prefix and

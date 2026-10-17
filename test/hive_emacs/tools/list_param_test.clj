@@ -45,6 +45,10 @@
     (is (= entries (list-param/json-array-text
                     (str "[" (str/join ", " (map pr-str entries)) "]"))))))
 
+(def ^:private spawn-root
+  "An existing directory: spawn refuses to run without one."
+  (System/getProperty "java.io.tmpdir"))
+
 (defn- recording-eval
   "A stub *eval-fn* answering every elisp form with an empty JSON object and
    recording each form in CALLS."
@@ -60,11 +64,13 @@
   (let [calls (atom [])]
     (binding [cider/*eval-fn* (recording-eval calls)]
       (cider/handle-spawn {:name "s"
+                           :directory spawn-root
                            :aliases "[\"dev\"]"
                            :extra_args "[\"-Srepro\", \"-J-Xmx2g\"]"
                            :extra_deps "[\"{:deps {my/lib {:local/root \\\"../lib\\\"}}}\"]"
                            :middleware " [\"refactor-nrepl.middleware/wrap-refactor\"] "})
-      (let [form (first @calls)]
+      (let [form (str (first @calls))]
+        (is (seq @calls) "the spawn reached the elisp boundary")
         (is (str/includes? form ":aliases '(\"dev\")") form)
         (is (str/includes? form ":extra-args '(\"-Srepro\" \"-J-Xmx2g\")") form)
         (is (str/includes? form ":extra-deps '(\"{:deps {my/lib") form)
@@ -74,7 +80,9 @@
 (deftest a-plain-string-keeps-its-old-meaning
   (let [calls (atom [])]
     (binding [cider/*eval-fn* (recording-eval calls)]
-      (cider/handle-spawn {:name "s" :aliases ":dev:test" :extra_deps "{:deps {}}"})
+      (cider/handle-spawn {:name "s" :directory spawn-root
+                           :aliases ":dev:test" :extra_deps "{:deps {}}"})
       (let [form (first @calls)]
-        (is (str/includes? form ":aliases '(\"dev\" \"test\")") form)
-        (is (str/includes? form ":extra-deps '(\"{:deps {}}\")") form)))))
+        (is (string? form) "the spawn reached the elisp boundary")
+        (is (str/includes? (str form) ":aliases '(\"dev\" \"test\")") form)
+        (is (str/includes? (str form) ":extra-deps '(\"{:deps {}}\")") form)))))

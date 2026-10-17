@@ -62,6 +62,15 @@
       (cider/handle-spawn {:name "s" :directory dir})
       (is (str/includes? (first @calls) (str ":project-dir " (pr-str dir))) (first @calls)))))
 
+(deftest spawn-without-directory-asks-for-project-dir
+  (let [calls (atom [])]
+    (binding [cider/*eval-fn* (recording-eval calls)]
+      (let [out (cider/handle-spawn {:name "s"})]
+        (is (:isError out))
+        (is (str/includes? (:text out) "project_dir"))
+        (is (str/includes? (:text out) "directory"))
+        (is (empty? @calls) "Emacs is never asked")))))
+
 (deftest spawn-refuses-a-directory-that-does-not-exist
   (let [calls (atom [])]
     (binding [cider/*eval-fn* (recording-eval calls)]

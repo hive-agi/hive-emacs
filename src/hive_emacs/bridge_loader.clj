@@ -142,12 +142,27 @@
         (when loaded? (reset! ready-latch true))
         loaded?)))
 
+(def bridge-unavailable-hint
+  "What to do when the bridge entrypoints do not load. Callers that only print
+   :error (the git/magit tool does) must still tell the user how to recover."
+  (str "Fix: check the Emacs daemon answers (emacsclient --eval t), then that "
+       "hive-mcp.el is on its load-path ((locate-library \"hive-mcp\")) and "
+       "(require 'hive-mcp) succeeds. Plain CLI git works meanwhile."))
+
+(defn bridge-unavailable
+  "The failure map `eval-with-bridge` answers when the bridge cannot load.
+   :error starts with the stable message and carries the fix hint, so a
+   caller that surfaces only :error still shows it; :hint repeats it alone."
+  []
+  {:success false
+   :error (str "Emacs bridge entrypoints failed to load. " bridge-unavailable-hint)
+   :hint bridge-unavailable-hint
+   :bridge-unavailable true})
+
 (defn eval-with-bridge
   "Ensure bridge entrypoints are loaded, then evaluate CODE with TIMEOUT-MS.
    Returns the evaluator result map."
   [eval-fn code timeout-ms]
   (if (ensure-loaded! eval-fn)
     (eval-fn code timeout-ms)
-    {:success false
-     :error "Emacs bridge entrypoints failed to load"
-     :bridge-unavailable true}))
+    (bridge-unavailable)))

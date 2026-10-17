@@ -2,7 +2,9 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]
-            [hive-emacs.bridge-loader :as loader]))
+            [hive-emacs.bridge-loader :as loader]
+            [hive-test.trifecta :refer [deftrifecta]]
+            [clojure.test.check.generators :as gen]))
 
 (defn- temp-jar-with
   "Write a throwaway jar containing ENTRIES (name -> content string)."
@@ -146,14 +148,29 @@
                   (swap! calls conj [code timeout])
                   {:success true :result "ok"})]
     (with-redefs [loader/ensure-loaded! (fn [_] @ready?)]
-      (is (= {:success false
-              :error "Emacs bridge entrypoints failed to load"
-              :bridge-unavailable true}
+      (is (= (loader/bridge-unavailable)
              (loader/eval-with-bridge eval-fn "first" 1000)))
       (reset! ready? true)
       (is (= {:success true :result "ok"}
              (loader/eval-with-bridge eval-fn "second" 2000))))
     (is (= [["second" 2000]] @calls))))
+
+(deftrifecta bridge-unavailable-carries-a-fix-hint
+  hive-emacs.bridge-loader/bridge-unavailable
+  {:apply? true
+   :cases {[] {:success false
+               :error (str "Emacs bridge entrypoints failed to load. "
+                           loader/bridge-unavailable-hint)
+               :hint loader/bridge-unavailable-hint
+               :bridge-unavailable true}}
+   :xf    identity
+   :gen   (gen/return [])
+   :pred  (fn [r] (and (false? (:success r))
+                       (true? (:bridge-unavailable r))
+                       (str/starts-with? (:error r) "Emacs bridge entrypoints failed to load")
+                       (str/includes? (:error r) (:hint r))
+                       (str/includes? (:hint r) "emacsclient")))
+   :num-tests 10})
 
 (deftest ensure-loaded-once-latches-success-and-retries-failure
   (let [attempts (atom 0)

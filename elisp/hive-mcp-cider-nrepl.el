@@ -84,6 +84,47 @@
 (defvar hive-mcp-cider-nrepl--default-process nil
   "Process object for the auto-started default nREPL server.")
 
+(defcustom hive-mcp-cider-nrepl-oom-score-adj 500
+  "Linux oom_score_adj every spawned nREPL process is given.\nThe host JVM cannot lower its own score without CAP_SYS_RESOURCE, but any\nprocess may RAISE its own, so a spawned REPL volunteers to be the kernel's\nOOM victim ahead of the host. Nil, or a value outside 1..1000, disables the\nguard. Ignored on every system other than gnu/linux."
+  :group 'hive-mcp-cider
+  :type '(choice (const :tag "Disabled" nil) integer))
+
+(defvar hive-mcp-cider-nrepl-process-spawner #'start-process
+  "Process port: called as (NAME BUFFER PROGRAM &rest ARGS), like `start-process'.\nEvery nREPL launch goes through it, so a test binds a recording stub here\ninstead of replacing `start-process' itself.")
+
+(defun hive-mcp-cider-nrepl-oom-guard-command (command &optional adj system)
+  "Wrap the argv COMMAND so the child raises its own oom_score_adj to ADJ.\nADJ defaults to `hive-mcp-cider-nrepl-oom-score-adj', SYSTEM to\n`system-type'. On gnu/linux with ADJ in 1..1000 the result is\n  (\"sh\" \"-c\" \"echo ADJ > /proc/self/oom_score_adj 2>/dev/null; exec \\\"$0\\\" \\\"$@\\\"\" PROGRAM ARGS...)\nso the shell writes the score and then execs PROGRAM in its own pid: the\nJVM inherits the score, and the argv reaches it unquoted and unchanged.\nA failed write is ignored, so the guard never blocks a launch and never\nneeds root. Any other system, a nil ADJ or one outside 1..1000 returns\nCOMMAND unchanged. Pure."
+  (let* ((value (or adj hive-mcp-cider-nrepl-oom-score-adj))
+        (sys (or system system-type)))
+    (if (and command (eq sys 'gnu/linux) (integerp value) (< 0 value) (<= value 1000)) (append (list "sh" "-c" (format "echo %d > /proc/self/oom_score_adj 2>/dev/null; exec \"$0\" \"$@\"" value)) command) command)))
+
+(defun hive-mcp-cider-nrepl-spawn (name buffer command)
+  "Start COMMAND (an argv list) as process NAME in BUFFER through the process\nport `hive-mcp-cider-nrepl-process-spawner', wrapped by `oom-guard-command'.\nReturns whatever the port returns: the process object."
+  (let* ((port hive-mcp-cider-nrepl-process-spawner))
+    (clel-apply port name buffer (hive-mcp-cider-nrepl-oom-guard-command command))))
+
+(defun hive-mcp-cider-nrepl-oom-guard-shell-command (cmd &optional adj system)
+  "Wrap the shell-command string CMD so the shell running it raises its own\noom_score_adj to ADJ. The argv (\"sh\" \"-c\" CMD) goes through\n`oom-guard-command' and the result is joined with `shell-quote-argument', so\nthe score is written by the same guard every other nREPL launch uses. The\nJVM CMD starts is a child (or the exec) of that shell and inherits the score.\nWhen the guard leaves the argv unchanged (any system other than gnu/linux, a\nnil ADJ, one outside 1..1000) or CMD is not a non-empty string, CMD is\nreturned unchanged. Pure."
+  (let* ((argv (list "sh" "-c" cmd))
+        (guarded (when (and (stringp cmd) (> (length cmd) 0))
+    (hive-mcp-cider-nrepl-oom-guard-command argv adj system))))
+    (if (and guarded (not (eq guarded argv))) (mapconcat #'shell-quote-argument guarded " ") cmd)))
+
+(defun hive-mcp-cider-nrepl-jack-in-guard-args (args)
+  "`:filter-args' advice for `nrepl-start-server-process'.\nARGS is (DIRECTORY CMD ON-PORT-CALLBACK); CMD is replaced by\n`oom-guard-shell-command' of itself, everything else passes through. Pure."
+  (cons (car args) (cons (hive-mcp-cider-nrepl-oom-guard-shell-command (car (cdr args))) (cdr (cdr args)))))
+
+(defvar hive-mcp-cider-nrepl-jack-in-guard-target 'nrepl-start-server-process
+  "Process port of the cider-jack-in path: the function CIDER starts its\njack-in server through, called as (DIRECTORY CMD ON-PORT-CALLBACK).\n`install-jack-in-guard' advises it; a test points it at a recording stub.")
+
+(defun hive-mcp-cider-nrepl-install-jack-in-guard (&optional target)
+  "Advise TARGET (default `hive-mcp-cider-nrepl-jack-in-guard-target') with\n`jack-in-guard-args', so every cider-jack-in server raises its own\noom_score_adj like the nREPLs hive spawns directly. Idempotent."
+  (advice-add (or target hive-mcp-cider-nrepl-jack-in-guard-target) :filter-args #'hive-mcp-cider-nrepl-jack-in-guard-args))
+
+(defun hive-mcp-cider-nrepl-uninstall-jack-in-guard (&optional target)
+  "Remove the advice `install-jack-in-guard' put on TARGET."
+  (advice-remove (or target hive-mcp-cider-nrepl-jack-in-guard-target) #'hive-mcp-cider-nrepl-jack-in-guard-args))
+
 (defun hive-mcp-cider-nrepl-alias-names (aliases)
   "Normalize ALIASES to a list of bare alias name strings.\nNil and empty entries are dropped; a leading colon is stripped. Pure."
   (delq nil (mapcar (lambda (a)
@@ -203,14 +244,14 @@
   "Start an nREPL process named NAME on PORT for REPL-TYPE.\nOptional DIR overrides the working directory.\n`local-deps-contents' of the resolved dir (e.g. local.deps.edn) merge into\nthe built-in -Sdeps ahead of EXTRA-DEPS (later entries win key-wise).\nEXTRA-ARGS splice raw before -M; ALIASES select -M; MIDDLEWARE appends\nnREPL middleware symbol strings to the built-in list.\nThe plan's environment entries are prepended to `process-environment' for\nthe duration of the spawn, and its diagnostics are reported through\n`message': a source root the runtime cannot accept is announced, never\ndropped in silence.\nErrors if no dir can be resolved — explicit project routing only.\nReturns the process object."
   (let* ((resolved-dir (or dir (hive-mcp-cider-nrepl-project-dir repl-type))))
     (unless resolved-dir
-    (error "hive-mcp-cider-nrepl: no project-dir for session '%s' (type=%s) — pass project-dir explicitly or set `hive-mcp-cider-nrepl-project-dir'" name (symbol-name repl-type)))
+    (error "hive-mcp-cider-nrepl: no project directory for session '%s' (type=%s) — call code command=\"cider spawn\" name=\"%s\" project_dir=\"<worktree path>\" (directory is also accepted)" name (symbol-name repl-type) name))
     (let* ((default-directory (file-name-as-directory resolved-dir))
         (buf-name (format "*nREPL-%s*" name))
         (plan (hive-mcp-cider-nrepl-launch-plan repl-type port extra-args aliases (append (hive-mcp-cider-nrepl-local-deps-contents resolved-dir) extra-deps) middleware))
         (process-environment (append (plist-get plan :env) process-environment)))
     (dolist (d (plist-get plan :diagnostics))
     (message "hive-mcp-cider-nrepl [%s]: %s" name (plist-get d :message)))
-    (clel-apply #'start-process (format "nrepl-%s" name) buf-name (plist-get plan :command)))))
+    (hive-mcp-cider-nrepl-spawn (format "nrepl-%s" name) buf-name (plist-get plan :command)))))
 
 (defun hive-mcp-cider-nrepl-stop-process (process)
   "Kill a running nREPL process."
@@ -228,7 +269,7 @@
     (let* ((default-directory (file-name-as-directory resolved))
         (cmd (hive-mcp-cider-nrepl-build-command 'clj hive-mcp-cider-nrepl-port nil nil (hive-mcp-cider-nrepl-local-deps-contents resolved))))
     (message "hive-mcp-cider-nrepl: Starting on port %s in %s..." hive-mcp-cider-nrepl-port default-directory)
-    (setq hive-mcp-cider-nrepl--default-process (clel-apply #'start-process "nrepl-server" "*nREPL-server*" cmd)))))
+    (setq hive-mcp-cider-nrepl--default-process (hive-mcp-cider-nrepl-spawn "nrepl-server" "*nREPL-server*" cmd)))))
 
 (defun hive-mcp-cider-nrepl-stop-default ()
   "Stop the default nREPL server."

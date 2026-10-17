@@ -20,14 +20,16 @@
   directory?)
 
 (defn resolve-dir
-  "The directory a spawn runs in: project_dir, else directory, else nil (Emacs
-   decides). Result: ok path-or-nil, or err :cider/bad-project-dir when the
-   named path fails DIR? (default *directory?*)."
+  "The directory a spawn runs in: project_dir, else directory. Refuse a
+   missing path rather than guessing the server's cwd. Result: ok path, or
+   err :cider/bad-project-dir when the named path fails DIR? (default
+   *directory?*)."
   ([params] (resolve-dir params *directory?*))
   ([{:keys [project_dir directory]} dir?]
    (let [p (or (given project_dir) (given directory))]
      (cond
-       (nil? p) (result/ok nil)
+       (nil? p) (result/err :cider/bad-project-dir
+                            {:message "Error: spawn requires project_dir (directory is also accepted); pass the worktree path explicitly"})
        (dir? p) (result/ok p)
        :else    (result/err :cider/bad-project-dir
                             {:message (str "Error: spawn project_dir/directory is not an existing directory: " p)})))))

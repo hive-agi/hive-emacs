@@ -63,6 +63,26 @@
         (is (str/includes? form "my/lib"))
         (is (str/includes? form ":middleware '(\"refactor-nrepl.middleware/wrap-refactor\")"))))))
 
+(deftest spawn-serializes-extra-deps-map-as-edn
+  (let [{:keys [calls eval-fn]} (ok-stub)]
+    (binding [cider/*eval-fn* eval-fn
+              spawn-dir/*directory?* #{"/p"}]
+      (cider/handle-spawn {:name "deps" :project_dir "/p"
+                           :extra_deps {"deps" {"my/lib" {"local/root" "../lib"}}}})
+      (let [form (first @calls)]
+        (is (str/includes? form "my/lib"))
+        (is (str/includes? form ":local/root"))
+        (is (not (str/includes? form "\"local/root\" :")))))))
+
+(deftest cider-session-name-aliases
+  (let [{:keys [calls eval-fn]} (ok-stub)]
+    (binding [cider/*eval-fn* eval-fn
+              spawn-dir/*directory?* #{"/p"}]
+      (cider/handle-cider-subdomain {:command "cider spawn" :session_name "alias" :project_dir "/p"})
+      (cider/handle-cider-subdomain {:command "cider kill-session" :name "alias"})
+      (is (str/includes? (first @calls) ":name \"alias\""))
+      (is (str/includes? (second @calls) "\"alias\"")))))
+
 (deftest spawn-timeout-is-watched-not-abandoned
   (let [{:keys [eval-fn]} (make-stub (fn [_] {:success false
                                               :error "Emacsclient call timed out after 5000ms"
@@ -96,12 +116,12 @@
 
 (deftest spawn-omits-nil-params
   (let [{:keys [calls eval-fn]} (ok-stub)]
-    (binding [cider/*eval-fn* eval-fn]
-      (cider/handle-spawn {:name "bare"})
+    (binding [cider/*eval-fn* eval-fn spawn-dir/*directory?* #{"/p"}]
+      (cider/handle-spawn {:name "bare" :directory "/p"})
       (let [form (first @calls)]
         (is (str/includes? form ":name \"bare\""))
+        (is (str/includes? form ":project-dir \"/p\""))
         (is (not (str/includes? form ":extra-args")))
-        (is (not (str/includes? form ":aliases")))
         (is (not (str/includes? form ":extra-deps")))
         (is (not (str/includes? form ":middleware")))))))
 
@@ -113,16 +133,16 @@
 
 (deftest spawn-coerces-string-port
   (let [{:keys [calls eval-fn]} (ok-stub)]
-    (binding [cider/*eval-fn* eval-fn]
-      (cider/handle-spawn {:name "p" :port "7999"})
+    (binding [cider/*eval-fn* eval-fn spawn-dir/*directory?* #{"/p"}]
+      (cider/handle-spawn {:name "p" :port "7999" :project_dir "/p"})
       (is (str/includes? (first @calls) ":port 7999"))
       (is (not (str/includes? (first @calls) ":port \"7999\""))))))
 
 (deftest spawn-accepts-aliases-as-a-string
   (doseq [given ["test" ":test" "dev,test" ":dev:test"]]
     (let [{:keys [calls eval-fn]} (ok-stub)]
-      (binding [cider/*eval-fn* eval-fn]
-        (cider/handle-spawn {:name "s" :aliases given})
+      (binding [cider/*eval-fn* eval-fn spawn-dir/*directory?* #{"/p"}]
+        (cider/handle-spawn {:name "s" :aliases given :project_dir "/p"})
         (let [form (first @calls)]
           (is (re-find #":aliases '\((\"dev\" )?\"test\"\)" form) (str given " -> " form))
           (is (not (str/includes? form "?t")) "never split into characters"))))))
@@ -233,6 +253,16 @@
       (is (= "ran-in:spawned" (:text (handler {:code "1" :session_name "spawned"}))))
       (is (= ["spawned" "spawned"] @received)))))
 
+(deftest eval-routes-the-name-param-to-that-session
+  ;; Witness for friction 20261017170125-3a91c14e: `cider eval name=<spawned>`
+  ;; ignored name and answered from the main checkout's JVM.
+  (let [{:keys [received eval-fn]} (registry-stub ["coord" "spawned"])]
+    (binding [cider/*eval-fn* eval-fn]
+      (is (= "ran-in:spawned" (:text (cider/handle-eval {:code "(System/getProperty \"user.dir\")"
+                                                         :name "spawned"}))))
+      (is (true? (:isError (cider/handle-eval {:code "1" :name "ghost"}))))
+      (is (= ["spawned"] @received) "only the named session received an eval"))))
+
 (deftest eval-session-verb-without-a-name-is-refused
   (let [{:keys [calls eval-fn]} (registry-stub ["coord"])]
     (binding [cider/*eval-fn* eval-fn]
@@ -341,8 +371,9 @@
   (let [{:keys [eval-fn]} (make-stub (fn [_] {:success true
                                               :result "{\"name\":\"dev\",\"status\":\"starting\"}"}))]
     (binding [cider/*eval-fn* eval-fn
+              spawn-dir/*directory?* #{"/p"}
               cider/*attention-fn* (constantly prompt-paragraph)]
-      (let [resp (cider/handle-spawn {:name "dev"})]
+      (let [resp (cider/handle-spawn {:name "dev" :project_dir "/p"})]
         (is (not (:isError resp)))
         (is (str/includes? (:text resp) "\"status\":\"starting\""))
         (is (str/includes? (:text resp) "\"attention\""))
@@ -352,8 +383,9 @@
   (let [raw "{\"name\":\"dev\",\"status\":\"starting\"}"
         {:keys [eval-fn]} (make-stub (fn [_] {:success true :result raw}))]
     (binding [cider/*eval-fn* eval-fn
+              spawn-dir/*directory?* #{"/p"}
               cider/*attention-fn* (constantly nil)]
-      (is (= raw (:text (cider/handle-spawn {:name "dev"})))))))
+      (is (= raw (:text (cider/handle-spawn {:name "dev" :project_dir "/p"})))))))
 
 (deftest a-timeout-that-already-names-the-prompt-is-not-repeated
   (binding [cider/*attention-fn* (constantly prompt-paragraph)]

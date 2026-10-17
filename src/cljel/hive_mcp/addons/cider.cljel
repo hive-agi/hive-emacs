@@ -113,40 +113,38 @@ bound first by another JVM, the spawn retries on another port, at most
 `hive-mcp-cider-connection-spawn-port-retries' times; the retry replaces the
 failed attempt's registry entry."
   (let* [rtype (or repl-type 'clj)
-         the-port (if (and port (not (hive-mcp-cider-nrepl-port-open-p port)))
-                      port
-                    (hive-mcp-cider-sessions-find-available-port
-                      #'hive-mcp-cider-nrepl-port-open-p))
-         dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype))
-         process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir extra-args aliases extra-deps middleware)
-         timer (hive-mcp-cider-connection-arm-connect-timer
-                name hive-mcp-cider-connection-spawn-initial-delay)]
-    ;; The free-port search above still saw the lost port in the old entry.
-    (when (> attempt 0)
-      (hive-mcp-cider-sessions-unregister name))
-    (hive-mcp-cider-sessions-register
-     name
-     (hive-mcp-cider-sessions-make-session
-       the-port
-       :process process
-       :buffer (format "*nREPL-%s*" name)
-       :agent-id agent-id
-       :project-dir dir
-       :repl-type rtype
-       :status 'starting
-       :timer timer))
-    ;; Registered first: the sentinel writes onto the session it watches.
-    (hive-mcp-cider-connection-watch-spawn-process
-      name process
-      (when (< attempt hive-mcp-cider-connection-spawn-port-retries)
-        (lambda ()
-          (-spawn-attempt (+ attempt 1) name repl-type nil project-dir agent-id
-                          extra-args aliases extra-deps middleware))))
-    (when (and port (not (eql port the-port)))
-      (message "hive-mcp-cider: port %s taken; session '%s' uses %d" port name the-port))
-    (message "hive-mcp-cider: Spawning %s session '%s' on port %d..."
-             (symbol-name rtype) name the-port)
-    (list :name name :port the-port :repl-type (symbol-name rtype) :status "starting")))
+         source-dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype))
+         dir (when source-dir (file-name-as-directory (expand-file-name source-dir)))]
+    (when (= attempt 0)
+      (hive-mcp-cider-sessions-register
+       name (hive-mcp-cider-sessions-make-session nil
+              :project-dir dir :repl-type rtype :status 'starting)))
+    (condition-case err
+        (let* [the-port (if (and port (not (hive-mcp-cider-nrepl-port-open-p port)))
+                            port
+                          (hive-mcp-cider-sessions-find-available-port
+                           #'hive-mcp-cider-nrepl-port-open-p))
+               process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir extra-args aliases extra-deps middleware)
+               timer (hive-mcp-cider-connection-arm-connect-timer
+                      name hive-mcp-cider-connection-spawn-initial-delay)]
+          (hive-mcp-cider-sessions-update-props name
+            :port the-port :process process :buffer (format "*nREPL-%s*" name)
+            :agent-id agent-id :timer timer)
+          (hive-mcp-cider-connection-watch-spawn-process
+           name process
+           (when (< attempt hive-mcp-cider-connection-spawn-port-retries)
+             (lambda ()
+               (-spawn-attempt (+ attempt 1) name repl-type nil dir agent-id
+                               extra-args aliases extra-deps middleware))))
+          (when (and port (not (eql port the-port)))
+            (message "hive-mcp-cider: port %s taken; session '%s' uses %d" port name the-port))
+          (message "hive-mcp-cider: Spawning %s session '%s' on port %d..."
+                   (symbol-name rtype) name the-port)
+          (list :name name :port the-port :project-dir dir
+                :repl-type (symbol-name rtype) :status "starting"))
+      (error
+       (hive-mcp-cider-sessions-unregister name)
+       (signal (car err) (cdr err))))))
 
 (defn spawn-session [name &optional repl-type port project-dir agent-id extra-args aliases extra-deps middleware]
   "Spawn a new named CIDER session with its own nREPL server.
@@ -285,6 +283,8 @@ The native runtimes' source extensions register ahead of the cider check —
   (if (not (featurep 'cider))
       (message "hive-mcp-cider: cider package not found, addon disabled")
     (require 'hive-mcp-api nil t)
+    ;; cider-jack-in builds its own command; guard it like hive's own spawns.
+    (hive-mcp-cider-nrepl-install-jack-in-guard)
     (message "hive-mcp-cider: initialized")))
 
 (defn- -addon-async-init []
@@ -299,6 +299,7 @@ The native runtimes' source extensions register ahead of the cider check —
   "Shutdown — stops nREPL server and cleans up timers."
   (hive-mcp-cider-connection-stop-auto-connect)
   (hive-mcp-cider-nrepl-stop-default)
+  (hive-mcp-cider-nrepl-uninstall-jack-in-guard)
   (message "hive-mcp-cider: shutdown complete"))
 
 ;; ============================================================================

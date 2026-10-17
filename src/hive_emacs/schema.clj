@@ -143,7 +143,8 @@
 
 (def CiderSpawnWatch
   "A spawn an agent asked for and has not been told the outcome of.
-   :reports counts how often its outcome has been put on a response."
+   :reports counts how often its outcome has been put on a response.
+   :owner is the caller that asked for it; only that caller is told."
   [:map {:closed true}
    [:name [:string {:min 1}]]
    [:port [:maybe pos-int?]]
@@ -151,6 +152,7 @@
    [:project-dir [:maybe :string]]
    [:requested-ms nat-int?]
    [:deadline-ms pos-int?]
+   [:owner {:optional true} [:string {:min 1}]]
    [:reports {:optional true} nat-int?]])
 
 (def CiderSpawnVerdict
