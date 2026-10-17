@@ -116,11 +116,11 @@
 
 (deftest spawn-omits-nil-params
   (let [{:keys [calls eval-fn]} (ok-stub)]
-    (binding [cider/*eval-fn* eval-fn]
-      (cider/handle-spawn {:name "bare"})
+    (binding [cider/*eval-fn* eval-fn spawn-dir/*directory?* #{"/p"}]
+      (cider/handle-spawn {:name "bare" :directory "/p"})
       (let [form (first @calls)]
         (is (str/includes? form ":name \"bare\""))
-        (is (str/includes? form (str ":project-dir " (pr-str (System/getProperty "user.dir")))))
+        (is (str/includes? form ":project-dir \"/p\""))
         (is (not (str/includes? form ":extra-args")))
         (is (not (str/includes? form ":extra-deps")))
         (is (not (str/includes? form ":middleware")))))))
@@ -133,16 +133,16 @@
 
 (deftest spawn-coerces-string-port
   (let [{:keys [calls eval-fn]} (ok-stub)]
-    (binding [cider/*eval-fn* eval-fn]
-      (cider/handle-spawn {:name "p" :port "7999"})
+    (binding [cider/*eval-fn* eval-fn spawn-dir/*directory?* #{"/p"}]
+      (cider/handle-spawn {:name "p" :port "7999" :project_dir "/p"})
       (is (str/includes? (first @calls) ":port 7999"))
       (is (not (str/includes? (first @calls) ":port \"7999\""))))))
 
 (deftest spawn-accepts-aliases-as-a-string
   (doseq [given ["test" ":test" "dev,test" ":dev:test"]]
     (let [{:keys [calls eval-fn]} (ok-stub)]
-      (binding [cider/*eval-fn* eval-fn]
-        (cider/handle-spawn {:name "s" :aliases given})
+      (binding [cider/*eval-fn* eval-fn spawn-dir/*directory?* #{"/p"}]
+        (cider/handle-spawn {:name "s" :aliases given :project_dir "/p"})
         (let [form (first @calls)]
           (is (re-find #":aliases '\((\"dev\" )?\"test\"\)" form) (str given " -> " form))
           (is (not (str/includes? form "?t")) "never split into characters"))))))
@@ -361,8 +361,9 @@
   (let [{:keys [eval-fn]} (make-stub (fn [_] {:success true
                                               :result "{\"name\":\"dev\",\"status\":\"starting\"}"}))]
     (binding [cider/*eval-fn* eval-fn
+              spawn-dir/*directory?* #{"/p"}
               cider/*attention-fn* (constantly prompt-paragraph)]
-      (let [resp (cider/handle-spawn {:name "dev"})]
+      (let [resp (cider/handle-spawn {:name "dev" :project_dir "/p"})]
         (is (not (:isError resp)))
         (is (str/includes? (:text resp) "\"status\":\"starting\""))
         (is (str/includes? (:text resp) "\"attention\""))
@@ -372,8 +373,9 @@
   (let [raw "{\"name\":\"dev\",\"status\":\"starting\"}"
         {:keys [eval-fn]} (make-stub (fn [_] {:success true :result raw}))]
     (binding [cider/*eval-fn* eval-fn
+              spawn-dir/*directory?* #{"/p"}
               cider/*attention-fn* (constantly nil)]
-      (is (= raw (:text (cider/handle-spawn {:name "dev"})))))))
+      (is (= raw (:text (cider/handle-spawn {:name "dev" :project_dir "/p"})))))))
 
 (deftest a-timeout-that-already-names-the-prompt-is-not-repeated
   (binding [cider/*attention-fn* (constantly prompt-paragraph)]

@@ -509,7 +509,7 @@
    "port" {:type "integer"
            :description "connect: nREPL port; spawn: explicit port"}
    "project_dir" {:type "string"
-                  :description "spawn: nREPL root (`directory` is accepted as an alias; a path that is not an existing directory is refused). Defaults to the caller's cwd; pass project_dir explicitly for a worktree. connect: labels the REPL buffer, for a session whose project differs from the caller's. eval: routes to that project's nREPL session (spawning auto-<hash> if none)."}
+                  :description "spawn: required nREPL root (`directory` is accepted as an alias; a path that is not an existing directory is refused). Pass the worktree path explicitly; no cwd fallback. connect: labels the REPL buffer, for a session whose project differs from the caller's. eval: routes to that project's nREPL session (spawning auto-<hash> if none)."}
    "agent_id" {:type "string"
                :description "spawn/connect: agent ID to link the session"}
    "repl_type" {:type "string"
@@ -681,7 +681,7 @@
       (str/blank? name) (tool/mcp-error "Error: spawn requires a non-blank 'name'")
       (result/err? dir) (result->mcp dir)
       :else
-      (let [project_dir (or (:ok dir) (System/getProperty "user.dir"))
+      (let [project_dir (:ok dir)
             owner (:_caller_id params)
             port  (cond-> port (string? port) parse-long)
             elisp (el/require-and-call-plist-json

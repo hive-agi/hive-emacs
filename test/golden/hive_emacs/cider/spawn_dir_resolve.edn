@@ -2,6 +2,6 @@
  :directory-only [:ok "/repo/b"],
  :missing-directory [:err :cider/bad-project-dir],
  :missing-project-dir [:err :cider/bad-project-dir],
- :neither [:ok nil],
+ :neither [:err :cider/bad-project-dir],
  :project-dir [:ok "/repo/a"],
  :project-dir-wins [:ok "/repo/a"]}
