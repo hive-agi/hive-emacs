@@ -420,9 +420,10 @@
 
 (defn handle-eval
   "Evaluate Clojure code via CIDER. mode selects silent (default) or explicit;
-   session_name routes to a named session instead, refusing an unknown name."
-  [{:keys [mode session_name] :as params}]
-  (if-let [session (session-arg session_name)]
+   session_name (or name, the spawn's word for it) routes to a named session
+   instead, refusing an unknown name."
+  [{:keys [mode session_name] spawn-name :name :as params}]
+  (if-let [session (or (session-arg session_name) (session-arg spawn-name))]
     (eval-in-named-session session params)
     (handle-eval-common params (or mode "silent"))))
 
