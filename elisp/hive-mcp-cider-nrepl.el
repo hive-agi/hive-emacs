@@ -244,7 +244,7 @@
   "Start an nREPL process named NAME on PORT for REPL-TYPE.\nOptional DIR overrides the working directory.\n`local-deps-contents' of the resolved dir (e.g. local.deps.edn) merge into\nthe built-in -Sdeps ahead of EXTRA-DEPS (later entries win key-wise).\nEXTRA-ARGS splice raw before -M; ALIASES select -M; MIDDLEWARE appends\nnREPL middleware symbol strings to the built-in list.\nThe plan's environment entries are prepended to `process-environment' for\nthe duration of the spawn, and its diagnostics are reported through\n`message': a source root the runtime cannot accept is announced, never\ndropped in silence.\nErrors if no dir can be resolved — explicit project routing only.\nReturns the process object."
   (let* ((resolved-dir (or dir (hive-mcp-cider-nrepl-project-dir repl-type))))
     (unless resolved-dir
-    (error "hive-mcp-cider-nrepl: no project-dir for session '%s' (type=%s) — pass project-dir explicitly or set `hive-mcp-cider-nrepl-project-dir'" name (symbol-name repl-type)))
+    (error "hive-mcp-cider-nrepl: no project directory for session '%s' (type=%s) — call code command=\"cider spawn\" name=\"%s\" project_dir=\"<worktree path>\" (directory is also accepted)" name (symbol-name repl-type) name))
     (let* ((default-directory (file-name-as-directory resolved-dir))
         (buf-name (format "*nREPL-%s*" name))
         (plan (hive-mcp-cider-nrepl-launch-plan repl-type port extra-args aliases (append (hive-mcp-cider-nrepl-local-deps-contents resolved-dir) extra-deps) middleware))
