@@ -113,8 +113,8 @@ bound first by another JVM, the spawn retries on another port, at most
 `hive-mcp-cider-connection-spawn-port-retries' times; the retry replaces the
 failed attempt's registry entry."
   (let* [rtype (or repl-type 'clj)
-         dir (file-name-as-directory
-               (expand-file-name (or project-dir (hive-mcp-cider-nrepl-project-dir rtype))))]
+         source-dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype))
+         dir (when source-dir (file-name-as-directory (expand-file-name source-dir)))]
     (when (= attempt 0)
       (hive-mcp-cider-sessions-register
        name (hive-mcp-cider-sessions-make-session nil

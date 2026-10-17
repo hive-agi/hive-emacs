@@ -141,35 +141,37 @@
   [watch state verdict now-ms]
   (let [nm (:name watch)
         where (endpoint watch state)
+        dir (or (:project-dir state) (:project-dir watch))
+        location (str " (" where (when dir (str ", project-dir " (pr-str dir))) ")")
         took (waited watch now-ms)]
     (case verdict
       :connected
-      (str "CIDER session " (pr-str nm) " (" where ") is CONNECTED after " took
+      (str "CIDER session " (pr-str nm) location " is CONNECTED after " took
            ". Evaluate in it with `code cider eval` and :session_name " (pr-str nm) ".")
 
       :failed
-      (str "CIDER session " (pr-str nm) " (" where ") FAILED after " took ": "
+      (str "CIDER session " (pr-str nm) location " FAILED after " took ": "
            (or (:reason state) (:status state))
            ". Nothing is listening for an eval — read the *nREPL-" nm
            "* buffer for the cause, then respawn.")
 
       :overdue
-      (str "CIDER session " (pr-str nm) " (" where ") has NOT settled after " took
+      (str "CIDER session " (pr-str nm) location " has NOT settled after " took
            "; its last published status is " (pr-str (:status state))
            ". Confirm with `code cider sessions` before evaluating in it.")
 
       :vanished
-      (str "CIDER session " (pr-str nm) " (" where ") never reached the Emacs session"
+      (str "CIDER session " (pr-str nm) location " never reached the Emacs session"
            " registry within " took ". The spawn did not take; respawn it.")
 
       :unpublished
-      (str "CIDER session " (pr-str nm) " (" where ") has no outcome after " took
+      (str "CIDER session " (pr-str nm) location " has no outcome after " took
            " because the Emacs half is NOT PUBLISHING session state — this says"
            " nothing about the session itself. Ask `code cider sessions` instead,"
            " and expect no further spawn blocks until the publisher is back.")
 
       :pending
-      (str "CIDER session " (pr-str nm) " (" where ") is still starting (" took ")."
+      (str "CIDER session " (pr-str nm) location " is still starting (" took ")."
            " Wait for its outcome before evaluating in it."))))
 
 (defn rows

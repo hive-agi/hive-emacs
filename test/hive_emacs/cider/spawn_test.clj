@@ -49,6 +49,14 @@
             :requested-ms now :deadline-ms spawn/base-deadline-ms}
            watch))))
 
+(deftest spawn-outcome-identifies-project-directory
+  (let [watch (watch-of {:project-dir "/worktree/a"})
+        state {:status "connected" :project-dir "/worktree/a"}]
+    (is (str/includes? (spawn/describe watch state :connected (+ now 3000))
+                       "project-dir \"/worktree/a\""))
+    (is (str/includes? (spawn/describe watch nil :vanished (+ now 95000))
+                       "project-dir \"/worktree/a\""))))
+
 (deftest an-upgraded-repl-gets-the-longer-deadline
   (testing "cljs and cljel must still settle an upgrade after connecting"
     (is (< spawn/base-deadline-ms (:deadline-ms (watch-of {:repl-type "cljel"}))))
