@@ -487,7 +487,6 @@ ON-PORT-IN-USE, when given, is called with no arguments instead of recording
                     (hive-mcp-cider-sessions-update-props name
                       :status 'error
                       :reason reason)
-                    (hive-mcp-cider-sessions-unregister name)
                     (message "hive-mcp-cider: Session '%s' spawn failed — %s"
                              name reason)))))))))))
 
