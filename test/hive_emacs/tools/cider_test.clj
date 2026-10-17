@@ -253,6 +253,16 @@
       (is (= "ran-in:spawned" (:text (handler {:code "1" :session_name "spawned"}))))
       (is (= ["spawned" "spawned"] @received)))))
 
+(deftest eval-routes-the-name-param-to-that-session
+  ;; Witness for friction 20261017170125-3a91c14e: `cider eval name=<spawned>`
+  ;; ignored name and answered from the main checkout's JVM.
+  (let [{:keys [received eval-fn]} (registry-stub ["coord" "spawned"])]
+    (binding [cider/*eval-fn* eval-fn]
+      (is (= "ran-in:spawned" (:text (cider/handle-eval {:code "(System/getProperty \"user.dir\")"
+                                                         :name "spawned"}))))
+      (is (true? (:isError (cider/handle-eval {:code "1" :name "ghost"}))))
+      (is (= ["spawned"] @received) "only the named session received an eval"))))
+
 (deftest eval-session-verb-without-a-name-is-refused
   (let [{:keys [calls eval-fn]} (registry-stub ["coord"])]
     (binding [cider/*eval-fn* eval-fn]

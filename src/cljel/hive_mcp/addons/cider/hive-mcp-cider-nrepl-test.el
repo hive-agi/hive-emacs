@@ -129,7 +129,8 @@
     (error "start-process must not run")))) (condition-case e
     (hive-mcp-cider-nrepl-launch-process "s" 7999 'clj)
   (error (setq message (error-message-string e)))))
-    (should (string-match-p "no project-dir for session" message))))
+    (should (string-match-p "no project directory for session" message))
+    (should (string-match-p "project_dir=" message))))
 
 (ert-deftest hive-mcp-cider-nrepl-test-launch-process-uses-dir-as-cwd nil "The passed DIR becomes the process working directory, not a command argument." (let* ((dir (make-temp-file "hive-mcp-cider-nrepl-test" t))
         (captured nil))
