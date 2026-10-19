@@ -66,16 +66,79 @@
     (when (fboundp 'hive-mcp-swarm-hooks-dispatch)
     (hive-mcp-swarm-hooks-dispatch (intern (concat ":" event-type)) (list :agent-id agent-id :event-type event-type :task task :message message :data data :timestamp (or timestamp (float-time)))))))
 
+(defcustom hive-mcp-hivemind-ask-pop-up t
+  "When non-nil, an ask that expects a typed answer shows its answer buffer\nas soon as it arrives. Otherwise only a notification is shown; answer with\n`hive-mcp-hivemind-respond'."
+  :group 'hive-mcp-hivemind
+  :type 'boolean)
+
+(defun hive-mcp-hivemind--field (event key)
+  "Value of KEY, a string, in EVENT: an alist with symbol or string keys."
+  (or (alist-get (intern key) event) (cdr (assoc key event))))
+
+(defun hive-mcp-hivemind--send-answer (ask-id answer)
+  "Send ANSWER, any text, to pending ask ASK-ID and drop it from the list."
+  (if (hive-mcp-channel-ws-connected-p) (hive-mcp-channel-ws-send (list (cons 'type "hivemind-response") (cons 'ask-id ask-id) (cons 'answer answer) (cons 'decision answer) (cons 'by "human"))) (hive-mcp-channel-send (list (cons "type" "hivemind-response") (cons "ask-id" ask-id) (cons "answer" answer) (cons "decision" answer) (cons "by" "human"))))
+  (setq hive-mcp-hivemind--pending-asks (seq-remove (lambda (a)
+    (string= (plist-get a :ask-id) ask-id)) hive-mcp-hivemind--pending-asks))
+  (message "Answered %s: %s" ask-id (truncate-string-to-width answer 60 nil nil "...")))
+
+(defvar-local hive-mcp-hivemind--answer-ask nil "The ask this answer buffer replies to.")
+
+(defvar-local hive-mcp-hivemind--answer-start nil "Marker where the typed answer begins.")
+
+(defvar hive-mcp-hivemind-answer-mode-map (make-sparse-keymap)
+  "Keymap for `hive-mcp-hivemind-answer-mode'.")
+
+(define-key hive-mcp-hivemind-answer-mode-map (kbd "C-c C-c") 'hive-mcp-hivemind-answer-send)
+
+(define-key hive-mcp-hivemind-answer-mode-map (kbd "C-c C-k") 'hive-mcp-hivemind-answer-cancel)
+
+(define-derived-mode hive-mcp-hivemind-answer-mode text-mode "Hive-Answer" "Major mode for typing the answer to a hivemind ask.\nThe question and its context are read-only at the top; type below them.\n\\<hive-mcp-hivemind-answer-mode-map>\\[hive-mcp-hivemind-answer-send] sends the answer, \\[hive-mcp-hivemind-answer-cancel] closes and leaves the ask pending.")
+
+(defun hive-mcp-hivemind--open-answer-buffer (ask)
+  "Fill the answer buffer for ASK: question, context, suggested answers, then\nan editable area. Returns the buffer without selecting it."
+  (let* ((buf (get-buffer-create (format "*Hivemind Ask: %s*" (plist-get ask :agent-id)))))
+    (with-current-buffer buf
+    (let* ((inhibit-read-only t))
+    (erase-buffer)
+    (hive-mcp-hivemind-answer-mode)
+    (insert (propertize (format "%s asks:\n" (plist-get ask :agent-id)) 'face 'bold))
+    (insert (or (plist-get ask :question) "") "\n")
+    (when (plist-get ask :context)
+    (insert "\n" (propertize "Context\n" 'face 'bold) (plist-get ask :context) "\n"))
+    (when (plist-get ask :options)
+    (insert "\n" (propertize "Suggested answers: " 'face 'bold) (mapconcat 'identity (plist-get ask :options) " | ") "\n"))
+    (when (plist-get ask :cc)
+    (insert (propertize "Also told the answer: " 'face 'shadow) (mapconcat 'identity (plist-get ask :cc) ", ") "\n"))
+    (insert "\n" (propertize "Type your answer below. C-c C-c sends, C-c C-k closes." 'face 'shadow) "\n" (make-string 60 45) "\n")
+    (add-text-properties (point-min) (point) '(read-only t front-sticky t rear-nonsticky t))
+    (setq hive-mcp-hivemind--answer-ask ask)
+    (setq hive-mcp-hivemind--answer-start (point-marker))))
+    buf))
+
+(defun hive-mcp-hivemind-answer-send ()
+  "Send the text typed in this buffer as the answer to its ask."
+  (interactive)
+  (let* ((ask hive-mcp-hivemind--answer-ask)
+        (answer (string-trim (buffer-substring-no-properties hive-mcp-hivemind--answer-start (point-max)))))
+    (if (string-empty-p answer) (user-error "Type an answer first") (progn
+  (hive-mcp-hivemind--send-answer (plist-get ask :ask-id) answer)
+  (quit-window t)))))
+
+(defun hive-mcp-hivemind-answer-cancel ()
+  "Close this answer buffer. The ask stays pending."
+  (interactive)
+  (quit-window t)
+  (message "Ask left pending; M-x hive-mcp-hivemind-respond answers it later"))
+
 (defun hive-mcp-hivemind--handle-ask (event)
-  "Handle a hivemind ask EVENT requiring human response."
-  (let* ((ask-id (or (alist-get 'ask-id event) (cdr (assoc "ask-id" event))))
-        (agent-id (or (alist-get 'agent-id event) (cdr (assoc "agent-id" event))))
-        (question (or (alist-get 'question event) (cdr (assoc "question" event))))
-        (options (or (alist-get 'options event) (cdr (assoc "options" event)))))
-    (push (list :ask-id ask-id :agent-id agent-id :question question :options options :timestamp (float-time)) hive-mcp-hivemind--pending-asks)
-    (hive-mcp-hivemind--log "ASK" agent-id question)
-    (hive-mcp-hivemind--notify agent-id "NEEDS INPUT" question)
-    (message "HIVEMIND ASK [%s]: %s" agent-id question)))
+  "Handle a hivemind ask EVENT requiring human response.\nThe event may carry context and an expected answer kind (confirm, choice or\ntext); without one, options make it a choice and no options make it text."
+  (let* ((options (append (hive-mcp-hivemind--field event "options") nil))
+        (ask (list :ask-id (hive-mcp-hivemind--field event "ask-id") :agent-id (hive-mcp-hivemind--field event "agent-id") :question (hive-mcp-hivemind--field event "question") :context (hive-mcp-hivemind--field event "context") :expects (or (hive-mcp-hivemind--field event "expects") (if options "choice" "text")) :options options :cc (append (hive-mcp-hivemind--field event "cc") nil) :timestamp (float-time))))
+    (push ask hive-mcp-hivemind--pending-asks)
+    (hive-mcp-hivemind--log "ASK" (plist-get ask :agent-id) (plist-get ask :question))
+    (hive-mcp-hivemind--notify (plist-get ask :agent-id) "NEEDS INPUT" (plist-get ask :question))
+    (if (and hive-mcp-hivemind-ask-pop-up (string= (plist-get ask :expects) "text")) (display-buffer (hive-mcp-hivemind--open-answer-buffer ask)) (message "HIVEMIND ASK [%s]: %s (M-x hive-mcp-hivemind-respond)" (plist-get ask :agent-id) (plist-get ask :question)))))
 
 (defun hive-mcp-hivemind-status ()
   "Show current hivemind status in a buffer."
@@ -88,23 +151,24 @@
     (insert (format "  %s: %s - %s\n" id (plist-get info :status) (or (plist-get info :task) "")))) hive-mcp-hivemind--agents))
     (insert "\nPENDING QUESTIONS:\n")
     (if (null hive-mcp-hivemind--pending-asks) (insert "  (none)\n") (dolist (ask hive-mcp-hivemind--pending-asks)
-    (insert (format "  [%s] %s: %s\n" (plist-get ask :ask-id) (plist-get ask :agent-id) (plist-get ask :question)))))
+    (insert (format "  [%s] %s (%s): %s\n" (plist-get ask :ask-id) (plist-get ask :agent-id) (plist-get ask :expects) (plist-get ask :question)))))
     (display-buffer (current-buffer))))
 
+(defun hive-mcp-hivemind--pick-ask (asks)
+  "The ask to answer from ASKS: the only one, or one chosen by its question."
+  (if (null asks) (user-error "No pending hivemind asks") (if (equal 1 (length asks)) (car asks) (let* ((labels (mapcar (lambda (a)
+    (cons (format "[%s] %s" (plist-get a :agent-id) (plist-get a :question)) a)) asks))
+        (label (completing-read "Answer which ask: " labels nil t)))
+    (cdr (assoc label labels))))))
+
 (defun hive-mcp-hivemind-respond (ask-id response)
-  "Respond to ASK-ID with RESPONSE."
-  (interactive (let* ((asks hive-mcp-hivemind--pending-asks)
-        (ask (if (equal 1 (length asks)) (car asks) (let* ((id (completing-read "Ask ID: " (mapcar (lambda (a)
-    (plist-get a :ask-id)) asks))))
-    (seq-find (lambda (a)
-    (string= (plist-get a :ask-id) id)) asks))))
-        (options (plist-get ask :options))
-        (resp (if options (completing-read (format "%s: " (plist-get ask :question)) options) (clel-read-string (format "%s: " (plist-get ask :question))))))
-    (list (plist-get ask :ask-id) resp)))
-  (if (hive-mcp-channel-ws-connected-p) (hive-mcp-channel-ws-send (list (cons 'type "hivemind-response") (cons 'ask-id ask-id) (cons 'decision response) (cons 'by "human"))) (hive-mcp-channel-send (list (cons "type" "hivemind-response") (cons "ask-id" ask-id) (cons "decision" response) (cons "by" "human"))))
-  (setq hive-mcp-hivemind--pending-asks (seq-remove (lambda (a)
-    (string= (plist-get a :ask-id) ask-id)) hive-mcp-hivemind--pending-asks))
-  (message "Responded to %s: %s" ask-id response))
+  "Answer pending ASK-ID with RESPONSE, any text.\nInteractively, pick the ask. One that expects typed text, or that carries\ncontext, opens an answer buffer showing the context. A yes/no or choice ask\nreads the answer in the minibuffer, where any typed text is also accepted."
+  (interactive (let* ((ask (hive-mcp-hivemind--pick-ask hive-mcp-hivemind--pending-asks)))
+    (if (or (string= (plist-get ask :expects) "text") (plist-get ask :context)) (progn
+  (pop-to-buffer (hive-mcp-hivemind--open-answer-buffer ask))
+  (list nil nil)) (list (plist-get ask :ask-id) (completing-read (format "%s: " (plist-get ask :question)) (plist-get ask :options))))))
+  (when ask-id
+    (hive-mcp-hivemind--send-answer ask-id response)))
 
 (defun hive-mcp-hivemind-show-log ()
   "Show the hivemind activity log."
