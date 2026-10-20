@@ -1,6 +1,6 @@
 (ns hive-emacs.notify-test
   "Back-compat notification shim tested against the INotify port, without a desktop."
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [deftest is testing]]
             [clojure.test.check.generators :as gen]
             [hive-emacs.notify :as legacy]
             [hive-spi.notify :as notify]
@@ -45,3 +45,40 @@
 (deftest backend-exception-degrades-to-false
   (binding [legacy/*desktop-backend* (fn [_] (throw (ex-info "desktop offline" {})))]
     (is (false? (legacy/notify! {:summary "Offline"})))))
+
+(defn- observe-frame-notification
+  [{:keys [notification success?]}]
+  (let [codes (atom [])]
+    (binding [legacy/*eval-fn* (fn [code]
+                                 (swap! codes conj code)
+                                 {:success success? :result "t" :error (when-not success? "no emacs")})]
+      {:result (try (legacy/frame-notify! notification)
+                    (catch clojure.lang.ExceptionInfo e (:reason (ex-data e))))
+       :codes @codes})))
+
+(deftrifecta frame-notify-adapter
+  observe-frame-notification
+  {:golden-path "test/golden/hive_emacs/frame_notify_adapter.edn"
+   :cases {:info {:notification {:summary "Ready" :body "Hello" :level :info} :success? true}
+           :error-no-body {:notification {:summary "Boom" :level :error} :success? true}
+           :quoting {:notification {:summary "Say \"hi\"" :body "50% done" :level :warn} :success? true}
+           :emacs-down {:notification {:summary "Down"} :success? false}}
+   :gen (gen/return {:notification {:summary "Ready" :body "Hello" :level :info} :success? true})
+   :pred (fn [{:keys [result codes]}]
+           (and (true? result) (= 1 (count codes))))
+   :num-tests 20
+   :mutations [["never-calls-emacs" (fn [_] {:result true :codes []})]
+               ["swallows-failure" (fn [_] {:result true :codes ["x" "y"]})]]})
+
+(deftest widget-backend-routes-through-frame-notify
+  (testing "WidgetBackend built here resolves frame-notify! as its bridge"
+    (let [codes (atom [])
+          backend (legacy/widget-backend)]
+      (binding [legacy/*eval-fn* (fn [code] (swap! codes conj code) {:success true :result "t"})]
+        (is (true? (notify/backend-available? backend)))
+        (is (true? (:delivered? (notify/notify! backend {:summary "Done" :level :info}))))
+        (is (= 1 (count @codes))))
+      (binding [legacy/*eval-fn* (fn [_] {:success false :error "no emacs"})]
+        (let [r (notify/notify! backend {:summary "Done" :level :info})]
+          (is (false? (:delivered? r)))
+          (is (= :bridge-threw (get-in r [:detail :reason]))))))))
