@@ -1,0 +1,13 @@
+{:emacs-down
+ {:result :emacs-eval-failed,
+  :codes ["(progn (message \"%s\" \"[info] Down\") t)"]},
+ :error-no-body
+ {:result true,
+  :codes ["(progn (message \"%s\" \"[error] Boom\") t)"]},
+ :info
+ {:result true,
+  :codes ["(progn (message \"%s\" \"[info] Ready: Hello\") t)"]},
+ :quoting
+ {:result true,
+  :codes
+  ["(progn (message \"%s\" \"[warn] Say \\\"hi\\\": 50% done\") t)"]}}
