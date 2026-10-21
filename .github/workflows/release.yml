@@ -12,6 +12,9 @@ on:
       - 'src/**'
       - 'resources/**'
       - 'deps.edn'
+      # version.edn decides what the jar carries (:src-dirs, :publish),
+      # and VERSION is the release floor: both must be able to release.
+      - 'version.edn'
       - 'VERSION'
       - '.github/workflows/release.yml'
   workflow_dispatch:

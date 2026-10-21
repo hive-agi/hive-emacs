@@ -94,10 +94,19 @@
 
 (ert-deftest hive-mcp-magit-test-api-push-threads-remote-from-options nil "api-push reads :remote out of its OPTIONS plist and hands it on." (should (equal (list nil "github") (hive-mcp-magit-test--api-push-args (list :remote "github")))) (should (equal (list t "github") (hive-mcp-magit-test--api-push-args (list :set-upstream t :remote "github")))) (should (equal (list nil nil) (hive-mcp-magit-test--api-push-args nil))))
 
-(ert-deftest hive-mcp-magit-test-recent-commits-tolerates-short-line nil "A log line short of its six NUL-separated fields yields \"\", not a signal." (let* ((commit (car (hive-mcp-magit-test--recent-commits-from (list "deadbeef")))))
+(ert-deftest hive-mcp-magit-test-recent-commits-tolerates-short-line nil "A log line short of its six NUL-separated fields yields \"\", not a signal." (let* ((commit (elt (hive-mcp-magit-test--recent-commits-from (list "deadbeef")) 0)))
     (should (equal "deadbeef" (plist-get commit :hash)))
     (should (equal "" (plist-get commit :short-hash)))
     (should (equal "" (plist-get commit :date)))))
+
+(ert-deftest hive-mcp-magit-test-recent-commits-encode-as-json-array nil "Two commits encode as a JSON array of two objects. A list of plists is read\nby `json-encode' as one plist, collapsing every commit into a repeated\n\"hash\" key; the status map embeds the commits, so check it there." (let* ((nul (lambda (fields)
+    (mapconcat #'identity fields "\x00")))
+        (commits (hive-mcp-magit-test--recent-commits-from (list (funcall nul (list "aaa" "a" "Ann" "ann@x" "first" "d1")) (funcall nul (list "bbb" "b" "Bob" "bob@x" "second" "d2")))))
+        (decoded (json-parse-string (json-encode (list :recent-commits commits)) :object-type 'plist :array-type 'list))
+        (listed (plist-get decoded :recent-commits)))
+    (should (equal 2 (length listed)))
+    (should (equal "aaa" (plist-get (clel-nth listed 0) :hash)))
+    (should (equal "second" (plist-get (clel-nth listed 1) :subject)))))
 
 (ert-deftest hive-mcp-magit-test-ahead-behind-tolerates-one-count nil "A rev-list line carrying one count reads the missing one as 0, not a signal." (let* ((ab (hive-mcp-magit-test--ahead-behind-from "3")))
     (should (equal 3 (plist-get ab :behind)))

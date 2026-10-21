@@ -120,10 +120,25 @@ when the branch already tracks a different remote."
 
 (ert-deftest hive-mcp-magit-test-recent-commits-tolerates-short-line nil
   "A log line short of its six NUL-separated fields yields \"\", not a signal."
-  (let [commit (car (hive-mcp-magit-test--recent-commits-from (list "deadbeef")))]
+  (let [commit (elt (hive-mcp-magit-test--recent-commits-from (list "deadbeef")) 0)]
     (should (equal "deadbeef" (plist-get commit :hash)))
     (should (equal "" (plist-get commit :short-hash)))
     (should (equal "" (plist-get commit :date)))))
+
+(ert-deftest hive-mcp-magit-test-recent-commits-encode-as-json-array nil
+  "Two commits encode as a JSON array of two objects. A list of plists is read
+by `json-encode' as one plist, collapsing every commit into a repeated
+\"hash\" key; the status map embeds the commits, so check it there."
+  (let* [nul (lambda (fields) (mapconcat #'identity fields "\x00"))
+         commits (hive-mcp-magit-test--recent-commits-from
+                  (list (funcall nul (list "aaa" "a" "Ann" "ann@x" "first" "d1"))
+                        (funcall nul (list "bbb" "b" "Bob" "bob@x" "second" "d2"))))
+         decoded (json-parse-string (json-encode (list :recent-commits commits))
+                                    :object-type 'plist :array-type 'list)
+         listed (plist-get decoded :recent-commits)]
+    (should (equal 2 (length listed)))
+    (should (equal "aaa" (plist-get (nth listed 0) :hash)))
+    (should (equal "second" (plist-get (nth listed 1) :subject)))))
 
 (ert-deftest hive-mcp-magit-test-ahead-behind-tolerates-one-count nil
   "A rev-list line carrying one count reads the missing one as 0, not a signal."
