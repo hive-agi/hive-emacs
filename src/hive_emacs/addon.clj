@@ -23,7 +23,8 @@
             [hive-spi.vessel :as render-port]
             [hive-vessel.renderer :as renderer]
             [hive-emacs.cider.spawn :as spawn]
-            [hive-vessel.core :as vessel-core]))
+            [hive-vessel.core :as vessel-core]
+            [hive-emacs.daemon-liveness :as daemon-liveness]))
 
 ;; Copyright (C) 2024-2026 hive-agi contributors
 ;;
@@ -55,8 +56,10 @@
            runtime-config)))
 
 (defn- default-ping
+  "Real emacsclient round-trip. It answers the Emacs pid so the heartbeat
+   can later vouch for the daemon with a local pid probe instead."
   [_daemon-id]
-  (ec/eval-elisp-with-timeout "t" 3000))
+  (ec/eval-elisp-with-timeout daemon-liveness/ping-elisp 3000))
 
 (defn- default-daemon-error-reporter
   [error-message death-tag]

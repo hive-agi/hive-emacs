@@ -7,13 +7,14 @@
    DDD: Infrastructure layer - singleton access to repository."
   (:require [hive-emacs.config :as config]
             [hive-emacs.daemon :as daemon]
-            [hive-emacs.daemon-heartbeat :as daemon-heartbeat]
+            [hive-emacs.daemon-liveness :as liveness]
             [hive-emacs.daemon-ds :as daemon-ds]
             [hive-emacs.daemon-autoheal :as autoheal]
             [hive-emacs.daemon-ranking :as ranking]
             [hive-emacs.daemon-redistribution :as redistribution]
             [hive-emacs.daemon-scoring :as scoring]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-emacs.daemon-ports :as ports]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -169,79 +170,77 @@
          :last-heartbeat nil
          :last-cleanup nil}))
 
-(defn- heartbeat-loop
-  "Background loop that sends health-scored heartbeats, cleans up stale daemons,
-   auto-heals orphaned lings, and redistributes lings from overloaded daemons.
-
-   W2 Enhancement: Uses selection/heartbeat! which pings Emacs, measures
-   response time, and computes health score (EWMA-based) with degradation
-   from latency, errors, and ling load.
-
-   W3 Enhancement: After stale cleanup, detects orphaned lings (bound to
-   dead/stale/error daemons) and either rebinds them to healthy daemons
-   or gracefully terminates them.
-
-   W4 Enhancement: After auto-heal, redistributes idle lings from degraded
-   or overloaded daemons to healthier ones. Conservative: only idle lings,
-   score threshold, max 2 migrations per cycle.
-
-   Runs until running? becomes false."
+(defn- heartbeat-opts
+  "Production ports for one liveness-first heartbeat."
   []
-  (log/info "Daemon heartbeat loop started (W3: health-scored + auto-heal)")
-  (let [daemon-id (default-daemon-id)
-        last-cleanup-at (atom (System/currentTimeMillis))]
+  {:ping-fn ports/ping!
+   :liveness-fn liveness/pid-liveness
+   :now-fn #(java.util.Date.)})
+
+(defn- periodic-maintenance!
+  "Stale cleanup, W3 auto-heal and W4 redistribution over STORE. Store-only:
+   none of these spawns emacsclient."
+  [store]
+  (when-let [stale-ids (seq (daemon/cleanup-stale! store))]
+    (log/warn "Heartbeat: marked" (count stale-ids) "daemons as stale:" stale-ids))
+  (when-let [heal-result (autoheal/heal-all-orphans! store)]
+    (log/warn "Heartbeat: auto-healed" (:healed heal-result)
+              "of" (:orphans-found heal-result) "orphaned lings"
+              (when (pos? (:failed heal-result))
+                (str "(" (:failed heal-result) " failed)")))
+    (swap! heartbeat-state assoc
+           :last-autoheal (java.util.Date.)
+           :last-autoheal-result (select-keys heal-result
+                                              [:orphans-found :healed :failed])))
+  (when-let [redist-result (redistribution/redistribute-lings! store)]
+    (log/info "Heartbeat: redistributed" (:migrations-executed redist-result)
+              "of" (:migrations-planned redist-result) "planned migrations"
+              (when (pos? (:migrations-failed redist-result))
+                (str "(" (:migrations-failed redist-result) " failed)")))
+    (swap! heartbeat-state assoc
+           :last-redistribution (java.util.Date.)
+           :last-redistribution-result (select-keys redist-result
+                                                    [:migrations-planned
+                                                     :migrations-executed
+                                                     :migrations-failed]))))
+
+(defn heartbeat-tick!
+  "One heartbeat cycle over STORE at NOW-MS: a liveness-first heartbeat for
+   every active daemon (emacsclient only for a daemon whose health dropped,
+   see `hive-emacs.daemon-liveness`), then the periodic maintenance when
+   `stale-cleanup-interval-ms` has passed since LAST-CLEANUP-MS. OPTS are the
+   liveness ports {:ping-fn :liveness-fn :now-fn}. Returns the new
+   last-cleanup-ms."
+  [store opts now-ms last-cleanup-ms]
+  (let [reports (liveness/heartbeat-active! store (default-daemon-id) opts)]
+    (when-let [r (last reports)]
+      (swap! heartbeat-state assoc
+             :last-heartbeat (java.util.Date.)
+             :last-health-score (:health-score r)
+             :last-health-level (:health-level r)
+             :last-pings (count (filter #(= :ping (:probe %)) reports))
+             :last-probes (count reports))))
+  (if (>= (- now-ms last-cleanup-ms) stale-cleanup-interval-ms)
+    (do (periodic-maintenance! store)
+        (swap! heartbeat-state assoc :last-cleanup (java.util.Date.))
+        now-ms)
+    last-cleanup-ms))
+
+(defn- heartbeat-loop
+  "Background loop: one `heartbeat-tick!` every `heartbeat-interval-ms`
+   until running? becomes false."
+  []
+  (log/info "Daemon heartbeat loop started (liveness-first)")
+  (let [last-cleanup-at (atom (System/currentTimeMillis))]
     (while (:running? @heartbeat-state)
       (try
-        ;; W2: Health-scored heartbeat for default daemon (and all active daemons)
-        (let [all-daemons (get-all-daemons)
-              active-daemons (if (seq all-daemons)
-                               (filter #(= :active (:emacs-daemon/status %)) all-daemons)
-                               ;; Fallback: heartbeat default daemon if no daemons registered
-                               (when (get-daemon daemon-id) [{:emacs-daemon/id daemon-id}]))]
-          (doseq [d active-daemons]
-            (let [did (:emacs-daemon/id d)
-                  result (daemon-heartbeat/heartbeat! (get-store) did)]
-              (when result
-                (swap! heartbeat-state assoc
-                       :last-heartbeat (java.util.Date.)
-                       :last-health-score (:health-score result)
-                       :last-health-level (:health-level result))))))
-
-        ;; Periodic stale cleanup + W3 auto-heal + W4 redistribution
-        (let [now (System/currentTimeMillis)
-              since-cleanup (- now @last-cleanup-at)]
-          (when (>= since-cleanup stale-cleanup-interval-ms)
-            ;; Step 1: Mark stale daemons
-            (when-let [stale-ids (seq (cleanup-stale!))]
-              (log/warn "Heartbeat: marked" (count stale-ids) "daemons as stale:" stale-ids))
-            ;; Step 2 (W3): Auto-heal orphaned lings on dead/stale/error daemons
-            (when-let [heal-result (autoheal/heal-all-orphans! (get-store))]
-              (log/warn "Heartbeat: auto-healed" (:healed heal-result)
-                        "of" (:orphans-found heal-result) "orphaned lings"
-                        (when (pos? (:failed heal-result))
-                          (str "(" (:failed heal-result) " failed)")))
-              (swap! heartbeat-state assoc
-                     :last-autoheal (java.util.Date.)
-                     :last-autoheal-result (select-keys heal-result
-                                                        [:orphans-found :healed :failed])))
-            ;; Step 3 (W4): Redistribute lings from degraded/overloaded daemons
-            (when-let [redist-result (redistribution/redistribute-lings! (get-store))]
-              (log/info "Heartbeat: redistributed" (:migrations-executed redist-result)
-                        "of" (:migrations-planned redist-result) "planned migrations"
-                        (when (pos? (:migrations-failed redist-result))
-                          (str "(" (:migrations-failed redist-result) " failed)")))
-              (swap! heartbeat-state assoc
-                     :last-redistribution (java.util.Date.)
-                     :last-redistribution-result (select-keys redist-result
-                                                              [:migrations-planned
-                                                               :migrations-executed
-                                                               :migrations-failed])))
-            (reset! last-cleanup-at now)
-            (swap! heartbeat-state assoc :last-cleanup (java.util.Date.))))
-
+        (reset! last-cleanup-at
+                (heartbeat-tick! (get-store)
+                                 (heartbeat-opts)
+                                 (System/currentTimeMillis)
+                                 @last-cleanup-at))
         (catch Exception e
           (log/error "Heartbeat loop error:" (.getMessage e))))
-
       ;; Interrupt is the normal shutdown signal, not an uncaught daemon error.
       (when (:running? @heartbeat-state)
         (try
@@ -293,12 +292,15 @@
      Map with :running?, :last-heartbeat, :last-cleanup, :daemon-status,
      :health-score, :health-level (W2 additions),
      :last-autoheal, :last-autoheal-result (W3 additions),
-     :last-redistribution, :last-redistribution-result (W4 additions)"
+     :last-redistribution, :last-redistribution-result (W4 additions),
+     :last-pings, :last-probes (emacsclient pings vs daemons probed in the
+     last cycle)"
   []
   (let [daemon-id (default-daemon-id)
         daemon (get-daemon daemon-id)]
     (merge (select-keys @heartbeat-state [:running? :last-heartbeat :last-cleanup
                                           :last-health-score :last-health-level
+                                          :last-pings :last-probes
                                           :last-autoheal :last-autoheal-result
                                           :last-redistribution :last-redistribution-result])
            {:daemon-id daemon-id

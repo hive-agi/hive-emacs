@@ -31,7 +31,8 @@
             [clojure.string :as str]
             [hive-emacs.config :as config]
             [hive-emacs.schema :as schema]
-            [taoensso.timbre :as log])
+            [taoensso.timbre :as log]
+            [hive-emacs.attention-render :as render])
   (:import [java.nio.file Files StandardCopyOption]
            [java.nio.file.attribute FileAttribute PosixFilePermissions]))
 
@@ -54,7 +55,7 @@
 
 (def user-origin
   "Origin of a prompt the human opened with a key. Never an impediment."
-  "command")
+  render/user-origin)
 
 ;; ── pure core ───────────────────────────────────────────────────────────────
 
@@ -92,103 +93,18 @@
       (true? pid-alive) :frozen
       :else :gone)))
 
-(defn actionable?
-  "True when this prompt impedes agents: not one the human opened with a key."
-  [{:keys [origin]}]
-  (not= user-origin origin))
+(def actionable?
+  "True when this prompt impedes agents. See `hive-emacs.attention-render`."
+  render/actionable?)
 
-(defn- waited
-  [{:keys [since-ms]} now-ms]
-  (if since-ms
-    (str (max 0 (quot (- now-ms since-ms) 1000)) "s")
-    "?s"))
+(def describe
+  "One paragraph for one waiting prompt. See `hive-emacs.attention-render`."
+  render/describe)
 
-(defn- quoted
-  [s]
-  (pr-str (str/trim (str/replace (or s "") #"\s+" " "))))
-
-(defn- opened-by
-  [origin]
-  (case origin
-    "server" "an emacsclient eval"
-    "timer" "a timer"
-    "async" "a process filter or sentinel (e.g. a CIDER connection callback)"
-    "command" "the user"
-    "an unknown caller"))
-
-(defn- what
-  [{:keys [kind prompt]}]
-  (case kind
-    "debugger" (str "the Emacs DEBUGGER is open: "
-                    (quoted (first (str/split-lines (or prompt "")))))
-    "read-event" (str "a key prompt " (quoted prompt))
-    (str "a minibuffer prompt " (quoted prompt))))
-
-(defn- consequence
-  [{:keys [origin]} status]
-  (cond
-    (= :frozen status)
-    "Its timer has STOPPED, so an answer file will not be read either: Emacs is busy in a blocking loop. Ask the user."
-    (= "server" origin)
-    "Every emacsclient call (emacs, cider, magit tools) times out until it is answered."
-    :else
-    "Work waiting on it (a spawn, a connection, a load) cannot finish until it is answered."))
-
-(defn- question-kind
-  "What a prompt asks for, read from its text: :yes-or-no (typed word),
-   :y-or-n (one key) or :text. The keys to suggest follow from it: \"y\" is a
-   wrong answer to a completing-read such as \"REPL buffer to reuse:\"."
-  [prompt]
-  (cond
-    (re-find #"\((?:yes or no)\)" (or prompt "")) :yes-or-no
-    (re-find #"(?i)\(y or n\)|[\[(]y/n[\])]" (or prompt "")) :y-or-n
-    :else :text))
-
-(defn- action
-  [{:keys [id kind secret? prompt]} status]
-  (cond
-    (= :frozen status) nil
-    secret? "SECRET prompt (password): do not answer it. Ask the user to type it in Emacs."
-    (= "debugger" kind)
-    (format "Act: emacs command=\"answer\" id=\"%s\" keys=\"q\" quits the debugger, or ask the user."
-            id)
-    :else
-    (case (question-kind prompt)
-      :yes-or-no
-      (format "Act: emacs command=\"answer\" id=\"%s\" keys=\"yes RET\" (or \"no RET\"; \"C-g\" aborts), or ask the user."
-              id)
-      :y-or-n
-      (format "Act: emacs command=\"answer\" id=\"%s\" keys=\"y\" (or \"n\"; \"C-g\" aborts), or ask the user."
-              id)
-      :text
-      (if (= "read-event" kind)
-        (format "Act: emacs command=\"answer\" id=\"%s\" keys=\"<a key the prompt offers>\" (kbd syntax, \"C-g\" aborts), or ask the user."
-                id)
-        (format "Act: emacs command=\"answer\" id=\"%s\" keys=\"RET\" accepts the default, keys=\"<text> RET\" types a value (kbd syntax: SPC is a space, \"C-g\" aborts), or ask the user."
-                id)))))
-
-(defn describe
-  "One paragraph for one waiting prompt."
-  [state status now-ms]
-  (->> [(format "Emacs daemon %s is WAITING FOR INPUT (%s, %s): %s, opened by %s."
-                (quoted (:server state))
-                (waited state now-ms)
-                (name status)
-                (what state)
-                (opened-by (:origin state)))
-        (consequence state status)
-        (action state status)]
-       (remove nil?)
-       (str/join "\n")))
-
-(defn render-block
-  "Block body for `[[state status] ...]`, or nil when nothing impedes agents."
-  [states+status now-ms]
-  (let [paragraphs (for [[state status] states+status
-                         :when (and (actionable? state) (not= :gone status))]
-                     (describe state status now-ms))]
-    (when (seq paragraphs)
-      (str/join "\n\n" paragraphs))))
+(def render-block
+  "Block body for `[[state status] ...]`, or nil when nothing impedes agents.
+   See `hive-emacs.attention-render`."
+  render/render-block)
 
 (defn answer-document
   "answer.json body for prompt ID. KEY-STRING is kbd syntax."
@@ -256,15 +172,59 @@
                       [state (liveness state now-ms (pid-alive (:pid state)))])))))
         vec)))
 
+(def cache-ttl-ms
+  "Longest one directory scan answers the emitter while the root is
+   unchanged. The Emacs timer beats once per second, so a liveness verdict
+   older than this could miss a frozen heartbeat."
+  1000)
+
+(defonce ^:private states-cache (atom nil))
+
+(defn cache-fresh?
+  "True when CACHED was read from ROOT-PATH at ROOT-MTIME less than
+   `cache-ttl-ms` before NOW-MS."
+  [cached root-path root-mtime now-ms]
+  (boolean
+   (and cached
+        (= root-path (:root cached))
+        (= root-mtime (:mtime cached))
+        (<= 0 (- now-ms (:at-ms cached)) (dec cache-ttl-ms)))))
+
+(defn cached-states
+  "`read-states` for ROOT at NOW-MS, served from CACHE (an atom) while ROOT's
+   mtime is unchanged and the scan is younger than `cache-ttl-ms`. READ-FN is
+   (fn [root now-ms] -> states)."
+  ([cache ^java.io.File root now-ms]
+   (cached-states cache root now-ms read-states))
+  ([cache ^java.io.File root now-ms read-fn]
+   (let [path (.getAbsolutePath root)
+         mtime (.lastModified root)
+         cached @cache]
+     (if (cache-fresh? cached path mtime now-ms)
+       (:states cached)
+       (let [states (read-fn root now-ms)]
+         (reset! cache {:root path :mtime mtime :at-ms now-ms :states states})
+         states)))))
+
+(defn reset-cache!
+  "Forget the emitter's cached scan. For tests and addon shutdown."
+  []
+  (reset! states-cache nil)
+  nil)
+
+(defn render-at
+  "Block body for ROOT at NOW-MS through CACHE, or nil."
+  [cache ^java.io.File root now-ms]
+  (when (.isDirectory root)
+    (render-block (cached-states cache root now-ms) now-ms)))
+
 (defn emitter
   "Registered `:block/emacs-attention` emitter: request ctx -> body or nil.
-   A directory listing and a small read per call; never touches emacsclient."
+   At most one directory listing per `cache-ttl-ms` while the root is
+   unchanged; never touches emacsclient."
   [_ctx]
   (try
-    (let [root (root-dir)]
-      (when (.isDirectory root)
-        (render-block (read-states root (System/currentTimeMillis))
-                      (System/currentTimeMillis))))
+    (render-at states-cache (root-dir) (System/currentTimeMillis))
     (catch Exception e
       (log/debug e "attention: emitter failed; no block")
       nil)))
