@@ -269,6 +269,25 @@
       (catch Exception _ s))
     s))
 
+(defonce ^:private metrics-record
+  ^{:doc "Deref: `hive-ttracking.metrics/record!` or nil when that namespace is
+          absent. Required once; later derefs re-check with a plain `resolve`,
+          so a port mounted after first use is still picked up."}
+  (let [d (delay (try (requiring-resolve 'hive-ttracking.metrics/record!)
+                      (catch Throwable _ nil)))]
+    (reify clojure.lang.IDeref
+      (deref [_] (or @d (resolve 'hive-ttracking.metrics/record!))))))
+
+(defn record-proc!
+  "Record one emacsclient process run that started at `start-ns`
+   (System/nanoTime) with `outcome` (:ok | :error) as
+   `[:proc/shell \"emacsclient\"]`. Total: never throws, no-op without the port."
+  [start-ns outcome]
+  (when-let [f @metrics-record]
+    (try (f [:proc/shell "emacsclient"] (- (System/nanoTime) (long start-ns)) outcome)
+         (catch Throwable _ nil)))
+  nil)
+
 (defn emacsclient-argv
   "The emacsclient command line evaluating `code`, with `-s socket` when a
    socket name is given. Pure."
@@ -300,9 +319,15 @@
   (guarded/guarded-await!
    (ensure-emacsclient-executor!)
    (fn []
-     (let [{:keys [exit out err]}
-           (@transport (emacsclient-argv *emacsclient-path* *emacs-socket-name*
-                                         (no-prompt/refuse-prompts code)))]
+     (let [start (System/nanoTime)
+           {:keys [exit out err]}
+           (try
+             (@transport (emacsclient-argv *emacsclient-path* *emacs-socket-name*
+                                           (no-prompt/refuse-prompts code)))
+             (catch Throwable t
+               (record-proc! start :error)
+               (throw t)))]
+       (record-proc! start (if (zero? exit) :ok :error))
        (if (zero? exit)
          {:success true
           :result (unwrap-emacs-string (str/trim out))}

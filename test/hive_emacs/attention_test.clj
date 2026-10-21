@@ -287,3 +287,39 @@
     (let [body (attention/render-block [[(parsed {:prompt "REPL buffer to reuse: " :origin "timer"}) :live]] now)]
       (is (not (str/includes? body "keys=\"y\"")))
       (is (str/includes? body "keys=\"RET\" accepts the default")))))
+
+;; ── emitter cache: one scan per second while the root is unchanged ──────────
+
+(deftest cache-fresh-needs-same-root-same-mtime-and-young-scan
+  (let [cached {:root "/r" :mtime 5 :at-ms now :states []}]
+    (is (attention/cache-fresh? cached "/r" 5 now))
+    (is (attention/cache-fresh? cached "/r" 5 (+ now (dec attention/cache-ttl-ms))))
+    (is (not (attention/cache-fresh? cached "/r" 5 (+ now attention/cache-ttl-ms))) "expired")
+    (is (not (attention/cache-fresh? cached "/r" 6 now)) "root changed")
+    (is (not (attention/cache-fresh? cached "/other" 5 now)) "another root")
+    (is (not (attention/cache-fresh? cached "/r" 5 (dec now))) "clock went back")
+    (is (not (attention/cache-fresh? nil "/r" 5 now)))))
+
+(deftest cached-states-scans-once-per-ttl-on-an-unchanged-root
+  (let [root (temp-root)
+        cache (atom nil)
+        scans (atom 0)
+        read-fn (fn [_ _] (swap! scans inc) [[:state :live]])]
+    (is (= [[:state :live]] (attention/cached-states cache root now read-fn)))
+    (is (= [[:state :live]] (attention/cached-states cache root (+ now 500) read-fn)))
+    (is (= 1 @scans) "the second call inside the TTL is served from the cache")
+    (attention/cached-states cache root (+ now attention/cache-ttl-ms) read-fn)
+    (is (= 2 @scans) "an expired scan is redone")
+    (testing "a changed root mtime invalidates at once"
+      (.setLastModified root (+ (.lastModified root) 5000))
+      (attention/cached-states cache root (+ now attention/cache-ttl-ms 1) read-fn)
+      (is (= 3 @scans)))))
+
+(deftest render-at-renders-from-disk-through-the-cache
+  (let [root (temp-root)
+        cache (atom nil)
+        t (System/currentTimeMillis)]
+    (publish! root "server" {:pid nil :heartbeat (/ t 1000.0)})
+    (is (str/includes? (attention/render-at cache root t) "Reuse dead REPL"))
+    (is (= (.getAbsolutePath root) (:root @cache)))
+    (is (nil? (attention/render-at (atom nil) (io/file root "missing") t)))))
