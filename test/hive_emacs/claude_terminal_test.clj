@@ -65,8 +65,15 @@
     (is (true? (ct/ensure-loaded! eval)))
     (is (= 2 (loads)) "a restarted Emacs gets the features again")))
 
-(deftest registering-without-a-host-is-a-quiet-no
-  (if (try (requiring-resolve 'hive-mcp.agent.ling.terminal-registry/register-terminal!) (catch Exception _ nil))
-    (is true "a host is on this classpath; the absent case cannot be observed here")
-    (do (is (false? (ct/register! (emacs (atom []) live))))
-        (is (nil? (ct/unregister! (emacs (atom []) live)))))))
+(deftest registration-goes-through-the-host-terminal-ports
+  (testing "no :terminal/register! port: a quiet no"
+    (is (false? (ct/register! {} (emacs (atom []) live))))
+    (is (nil? (ct/unregister! {} (emacs (atom []) live)))))
+  (testing "the ports receive the :claude terminal and its removal"
+    (let [calls (atom [])
+          ports {:terminal/register!    (fn [id t] (swap! calls conj [:register id (term/terminal-id t)]) {:registered? true})
+                 :terminal/deregister!  (fn [id] (swap! calls conj [:deregister id]))
+                 :catchup/spawn-context (constantly "ctx")}]
+      (is (true? (ct/register! ports (emacs (atom []) live))))
+      (ct/unregister! ports (emacs (atom []) live))
+      (is (= [[:register :claude :claude] [:deregister :claude]] @calls)))))

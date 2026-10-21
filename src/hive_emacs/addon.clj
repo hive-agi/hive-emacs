@@ -187,7 +187,7 @@
                 editor-caps (editor-services/register!)
                 vessel-caps (vessel-dispatch/register!)
                 lsp-bridge? (lsp-bridge/register! eval-fn)
-                claude-terminal? (claude-terminal/register! eval-fn)
+                claude-terminal? (claude-terminal/register! (:runtime/ports config) eval-fn)
                 metadata {:bridge-ready? bridge-ready?
                           :missing-contributions missing-contributions
                           :attention {:block? attention-block?
@@ -231,7 +231,7 @@
     (editor-services/unregister!)
     (vessel-dispatch/unregister!)
     (lsp-bridge/unregister!)
-    (claude-terminal/unregister!)
+    (claude-terminal/unregister! (:runtime/ports @state))
     (when (:heartbeat-started? @state)
       (daemon-store/stop-heartbeat-loop!))
     (ec/shutdown-executor!)

@@ -25,10 +25,6 @@
    lings keep resolving."
   :claude)
 
-(defn- soft
-  [sym]
-  (try (requiring-resolve sym) (catch Exception _ nil)))
-
 ;; =============================================================================
 ;; Loading the hive-claude elisp, reconnect-aware
 ;; =============================================================================
@@ -112,19 +108,21 @@
   80000)
 
 (defn- spawn-context-file
-  "Write the host's catchup context for `cwd` to a temp file; its path, or nil."
-  [cwd]
+  "Write the host's catchup context for `cwd` (from SPAWN-CONTEXT, the
+   :catchup/spawn-context port) to a temp file; its path, or nil."
+  [spawn-context cwd]
   (try
-    (when-let [catchup-fn (soft 'hive-mcp.tools.catchup/spawn-context)]
-      (when-let [ctx (catchup-fn cwd)]
-        (let [ctx (if (> (count ctx) max-context-chars)
-                    (do (log/warn "Spawn context truncated" {:original-size (count ctx) :max max-context-chars})
-                        (subs ctx 0 max-context-chars))
-                    ctx)
-              tmp (java.io.File/createTempFile "hive-claude-ctx-" ".md")]
-          (spit tmp ctx)
-          (.getAbsolutePath tmp))))
-    (catch Exception _ nil)))
+    (when-let [ctx (and spawn-context (spawn-context cwd))]
+      (let [ctx (if (> (count ctx) max-context-chars)
+                  (do (log/warn "Spawn context truncated" {:original-size (count ctx) :max max-context-chars})
+                      (subs ctx 0 max-context-chars))
+                  ctx)
+            tmp (java.io.File/createTempFile "hive-claude-ctx-" ".md")]
+        (spit tmp ctx)
+        (.getAbsolutePath tmp)))
+    (catch Exception e
+      (log/debug "hive-emacs: no spawn context" {:error (ex-message e)})
+      nil)))
 
 (defn- q [v] (el/elisp-quote v))
 
@@ -139,16 +137,18 @@
 
 (defn make-claude-terminal
   "An ITerminalAddon for Claude Code sessions in Emacs, over EVAL-FN
-   ((f code timeout-ms) -> {:success bool :result str ...})."
-  ([] (make-claude-terminal ec/eval-elisp-with-timeout))
-  ([eval-fn]
+   ((f code timeout-ms) -> {:success bool :result str ...}). SPAWN-CONTEXT is
+   the host's :catchup/spawn-context port (fn [cwd] -> markdown), or nil."
+  ([] (make-claude-terminal ec/eval-elisp-with-timeout nil))
+  ([eval-fn] (make-claude-terminal eval-fn nil))
+  ([eval-fn spawn-context]
    (reify addon-term/ITerminalAddon
      (terminal-id [_] terminal-key)
 
      (terminal-spawn! [_ ctx opts]
        (ensure-loaded! eval-fn)
        (let [{:keys [id cwd presets]} ctx
-             ctx-file (when (:task opts) (spawn-context-file cwd))
+             ctx-file (when (:task opts) (spawn-context-file spawn-context cwd))
              {:keys [success error]} (call eval-fn (spawn-elisp id (:name opts) presets cwd ctx-file) 10000)]
          (if success
            (do (log/info "Claude terminal spawned ling" {:id id :cwd cwd})
@@ -206,25 +206,30 @@
 ;; =============================================================================
 
 (defn register!
-  "Register the :claude terminal with the host's terminal registry. Returns
-   true when registered, false when no host registry is on the classpath."
-  ([] (register! ec/eval-elisp-with-timeout))
-  ([eval-fn]
-   (if-let [reg (soft 'hive-mcp.agent.ling.terminal-registry/register-terminal!)]
+  "Register the :claude terminal through the host's :terminal/register!
+   runtime port. Returns true when registered, false when the host offers no
+   such port."
+  ([ports] (register! ports ec/eval-elisp-with-timeout))
+  ([ports eval-fn]
+   (if-let [reg (:terminal/register! ports)]
      (try
-       (boolean (:registered? (reg terminal-key (make-claude-terminal eval-fn))))
+       (boolean (:registered? (reg terminal-key (make-claude-terminal eval-fn (:catchup/spawn-context ports)))))
        (catch Exception e
          (log/warn "hive-emacs: :claude terminal registration failed" {:error (ex-message e)})
          false))
      false)))
 
 (defn unregister!
-  "Drop the :claude terminal and the Emacs-side sync hooks. Never throws."
-  ([] (unregister! ec/eval-elisp-with-timeout))
-  ([eval-fn]
+  "Drop the :claude terminal (through the host's :terminal/deregister!
+   port) and the Emacs-side sync hooks. Never throws."
+  ([ports] (unregister! ports ec/eval-elisp-with-timeout))
+  ([ports eval-fn]
    (try (eval-fn "(when (fboundp 'hive-claude-sync-unregister-hooks-bang) (hive-claude-sync-unregister-hooks-bang))" 3000)
-        (catch Exception _ nil))
-   (when-let [dereg (soft 'hive-mcp.agent.ling.terminal-registry/deregister-terminal!)]
-     (try (dereg terminal-key) (catch Exception _ nil)))
+        (catch Exception e
+          (log/debug "hive-emacs: sync hooks not unregistered" {:error (ex-message e)})))
+   (when-let [dereg (:terminal/deregister! ports)]
+     (try (dereg terminal-key)
+          (catch Exception e
+            (log/warn "hive-emacs: :claude terminal deregistration failed" {:error (ex-message e)}))))
    (reset-load-state!)
    nil))
