@@ -26,7 +26,10 @@ jobs:
         uses: DeLaGuardo/setup-clojure@12.5
         with:
           cli: latest
-          clj-kondo: latest
+          # Pinned: a kondo release can add findings to an unchanged tree and
+          # gate merges. Bump deliberately, after linting locally at the new
+          # version with the dependency pass (a cold local lint is a false green).
+          clj-kondo: '2026.10.20'
 
       # The macro configs kondo needs live in the dependency jars, and
       # .clj-kondo/imports/ is gitignored, so a fresh checkout has none of
