@@ -112,13 +112,13 @@
   (hive-mcp-magit--shell-lines "git stash list --oneline 2>/dev/null"))
 
 (defun hive-mcp-magit--get-recent-commits (&optional count)
-  "Return last COUNT commits as list of plists.\nA field the log line does not carry reads as \"\", never a signal."
+  "Return last COUNT commits as a vector of plists.\nA vector, not a list: `json-encode' reads a list of plists as one plist\n(an alist keyed by each commit's leading :hash), collapsing the commits\ninto repeated \"hash\" keys. A vector encodes as a JSON array of objects.\nA field the log line does not carry reads as \"\", never a signal."
   (let* ((n (or count hive-mcp-magit-log-count))
         (format-str "%H%x00%h%x00%an%x00%ae%x00%s%x00%ai")
         (lines (hive-mcp-magit--shell-lines (format "git log -n%d --format='%s' 2>/dev/null" n format-str))))
-    (mapcar (lambda (line)
+    (vconcat (mapcar (lambda (line)
     (let* ((parts (split-string line "\x00")))
-    (list :hash (clel-nth parts 0 "") :short-hash (clel-nth parts 1 "") :author (clel-nth parts 2 "") :email (clel-nth parts 3 "") :subject (clel-nth parts 4 "") :date (clel-nth parts 5 "")))) lines)))
+    (list :hash (clel-nth parts 0 "") :short-hash (clel-nth parts 1 "") :author (clel-nth parts 2 "") :email (clel-nth parts 3 "") :subject (clel-nth parts 4 "") :date (clel-nth parts 5 "")))) lines))))
 
 (defun hive-mcp-magit--get-ahead-behind ()
   "Return commits ahead/behind upstream as plist.\nA count the rev-list line does not carry reads as 0, never a signal."
