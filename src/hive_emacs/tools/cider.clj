@@ -186,12 +186,16 @@
 
 (defn- spawn-session-internal
   "Auto-connect spawn: name (+ optional project-dir), heap capped at 2g so an
-   unattended JVM cannot take the host. Returns true on success."
+   unattended JVM cannot take the host. With a project-dir the launch composes
+   the :dev/:test/:nrepl aliases its deps.edn declares, as handle-spawn does.
+   Returns true on success."
   ([session-name] (spawn-session-internal session-name nil))
   ([session-name project-dir]
    (let [elisp (el/require-and-call-plist-json
                  'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
-                 {:name session-name :project-dir project-dir :extra-args ["-J-Xmx2g"]})
+                 {:name session-name :project-dir project-dir :extra-args ["-J-Xmx2g"]
+                  :aliases (when project-dir
+                             (alias-compose/for-project project-dir nil nil))})
          {:keys [success]} (*eval-fn* elisp)]
      success)))
 

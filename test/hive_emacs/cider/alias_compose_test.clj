@@ -144,3 +144,22 @@
 (deftest spawn-cljs-is-not-composed
   (let [form (spawn-form "{:aliases {:dev {}}}" {:repl_type "cljs"})]
     (is (not (str/includes? form ":aliases")) form)))
+
+(defn- auto-spawn-form
+  "The elisp the auto-connect spawn (spawn-session-internal) sends for
+   PROJECT-DIR over a project whose deps.edn is TEXT."
+  [text project-dir]
+  (let [calls (atom [])]
+    (binding [cider/*eval-fn* (recording-eval calls)
+              ac/*read-deps-fn* (constantly text)]
+      (#'cider/spawn-session-internal "auto-x" project-dir))
+    (first @calls)))
+
+(deftest auto-spawn-composes-the-declared-aliases
+  (let [form (auto-spawn-form "{:aliases {:test {} :dev {} :other {}}}" dir)]
+    (is (str/includes? form ":aliases '(\"dev\" \"test\")") form)
+    (is (str/includes? form "-J-Xmx2g") form)))
+
+(deftest auto-spawn-without-project-dir-composes-nothing
+  (let [form (auto-spawn-form "{:aliases {:test {} :dev {}}}" nil)]
+    (is (not (str/includes? form ":aliases")) form)))
