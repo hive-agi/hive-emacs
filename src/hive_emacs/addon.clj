@@ -25,7 +25,8 @@
             [hive-emacs.cider.spawn :as spawn]
             [hive-emacs.lsp-bridge :as lsp-bridge]
             [hive-vessel.core :as vessel-core]
-            [hive-emacs.daemon-liveness :as daemon-liveness]))
+            [hive-emacs.daemon-liveness :as daemon-liveness]
+            [hive-emacs.claude-terminal :as claude-terminal]))
 
 ;; Copyright (C) 2024-2026 hive-agi contributors
 ;;
@@ -186,6 +187,7 @@
                 editor-caps (editor-services/register!)
                 vessel-caps (vessel-dispatch/register!)
                 lsp-bridge? (lsp-bridge/register! eval-fn)
+                claude-terminal? (claude-terminal/register! (:runtime/ports config) eval-fn)
                 metadata {:bridge-ready? bridge-ready?
                           :missing-contributions missing-contributions
                           :attention {:block? attention-block?
@@ -197,6 +199,7 @@
                           :editor-capabilities (set (keys editor-caps))
                           :vessel-capabilities (set (keys vessel-caps))
                           :lsp-bridge? lsp-bridge?
+                          :claude-terminal? claude-terminal?
                           :heartbeat-started? heartbeat-started?
                           :configured-ports
                           (->> ports
@@ -228,6 +231,7 @@
     (editor-services/unregister!)
     (vessel-dispatch/unregister!)
     (lsp-bridge/unregister!)
+    (claude-terminal/unregister! (:runtime/ports @state))
     (when (:heartbeat-started? @state)
       (daemon-store/stop-heartbeat-loop!))
     (ec/shutdown-executor!)
