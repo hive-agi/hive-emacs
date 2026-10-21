@@ -23,6 +23,7 @@
             [hive-spi.vessel :as render-port]
             [hive-vessel.renderer :as renderer]
             [hive-emacs.cider.spawn :as spawn]
+            [hive-emacs.lsp-bridge :as lsp-bridge]
             [hive-vessel.core :as vessel-core]
             [hive-emacs.daemon-liveness :as daemon-liveness]))
 
@@ -184,6 +185,7 @@
                 editor-port (editor-port/register!)
                 editor-caps (editor-services/register!)
                 vessel-caps (vessel-dispatch/register!)
+                lsp-bridge? (lsp-bridge/register! eval-fn)
                 metadata {:bridge-ready? bridge-ready?
                           :missing-contributions missing-contributions
                           :attention {:block? attention-block?
@@ -194,6 +196,7 @@
                           :editor-surfaces (registry/surfaces editor-port)
                           :editor-capabilities (set (keys editor-caps))
                           :vessel-capabilities (set (keys vessel-caps))
+                          :lsp-bridge? lsp-bridge?
                           :heartbeat-started? heartbeat-started?
                           :configured-ports
                           (->> ports
@@ -224,6 +227,7 @@
     (editor-port/unregister!)
     (editor-services/unregister!)
     (vessel-dispatch/unregister!)
+    (lsp-bridge/unregister!)
     (when (:heartbeat-started? @state)
       (daemon-store/stop-heartbeat-loop!))
     (ec/shutdown-executor!)
