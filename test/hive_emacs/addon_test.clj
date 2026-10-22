@@ -15,7 +15,9 @@
             [hive-spi.vessel :as render-port]
             [hive-vessel.renderer :as renderer]
             [hive-emacs.cider.spawn :as spawn]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [hive-test.trifecta :refer [deftrifecta]]
+            [clojure.test.check.generators :as gen]))
 
 (def ^:private world (atom (support/empty-world)))
 
@@ -247,3 +249,63 @@
         (is (zero? (calls-matching calls attention-enable)))
         (is (zero? (calls-matching calls spawn-enable)))
         (addon/shutdown! instance)))))
+
+(def ^:private ling-port-keys
+  [:lookup-ling-fn :tasks-for-ling-fn :fail-task-fn :release-claims-fn :update-ling-fn])
+
+(defn- observe-port-config
+  "Project port-config onto the ling ports, so markers stand in for fns."
+  [config]
+  (select-keys (emacs-addon/port-config config) ling-port-keys))
+
+(def ^:private host-ling-ports
+  {:emacs/lookup-ling-fn :host/lookup
+   :emacs/tasks-for-ling-fn :host/tasks
+   :emacs/fail-task-fn :host/fail
+   :emacs/release-claims-fn :host/release
+   :emacs/update-ling-fn :host/update})
+
+(deftrifecta port-config-reads-host-runtime-ports
+  observe-port-config
+  {:golden-path "test/golden/hive_emacs/port_config.edn"
+   :cases {:host-only {:runtime/ports host-ling-ports}
+           :top-level-wins {:emacs/lookup-ling-fn :top/lookup
+                            :runtime/ports host-ling-ports}
+           :neither {}}
+   :gen (gen/return {:runtime/ports host-ling-ports})
+   :pred (fn [ports]
+           (= {:lookup-ling-fn :host/lookup
+               :tasks-for-ling-fn :host/tasks
+               :fail-task-fn :host/fail
+               :release-claims-fn :host/release
+               :update-ling-fn :host/update}
+              ports))
+   :num-tests 5
+   :mutations [["ignores-runtime-ports" (fn [_] {})]
+               ["drops-one" (fn [_] {:lookup-ling-fn :host/lookup})]]})
+
+(deftest boot-configures-host-ling-ports
+  (let [lookup (fn [_] {:id "l1"})
+        tasks (fn [_] [])
+        fail (fn [& _] nil)
+        release (fn [_] nil)
+        update-ling (fn [& _] nil)
+        instance (emacs-addon/make-addon
+                  {:emacs/eval-fn (recording-eval-fn (atom []))
+                   :runtime/ports (assoc contributing-ports
+                                         :emacs/lookup-ling-fn lookup
+                                         :emacs/tasks-for-ling-fn tasks
+                                         :emacs/fail-task-fn fail
+                                         :emacs/release-claims-fn release
+                                         :emacs/update-ling-fn update-ling)})]
+    (with-redefs [bridge/ensure-loaded! (constantly false)
+                  client/emacs-running? (constantly true)]
+      (is (:success? (addon/initialize! instance {})))
+      (let [snap (ports/snapshot)]
+        (is (identical? lookup (:lookup-ling-fn snap)))
+        (is (identical? tasks (:tasks-for-ling-fn snap)))
+        (is (identical? fail (:fail-task-fn snap)))
+        (is (identical? release (:release-claims-fn snap)))
+        (is (identical? update-ling (:update-ling-fn snap))))
+      (is (nil? (addon/shutdown! instance)))
+      (is (ports-clear?)))))

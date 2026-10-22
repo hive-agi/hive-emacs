@@ -70,17 +70,26 @@
      daemon-id
      (str "[" (name death-tag) "] " error-message))))
 
-(defn- port-config
+(defn port-config
+  "Pure: the runtime-ports map for CONFIG. Each direct `:emacs/*` key is read
+   from the top level of CONFIG first, then from the host adapters under
+   `:runtime/ports`, so a top-level key overrides the host's adapter."
   [config]
-  (reduce-kv
-   (fn [ports config-key port-key]
-     (if (contains? config config-key)
-       (assoc ports port-key (get config config-key))
-       ports))
-   (merge {:ping-fn default-ping
-           :report-daemon-error-fn default-daemon-error-reporter}
-          (or (:emacs/ports config) {}))
-   direct-port-keys))
+  (let [host-ports (or (:runtime/ports config) {})]
+    (reduce-kv
+     (fn [ports config-key port-key]
+       (cond
+         (contains? config config-key)
+         (assoc ports port-key (get config config-key))
+
+         (contains? host-ports config-key)
+         (assoc ports port-key (get host-ports config-key))
+
+         :else ports))
+     (merge {:ping-fn default-ping
+             :report-daemon-error-fn default-daemon-error-reporter}
+            (or (:emacs/ports config) {}))
+     direct-port-keys)))
 
 (defn- eval-fn-of
   "The elisp evaluation boundary this addon starts its Emacs halves through:
