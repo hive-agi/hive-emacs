@@ -1,0 +1,13 @@
+{:host-only
+ {:lookup-ling-fn :host/lookup,
+  :tasks-for-ling-fn :host/tasks,
+  :fail-task-fn :host/fail,
+  :release-claims-fn :host/release,
+  :update-ling-fn :host/update},
+ :neither {},
+ :top-level-wins
+ {:lookup-ling-fn :top/lookup,
+  :tasks-for-ling-fn :host/tasks,
+  :fail-task-fn :host/fail,
+  :release-claims-fn :host/release,
+  :update-ling-fn :host/update}}
