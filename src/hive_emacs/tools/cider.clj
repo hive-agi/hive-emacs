@@ -25,7 +25,8 @@
             [hive-emacs.tools.list-param :as list-param]
             [hive-emacs.cider.spawn-dir :as spawn-dir]
             [hive-emacs.cider.alias-compose :as alias-compose]
-            [hive-emacs.cider.eval-port :as eval-port]))
+            [hive-emacs.cider.eval-port :as eval-port]
+            [hive-emacs.cider.heap :as heap]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -718,6 +719,11 @@
    REPL lands with the project's test/ on its classpath; aliases [\"none\"]
    ask for a plain -M launch.
 
+   An -Xmx in extra_args is paired with a SoftMaxHeapSize and an -Xms no
+   larger than it (hive-emacs.cider.heap), so an alias's own soft heap cannot
+   stop the JVM from booting; contradictory explicit values are refused here,
+   before Emacs is asked to start anything.
+
    An ok answers \"starting\" and is also WATCHED: the session's outcome
    arrives on a later tool response of the caller that asked (the
    transport's _caller_id) as the ---CIDER-SPAWN--- block. An emacsclient
@@ -726,10 +732,12 @@
   [{:keys [name agent_id repl_type port extra_args aliases extra_deps middleware] :as params}]
   (log/info "cider-spawn" {:name name :repl_type repl_type :agent_id agent_id :port port
                            :aliases aliases})
-  (let [dir (spawn-dir/resolve-dir params)]
+  (let [dir (spawn-dir/resolve-dir params)
+        heap-args (heap/pair-heap-args (spawn-list-param extra_args))]
     (cond
       (str/blank? name) (tool/mcp-error "Error: spawn requires a non-blank 'name'")
       (result/err? dir) (result->mcp dir)
+      (:error heap-args) (tool/mcp-error (:error heap-args))
       :else
       (let [project_dir (:ok dir)
             owner (:_caller_id params)
@@ -741,7 +749,7 @@
                      :port       port
                      :project-dir project_dir
                      :agent-id   agent_id
-                     :extra-args (spawn-list-param extra_args)
+                     :extra-args (:ok heap-args)
                      :aliases    (alias-compose/for-project
                                    project_dir
                                    (spawn-list-param aliases #"[,:\s]+")
