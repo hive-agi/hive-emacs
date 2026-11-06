@@ -26,7 +26,8 @@
             [hive-emacs.cider.spawn-dir :as spawn-dir]
             [hive-emacs.cider.alias-compose :as alias-compose]
             [hive-emacs.cider.eval-port :as eval-port]
-            [hive-emacs.cider.heap :as heap]))
+            [hive-emacs.cider.heap :as heap]
+            [hive-emacs.cider.heap-cap :as heap-cap]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -719,10 +720,12 @@
    REPL lands with the project's test/ on its classpath; aliases [\"none\"]
    ask for a plain -M launch.
 
-   An -Xmx in extra_args is paired with a SoftMaxHeapSize and an -Xms no
-   larger than it (hive-emacs.cider.heap), so an alias's own soft heap cannot
-   stop the JVM from booting; contradictory explicit values are refused here,
-   before Emacs is asked to start anything.
+   A spawn always names a heap ceiling (hive-emacs.cider.heap-cap): the
+   caller's -Xmx, else an alias's, else the default. An -Xmx in extra_args is
+   paired with a SoftMaxHeapSize and an -Xms no larger than it
+   (hive-emacs.cider.heap), so an alias's own soft heap cannot stop the JVM
+   from booting; contradictory explicit values are refused here, before Emacs
+   is asked to start anything.
 
    An ok answers \"starting\" and is also WATCHED: the session's outcome
    arrives on a later tool response of the caller that asked (the
@@ -733,14 +736,22 @@
   (log/info "cider-spawn" {:name name :repl_type repl_type :agent_id agent_id :port port
                            :aliases aliases})
   (let [dir (spawn-dir/resolve-dir params)
-        heap-args (heap/pair-heap-args (spawn-list-param extra_args))]
+        project_dir (:ok dir)
+        launch-aliases (when project_dir
+                         (alias-compose/for-project
+                           project_dir (spawn-list-param aliases #"[,:\s]+") repl_type))
+        heap-args (heap/pair-heap-args
+                    (if project_dir
+                      (heap-cap/for-project project_dir repl_type
+                                            (spawn-list-param extra_args)
+                                            launch-aliases)
+                      (spawn-list-param extra_args)))]
     (cond
       (str/blank? name) (tool/mcp-error "Error: spawn requires a non-blank 'name'")
       (result/err? dir) (result->mcp dir)
       (:error heap-args) (tool/mcp-error (:error heap-args))
       :else
-      (let [project_dir (:ok dir)
-            owner (:_caller_id params)
+      (let [owner (:_caller_id params)
             port  (cond-> port (string? port) parse-long)
             elisp (el/require-and-call-plist-json
                     'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
@@ -750,10 +761,7 @@
                      :project-dir project_dir
                      :agent-id   agent_id
                      :extra-args (:ok heap-args)
-                     :aliases    (alias-compose/for-project
-                                   project_dir
-                                   (spawn-list-param aliases #"[,:\s]+")
-                                   repl_type)
+                     :aliases    launch-aliases
                      :extra-deps (extra-deps-param extra_deps)
                      :middleware (spawn-list-param middleware)})
             ack {:name name :port port :repl-type (or repl_type "clj")
