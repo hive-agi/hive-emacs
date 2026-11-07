@@ -40,13 +40,22 @@
     {:calls calls
      :eval-fn (fn ([code] (answer code)) ([code _] (answer code)))}))
 
-(defn- run [stub port-files params]
-  (binding [cider/*eval-fn*          (:eval-fn stub)
-            cider/*attention-fn*     (constantly nil)
-            eval-port/*port-file-fn* (fn [dir] (get port-files dir))]
-    (let [resp (cider/handle-eval params)]
-      {:error? (boolean (:isError resp))
-       :text   (str (:text resp) (get-in resp [:content 0 :text]))})))
+(defn- run
+  "Run handle-eval with the Emacs stub. DIRECT is the direct-nREPL boundary;
+   the default answers unreachable, so these tests exercise the Emacs route
+   that a port nothing answers falls back to."
+  ([stub port-files params]
+   (run stub port-files params
+        (fn [port _ _] {:error :cider/port-unreachable
+                        :message (str "nothing on " port)})))
+  ([stub port-files params direct]
+   (binding [cider/*eval-fn*          (:eval-fn stub)
+             cider/*attention-fn*     (constantly nil)
+             cider/*direct-eval-fn*   direct
+             eval-port/*port-file-fn* (fn [dir] (get port-files dir))]
+     (let [resp (cider/handle-eval params)]
+       {:error? (boolean (:isError resp))
+        :text   (str (:text resp) (get-in resp [:content 0 :text]))}))))
 
 (defn- sent [stub fragment]
   (filter #(str/includes? % fragment) @(:calls stub)))
