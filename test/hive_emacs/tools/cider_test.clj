@@ -57,7 +57,7 @@
         (is (str/includes? form ":project-dir \"/p\""))
         (is (str/includes? form ":repl-type 'clj"))
         (is (str/includes? form ":port 7999"))
-        (is (str/includes? form ":extra-args '(\"-Srepro\")"))
+        (is (str/includes? form ":extra-args '(\"-Srepro\" \"-J-Xmx2g\" \"-J-XX:SoftMaxHeapSize=2g\" \"-J-Xms512m\")"))
         (is (str/includes? form ":aliases '(\"test\")"))
         (is (str/includes? form ":extra-deps '("))
         (is (str/includes? form "my/lib"))
@@ -121,7 +121,7 @@
       (let [form (first @calls)]
         (is (str/includes? form ":name \"bare\""))
         (is (str/includes? form ":project-dir \"/p\""))
-        (is (not (str/includes? form ":extra-args")))
+        (is (str/includes? form ":extra-args '(\"-J-Xmx2g\" \"-J-XX:SoftMaxHeapSize=2g\" \"-J-Xms512m\")") "a bare spawn still names its heap")
         (is (not (str/includes? form ":extra-deps")))
         (is (not (str/includes? form ":middleware")))))))
 

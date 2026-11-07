@@ -135,71 +135,162 @@
           (if cwd (q (str cwd)) "nil")
           (if ctx-file (q ctx-file) "nil")))
 
+(def default-opts
+  "Timing and size limits of the :claude terminal. :max-task-chars bounds a
+   dispatched task; :spawn-polls x :spawn-poll-ms is how long a spawn waits
+   for a live terminal process; :dispatch-poll-ms paces the reads of the
+   paste outcome, whose count is derived from the task size unless
+   :dispatch-polls is given."
+  {:max-task-chars   max-context-chars
+   :spawn-polls      20
+   :spawn-poll-ms    250
+   :dispatch-poll-ms 250
+   :sleep-fn         (fn [ms] (Thread/sleep (long ms)))})
+
+(defn- dispatch-polls
+  "Polls that cover pasting `chars` in 512-char steps 50 ms apart, the
+   bridge's 5 s settle ceiling, and one second of slack."
+  [{:keys [dispatch-polls dispatch-poll-ms]} chars]
+  (or dispatch-polls
+      (long (Math/ceil (/ (+ (* 50.0 (Math/ceil (/ chars 512.0))) 6000.0)
+                          dispatch-poll-ms)))))
+
+(defn- poll
+  "Call `probe` up to `n` times, sleeping `ms` between calls, until `done?`
+   holds for its answer. The last answer."
+  [{:keys [sleep-fn]} n ms probe done?]
+  (loop [i 1]
+    (let [a (probe)]
+      (if (or (done? a) (>= i n))
+        a
+        (do (sleep-fn ms) (recur (inc i)))))))
+
+(defn- terminal-alive?
+  [{:keys [buffer-alive process-alive]}]
+  (boolean (and buffer-alive process-alive)))
+
+(defn- await-live-terminal!
+  "Wait until ling `id`'s terminal buffer and process are alive. Throws,
+   after killing the half-made session, when they never are."
+  [eval-fn opts id]
+  (let [answer (poll opts (:spawn-polls opts) (:spawn-poll-ms opts)
+                     #(call eval-fn (format "(json-encode (hive-claude-bridge-api-alive %s))" (q (str id))) 3000)
+                     #(terminal-alive? (:result %)))
+        seen   (when (:success answer) (:result answer))]
+    (when-not (terminal-alive? seen)
+      (try (call eval-fn (format "(json-encode (hive-claude-bridge-api-kill %s))" (q (str id))) 5000)
+           (catch Exception e
+             (log/debug "hive-emacs: dead claude session not killed" {:id id :error (ex-message e)})))
+      (throw (ex-info (str "Claude terminal spawn failed: the terminal process for " id
+                           " is not running after the spawn"
+                           (when-not (:success answer) (str " (" (:error answer) ")")))
+                      {:id id :reason :terminal-not-alive
+                       :buffer-alive (boolean (:buffer-alive seen))
+                       :process-alive (boolean (:process-alive seen))
+                       :error (:error answer)})))))
+
+(defn- refused [reason m] (merge {:dispatched false :reason reason} m))
+
+(defn- dispatch-task!
+  "Paste `task` into ling `id` and wait for the bridge to report it
+   delivered. true, or a {:dispatched false :reason ...} refusal."
+  [eval-fn opts id task]
+  (let [task  (str task)
+        chars (count task)
+        max   (:max-task-chars opts)]
+    (if (> chars max)
+      (refused :task-too-large
+               {:chars chars :max-chars max
+                :error (str "task of " chars " chars exceeds the " max
+                            "-char limit of the :claude terminal; put the brief in a hive memory and dispatch a pointer to it")})
+      (let [{:keys [success result error]}
+            (call eval-fn (format "(json-encode (hive-claude-bridge-api-dispatch %s %s))" (q (str id)) (q task)) 5000)]
+        (cond
+          (not success)                     (throw (ex-info "Claude terminal dispatch failed" {:ling-id id :error error}))
+          (not (and (map? result) (:sent result))) (refused :no-live-session {:ling-id id})
+          :else
+          (let [answer (poll opts (dispatch-polls opts chars) (:dispatch-poll-ms opts)
+                             #(call eval-fn (format "(json-encode (hive-claude-bridge-api-status %s))" (q (str id))) 3000)
+                             #(contains? #{"delivered" "failed"} (get-in % [:result :paste])))
+                state  (get-in answer [:result :paste])]
+            (case state
+              "delivered" true
+              "failed"    (refused :paste-failed {:ling-id id :chars chars})
+              (refused :paste-timeout {:ling-id id :chars chars :paste state}))))))))
+
 (defn make-claude-terminal
   "An ITerminalAddon for Claude Code sessions in Emacs, over EVAL-FN
    ((f code timeout-ms) -> {:success bool :result str ...}). SPAWN-CONTEXT is
-   the host's :catchup/spawn-context port (fn [cwd] -> markdown), or nil."
+   the host's :catchup/spawn-context port (fn [cwd] -> markdown), or nil.
+   OPTS overrides `default-opts`.
+
+   A spawn returns only once the terminal process runs, and throws
+   otherwise. A dispatch returns true only once the bridge reports the whole
+   task pasted and submitted; otherwise it answers a {:dispatched false}
+   refusal."
   ([] (make-claude-terminal ec/eval-elisp-with-timeout nil))
   ([eval-fn] (make-claude-terminal eval-fn nil))
-  ([eval-fn spawn-context]
-   (reify addon-term/ITerminalAddon
-     (terminal-id [_] terminal-key)
+  ([eval-fn spawn-context] (make-claude-terminal eval-fn spawn-context nil))
+  ([eval-fn spawn-context opts]
+   (let [opts (merge default-opts opts)]
+     (reify addon-term/ITerminalAddon
+       (terminal-id [_] terminal-key)
 
-     (terminal-spawn! [_ ctx opts]
-       (ensure-loaded! eval-fn)
-       (let [{:keys [id cwd presets]} ctx
-             ctx-file (when (:task opts) (spawn-context-file spawn-context cwd))
-             {:keys [success error]} (call eval-fn (spawn-elisp id (:name opts) presets cwd ctx-file) 10000)]
-         (if success
-           (do (log/info "Claude terminal spawned ling" {:id id :cwd cwd})
-               id)
-           (throw (ex-info "Claude terminal spawn failed" {:id id :error error})))))
+       (terminal-spawn! [_ ctx opts']
+         (let [{:keys [id cwd presets]} ctx]
+           (when-not (ensure-loaded! eval-fn)
+             (throw (ex-info "Claude terminal spawn failed: the hive-claude elisp did not load in Emacs"
+                             {:id id :reason :bridge-not-loaded})))
+           (let [ctx-file (when (:task opts') (spawn-context-file spawn-context cwd))
+                 {:keys [success error]} (call eval-fn (spawn-elisp id (:name opts') presets cwd ctx-file) 10000)]
+             (when-not success
+               (throw (ex-info "Claude terminal spawn failed" {:id id :error error})))
+             (await-live-terminal! eval-fn opts id)
+             (log/info "Claude terminal spawned ling" {:id id :cwd cwd})
+             id)))
 
-     (terminal-dispatch! [_ ctx task-opts]
-       (ensure-loaded! eval-fn)
-       (let [{:keys [id]} ctx
-             {:keys [success error]} (call eval-fn
-                                           (format "(json-encode (hive-claude-bridge-api-dispatch %s %s))"
-                                                   (q (str id)) (q (str (:task task-opts))))
-                                           5000)]
-         (if success
-           (do (log/info "Claude terminal dispatched task" {:id id})
-               true)
-           (throw (ex-info "Claude terminal dispatch failed" {:ling-id id :error error})))))
+       (terminal-dispatch! [_ ctx task-opts]
+         (ensure-loaded! eval-fn)
+         (let [{:keys [id]} ctx
+               answer (dispatch-task! eval-fn opts id (:task task-opts))]
+           (if (true? answer)
+             (log/info "Claude terminal dispatched task" {:id id})
+             (log/warn "Claude terminal refused dispatch" (assoc answer :id id)))
+           answer))
 
-     (terminal-status [_ ctx ds-status]
-       (ensure-loaded! eval-fn)
-       (let [{:keys [id]} ctx
-             {:keys [success result]} (call eval-fn
-                                            (format "(json-encode (hive-claude-bridge-api-status %s))" (q (str id)))
-                                            3000)]
-         (if success
-           (merge (or ds-status {})
-                  {:slave/id        id
-                   :elisp-alive?    (get result :buffer-alive false)
-                   :terminal-status (get result :status)})
-           ds-status)))
+       (terminal-status [_ ctx ds-status]
+         (ensure-loaded! eval-fn)
+         (let [{:keys [id]} ctx
+               {:keys [success result]} (call eval-fn
+                                              (format "(json-encode (hive-claude-bridge-api-status %s))" (q (str id)))
+                                              3000)]
+           (if success
+             (merge (or ds-status {})
+                    {:slave/id        id
+                     :elisp-alive?    (get result :buffer-alive false)
+                     :terminal-status (get result :status)})
+             ds-status)))
 
-     (terminal-kill! [_ ctx]
-       (ensure-loaded! eval-fn)
-       (let [{:keys [id]} ctx
-             {:keys [success result error]} (call eval-fn
-                                                  (format "(json-encode (hive-claude-bridge-api-kill %s))" (q (str id)))
-                                                  5000)]
-         (cond
-           (not success)     {:killed? false :id id :reason :elisp-error :error error}
-           (:killed result)  {:killed? true :id id}
-           :else             {:killed? false :id id :reason :kill-blocked})))
+       (terminal-kill! [_ ctx]
+         (ensure-loaded! eval-fn)
+         (let [{:keys [id]} ctx
+               {:keys [success result error]} (call eval-fn
+                                                    (format "(json-encode (hive-claude-bridge-api-kill %s))" (q (str id)))
+                                                    5000)]
+           (cond
+             (not success)     {:killed? false :id id :reason :elisp-error :error error}
+             (:killed result)  {:killed? true :id id}
+             :else             {:killed? false :id id :reason :kill-blocked})))
 
-     (terminal-interrupt! [_ ctx]
-       (ensure-loaded! eval-fn)
-       (let [{:keys [id]} ctx
-             {:keys [success error]} (call eval-fn
-                                           (format "(json-encode (hive-claude-bridge-api-interrupt %s))" (q (str id)))
-                                           3000)]
-         (if success
-           {:success? true :ling-id id}
-           {:success? false :ling-id id :errors [(str "interrupt failed: " error)]}))))))
+       (terminal-interrupt! [_ ctx]
+         (ensure-loaded! eval-fn)
+         (let [{:keys [id]} ctx
+               {:keys [success error]} (call eval-fn
+                                             (format "(json-encode (hive-claude-bridge-api-interrupt %s))" (q (str id)))
+                                             3000)]
+           (if success
+             {:success? true :ling-id id}
+             {:success? false :ling-id id :errors [(str "interrupt failed: " error)]})))))))
 
 ;; =============================================================================
 ;; Registration with the host
