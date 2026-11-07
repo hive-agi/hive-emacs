@@ -35,6 +35,9 @@
 
         ;; Process execution for emacsclient subprocess
         babashka/process {:mvn/version "0.6.25"}
+
+        ;; Direct nREPL client: an eval that names a port never waits on Emacs.
+        nrepl/nrepl {:mvn/version "1.8.0"}
         io.github.hive-agi/hive-vessel {:mvn/version "0.2.3"}}
 
  :aliases

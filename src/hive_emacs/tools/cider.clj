@@ -25,7 +25,8 @@
             [hive-emacs.tools.list-param :as list-param]
             [hive-emacs.cider.spawn-dir :as spawn-dir]
             [hive-emacs.cider.alias-compose :as alias-compose]
-            [hive-emacs.cider.eval-port :as eval-port]))
+            [hive-emacs.cider.eval-port :as eval-port]
+            [hive-emacs.cider.direct-eval :as direct-eval]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -332,6 +333,25 @@
                                          named (str "session " name " is "
                                                     (eval-port/session-state after name))))))))))
 
+(def ^:dynamic *direct-eval-fn*
+  "Direct nREPL boundary: (f port code opts) -> Result, opts {:timeout-ms n}.
+   An eval that names a port runs here, from this JVM over a socket, so a busy
+   Emacs (every emacsclient call timing out at the client default) cannot fail
+   it. Tests bind a stub or a real in-process nREPL."
+  (fn [port code opts] (direct-eval/eval-on-port port code opts)))
+
+(defn- eval-on-named-port
+  "Result of CODE in the nREPL on PORT (a resolved {:port :source}). Direct
+   over nREPL first; only when nothing answered the port directly does it fall
+   back to the Emacs session route (ensure-port-session* + IN-SESSION), whose
+   error then names the port, its source and the resolution order."
+  [{:keys [port] :as named} code timeout-s directory in-session]
+  (let [r (*direct-eval-fn* port code {:timeout-ms (* 1000 (or timeout-s 60))})]
+    (if (= :cider/port-unreachable (:error r))
+      (result/let-ok [session (ensure-port-session* named directory)]
+                     (in-session session))
+      r)))
+
 ;;; =============================================================================
 ;;; Eval handlers
 ;;; =============================================================================
@@ -365,8 +385,7 @@
                      (result/let-ok [port (eval-port/resolve-port params directory)]
                                     (cond
                                       port
-                                      (result/let-ok [session (ensure-port-session* port directory)]
-                                                     (in-session session))
+                                      (eval-on-named-port port code timeout directory in-session)
 
                                       directory
                                       (let [r (ensure-connected* directory)]
