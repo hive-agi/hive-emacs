@@ -112,8 +112,12 @@
 (ert-deftest hive-mcp-cider-test-spawn-refuses-a-live-session-name nil "A spawn under the name of a session whose process is alive still signals." (hive-mcp-cider-sessions-clear-all) (let* ((dir (make-temp-file "hive-mcp-cider-live" t))
         (proc (start-process "hive-mcp-cider-live-test" nil "sleep" "30")))
     (unwind-protect
-    (progn (hive-mcp-cider-sessions-register "live" (hive-mcp-cider-sessions-make-session 7985 :process proc :status 'starting)) (should-error (hive-mcp-cider--spawn-attempt 0 "live" 'clj 7984 dir nil nil nil nil nil)) (should (eq proc (hive-mcp-cider-sessions-get-prop "live" :process))))
-  (when (process-live-p proc) (delete-process proc))
+    (progn
+  (hive-mcp-cider-sessions-register "live" (hive-mcp-cider-sessions-make-session 7985 :process proc :status 'starting))
+  (should-error (hive-mcp-cider--spawn-attempt 0 "live" 'clj 7984 dir nil nil nil nil nil))
+  (should (eq proc (hive-mcp-cider-sessions-get-prop "live" :process))))
+  (when (process-live-p proc)
+    (delete-process proc))
   (hive-mcp-cider-sessions-clear-all)
   (delete-directory dir t))))
 
