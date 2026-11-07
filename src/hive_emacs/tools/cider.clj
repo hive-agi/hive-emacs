@@ -27,7 +27,8 @@
             [hive-emacs.cider.alias-compose :as alias-compose]
             [hive-emacs.cider.eval-port :as eval-port]
             [hive-emacs.cider.heap :as heap]
-            [hive-emacs.cider.heap-cap :as heap-cap]))
+            [hive-emacs.cider.heap-cap :as heap-cap]
+            [hive-emacs.cider.direct-eval :as direct-eval]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
