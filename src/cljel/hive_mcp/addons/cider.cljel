@@ -105,6 +105,13 @@ Delegates to spawn-session after destructuring."
     (plist-get params :extra-deps)
     (plist-get params :middleware)))
 
+(defn -reclaimable-p [session]
+  "Non-nil when SESSION may give its name to a new spawn: it settled as
+'error or 'stale and holds no live nREPL process."
+  (and (memq (plist-get session :status) '(error stale))
+       (not (let [p (plist-get session :process)]
+              (and (processp p) (process-live-p p))))))
+
 (defn -spawn-attempt [attempt name repl-type port project-dir agent-id extra-args aliases extra-deps middleware]
   "Launch one try of session NAME; see `hive-mcp-cider-spawn-session'.
 ATTEMPT counts the respawns so far. A requested PORT that is already open is
@@ -116,6 +123,11 @@ failed attempt's registry entry."
          source-dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype))
          dir (when source-dir (file-name-as-directory (expand-file-name source-dir)))]
     (when (= attempt 0)
+      (let [old (hive-mcp-cider-sessions-lookup name)]
+        (when (and old (-reclaimable-p old))
+          (let [timer (plist-get old :timer)]
+            (when (timerp timer) (cancel-timer timer)))
+          (hive-mcp-cider-sessions-unregister name)))
       (hive-mcp-cider-sessions-register
        name (hive-mcp-cider-sessions-make-session nil
               :project-dir dir :repl-type rtype :status 'starting)))

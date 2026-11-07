@@ -144,28 +144,66 @@
     (message "[hive-claude] Spawned %s via %s" slave-id terminal)
     slave-id))
 
+(defvar hive-claude-bridge-paste-chunk-chars 512
+  "Characters sent to the terminal per paste step.")
+
+(defvar hive-claude-bridge-paste-chunk-delay 0.05
+  "Seconds between two paste steps.")
+
+(defvar hive-claude-bridge-paste-settle-interval 0.2
+  "Seconds between two looks at the buffer while the pasted text settles.")
+
+(defvar hive-claude-bridge-paste-settle-max 5.0
+  "Most seconds to wait for the pasted text to settle before submitting.")
+
+(defun hive-claude-bridge--send-text (terminal text)
+  "Send TEXT to the TERMINAL backend of the current buffer."
+  (pcase terminal
+  ((quote claude-code-ide) (claude-code-ide--terminal-send-string text))
+  ((quote vterm) (vterm-send-string text))
+  ((quote eat) (when (and (boundp 'eat-terminal) eat-terminal)
+    (eat-term-send-string eat-terminal text)))))
+
+(defun hive-claude-bridge--send-submit (terminal)
+  "Send Return to the TERMINAL backend of the current buffer."
+  (pcase terminal
+  ((quote claude-code-ide) (claude-code-ide--terminal-send-return))
+  ((quote vterm) (vterm-send-return))
+  ((quote eat) (when (and (boundp 'eat-terminal) eat-terminal)
+    (eat-term-send-string eat-terminal "\r")))))
+
+(defun hive-claude-bridge--paste-failed (slave-id err)
+  "Record that the paste to SLAVE-ID failed with ERR."
+  (hive-claude-state-put-field slave-id :paste 'failed)
+  (message "[hive-claude] paste to %s failed: %s" slave-id (error-message-string err)))
+
+(defun hive-claude-bridge--submit-when-settled (slave-id buffer terminal tick waited)
+  "Send Return to BUFFER once it stopped changing since TICK, or once WAITED\n   seconds reach `hive-claude-bridge-paste-settle-max'. Records :paste."
+  (condition-case err
+    (if (not (buffer-live-p buffer)) (hive-claude-state-put-field slave-id :paste 'failed) (let* ((now-tick (buffer-modified-tick buffer)))
+    (if (or (and tick (equal tick now-tick)) (>= waited hive-claude-bridge-paste-settle-max)) (progn
+  (with-current-buffer buffer
+    (hive-claude-bridge--send-submit terminal))
+  (hive-claude-state-put-field slave-id :paste 'delivered)) (run-at-time hive-claude-bridge-paste-settle-interval nil #'hive-claude-bridge--submit-when-settled slave-id buffer terminal now-tick (+ waited hive-claude-bridge-paste-settle-interval)))))
+  (error (hive-claude-bridge--paste-failed slave-id err))))
+
+(defun hive-claude-bridge--paste-from (slave-id buffer terminal text start)
+  "Send TEXT to BUFFER from index START, one chunk per step; once all of it\n   is sent, submit it when the buffer settles."
+  (condition-case err
+    (if (not (buffer-live-p buffer)) (hive-claude-state-put-field slave-id :paste 'failed) (let* ((end (min (length text) (+ start hive-claude-bridge-paste-chunk-chars))))
+    (with-current-buffer buffer
+    (hive-claude-bridge--send-text terminal (substring text start end)))
+    (if (< end (length text)) (run-at-time hive-claude-bridge-paste-chunk-delay nil #'hive-claude-bridge--paste-from slave-id buffer terminal text end) (run-at-time hive-claude-bridge-paste-settle-interval nil #'hive-claude-bridge--submit-when-settled slave-id buffer terminal nil 0))))
+  (error (hive-claude-bridge--paste-failed slave-id err))))
+
 (defun hive-claude-bridge-dispatch (slave-id prompt)
-  "Send PROMPT to a running Claude ling identified by SLAVE-ID.\n   Returns (:sent t :slave-id SLAVE-ID) on success."
+  "Start pasting PROMPT into the running Claude ling SLAVE-ID.\n   Returns (:sent t :slave-id SLAVE-ID) once the paste started, nil when the\n   ling has no live buffer. The paste outcome is the session's :paste field\n   (pasting, delivered or failed), read through `hive-claude-bridge-status'."
   (let* ((buffer (hive-claude-state-get-field slave-id :buffer))
         (terminal (or (hive-claude-state-get-field slave-id :terminal) hive-claude-bridge-default-terminal)))
     (when (and buffer (buffer-live-p buffer))
-    (pcase terminal
-  ((quote claude-code-ide) (with-current-buffer buffer
-    (when (fboundp 'claude-code-ide--terminal-send-string)
-    (claude-code-ide--terminal-send-string prompt)
-    (let* ((buf buffer))
-    (run-at-time 0.2 nil (lambda ()
-    (when (buffer-live-p buf)
-    (with-current-buffer buf
-    (claude-code-ide--terminal-send-return)))))))))
-  ((quote vterm) (with-current-buffer buffer
-    (vterm-send-string prompt)
-    (vterm-send-return)))
-  ((quote eat) (with-current-buffer buffer
-    (when (and (boundp 'eat-terminal) eat-terminal)
-    (eat-term-send-string eat-terminal prompt)
-    (eat-term-send-string eat-terminal "\r")))))
+    (hive-claude-state-put-field slave-id :paste 'pasting)
     (hive-claude-state-put-field slave-id :status 'working)
+    (hive-claude-bridge--paste-from slave-id buffer terminal prompt 0)
     (list :sent t :slave-id slave-id))))
 
 (defun hive-claude-bridge--valid-kill-target-p (buffer slave-id)
@@ -203,13 +241,28 @@
   (message "[hive-claude] Killed %s" slave-id)
   t))))))))
 
+(defun hive-claude-bridge--process-alive-p (slave-id buffer)
+  "Non-nil when SLAVE-ID's terminal process is running."
+  (let* ((proc (or (hive-claude-state-get-field slave-id :process) (when (and buffer (buffer-live-p buffer))
+    (get-buffer-process buffer)))))
+    (when (and proc (processp proc) (process-live-p proc))
+    t)))
+
 (defun hive-claude-bridge-status (slave-id)
   "Return status plist for SLAVE-ID."
   (let* ((session (hive-claude-state-get-session slave-id)))
     (when session
     (let* ((buffer (plist-get session :buffer))
         (alive (and buffer (buffer-live-p buffer))))
-    (list :slave-id slave-id :name (plist-get session :name) :status (if alive (plist-get session :status) 'dead) :cwd (plist-get session :cwd) :terminal (plist-get session :terminal) :buffer-alive alive)))))
+    (list :slave-id slave-id :name (plist-get session :name) :status (if alive (plist-get session :status) 'dead) :cwd (plist-get session :cwd) :terminal (plist-get session :terminal) :buffer-alive alive :paste (plist-get session :paste))))))
+
+(defun hive-claude-bridge-alive (slave-id)
+  "Whether SLAVE-ID's terminal buffer and its process are alive."
+  (let* ((buffer (hive-claude-state-get-field slave-id :buffer))
+        (buffer-alive (when (and buffer (buffer-live-p buffer))
+    t)))
+    (list :slave-id slave-id :buffer-alive buffer-alive :process-alive (when buffer-alive
+    (hive-claude-bridge--process-alive-p slave-id buffer)))))
 
 (defun hive-claude-bridge-interrupt (slave-id)
   "Send Ctrl-C to interrupt the running Claude ling SLAVE-ID."
@@ -248,6 +301,10 @@
 (defun hive-claude-bridge-api-status (slave-id)
   "API entry point for hive-mcp ITerminalAddon.terminal-status."
   (hive-claude-bridge-status slave-id))
+
+(defun hive-claude-bridge-api-alive (slave-id)
+  "API entry point for the JVM-side spawn check: buffer and process liveness."
+  (hive-claude-bridge-alive slave-id))
 
 (defun hive-claude-bridge-api-interrupt (slave-id)
   "API entry point for hive-mcp ITerminalAddon.terminal-interrupt!"

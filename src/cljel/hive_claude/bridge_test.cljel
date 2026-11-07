@@ -1,0 +1,84 @@
+(ns hive-claude-bridge-test
+  "ERT contract tests for hive-claude-bridge dispatch.
+
+The stub terminal echoes what it is sent slowly, a few characters per timer
+tick, the way a busy TUI ingests a long paste. Return must reach it only
+after the whole task is in the buffer."
+  (:require [cl-lib]))
+
+(require 'ert)
+(require 'hive-claude-state)
+(require 'hive-claude-bridge)
+
+;; ============================================================================
+;; Helpers: every stub is installed with `fset' and restored on unwind.
+;; ============================================================================
+
+(defn- -dispatch-into-slow-terminal [prompt]
+  "Dispatch PROMPT to a ling whose terminal echoes 50 chars per 10 ms.
+Return (ECHOED-WHEN-SUBMITTED PASTE-STATE ECHO-TOTAL)."
+  (let [buffer (generate-new-buffer " *hive-claude-bridge-test*")
+        pending ""
+        echo-timer nil
+        echoed-at-submit nil
+        orig-send (symbol-function 'claude-code-ide--terminal-send-string)
+        orig-return (symbol-function 'claude-code-ide--terminal-send-return)]
+    (unwind-protect
+        (progn
+          (fset 'claude-code-ide--terminal-send-string
+                (lambda (s) (setq pending (str pending s))))
+          (fset 'claude-code-ide--terminal-send-return
+                (lambda () (setq echoed-at-submit (buffer-size buffer))))
+          (setq echo-timer
+                (run-at-time 0.01 0.01
+                             (lambda ()
+                               (when (and (buffer-live-p buffer) (> (length pending) 0))
+                                 (let [n (min 50 (length pending))]
+                                   (with-current-buffer buffer
+                                     (goto-char (point-max))
+                                     (insert (substring pending 0 n)))
+                                   (setq pending (substring pending n)))))))
+          (hive-claude-state-register-session "t-ling" (list :buffer buffer :terminal 'claude-code-ide))
+          (hive-claude-bridge-dispatch "t-ling" prompt)
+          (let [deadline (+ (float-time) 10)]
+            (while (and (null echoed-at-submit) (< (float-time) deadline))
+              (accept-process-output nil 0.02)))
+          (list echoed-at-submit
+                (hive-claude-state-get-field "t-ling" :paste)
+                (buffer-size buffer)))
+      (when echo-timer (cancel-timer echo-timer))
+      (hive-claude-state-remove-session "t-ling")
+      (kill-buffer buffer)
+      (fset 'claude-code-ide--terminal-send-string orig-send)
+      (fset 'claude-code-ide--terminal-send-return orig-return))))
+
+;; ============================================================================
+;; dispatch submits the whole task
+;; ============================================================================
+
+(ert-deftest hive-claude-bridge-test-long-task-is-whole-before-return nil
+  "A 3500-char task is fully in the terminal when Return is sent."
+  (let [result (hive-claude-bridge-test--dispatch-into-slow-terminal (make-string 3500 ?x))]
+    (should (equal 3500 (nth result 0)))
+    (should (eq 'delivered (nth result 1)))))
+
+(ert-deftest hive-claude-bridge-test-dead-buffer-is-no-live-session nil
+  "A ling whose buffer died is no live session: dispatch answers nil."
+  (let [buffer (generate-new-buffer " *hive-claude-bridge-test-dead*")]
+    (kill-buffer buffer)
+    (unwind-protect
+        (progn
+          (hive-claude-state-register-session "t-dead" (list :buffer buffer :terminal 'claude-code-ide))
+          (should (null (hive-claude-bridge-dispatch "t-dead" "task"))))
+      (hive-claude-state-remove-session "t-dead"))))
+
+(ert-deftest hive-claude-bridge-test-alive-needs-a-live-process nil
+  "A live buffer without a process is not a started terminal."
+  (let [buffer (generate-new-buffer " *hive-claude-bridge-test-alive*")]
+    (unwind-protect
+        (progn
+          (hive-claude-state-register-session "t-alive" (list :buffer buffer))
+          (should (eq t (plist-get (hive-claude-bridge-api-alive "t-alive") :buffer-alive)))
+          (should (null (plist-get (hive-claude-bridge-api-alive "t-alive") :process-alive))))
+      (hive-claude-state-remove-session "t-alive")
+      (kill-buffer buffer))))
