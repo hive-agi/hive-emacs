@@ -72,7 +72,7 @@
       (let [form (str (first @calls))]
         (is (seq @calls) "the spawn reached the elisp boundary")
         (is (str/includes? form ":aliases '(\"dev\")") form)
-        (is (str/includes? form ":extra-args '(\"-Srepro\" \"-J-Xmx2g\")") form)
+        (is (str/includes? form ":extra-args '(\"-Srepro\" \"-J-Xmx2g\" \"-J-XX:SoftMaxHeapSize=2g\" \"-J-Xms512m\")") form)
         (is (str/includes? form ":extra-deps '(\"{:deps {my/lib") form)
         (is (str/includes? form ":middleware '(\"refactor-nrepl.middleware/wrap-refactor\")") form)
         (is (not (str/includes? form "\"[")) "no entry is the raw array text")))))

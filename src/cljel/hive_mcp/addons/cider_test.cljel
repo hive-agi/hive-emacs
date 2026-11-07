@@ -149,3 +149,53 @@ signalling that the session already exists."
           (should-not (= 7990 (hive-mcp-cider-sessions-get-prop "retry" :port))))
       (hive-mcp-cider-sessions-clear-all)
       (delete-directory dir t))))
+
+;; ============================================================================
+;; A failed session gives its name to the next spawn
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-test-respawn-replaces-failed-session nil
+  "A spawn under the name of a session that failed and holds no live process
+replaces it instead of answering that the session already exists."
+  (hive-mcp-cider-sessions-clear-all)
+  (let [dir (make-temp-file "hive-mcp-cider-respawn" t)
+        dead (start-process "hive-mcp-cider-respawn-dead" nil "true")
+        deadline (+ (float-time) 5)]
+    (while (and (process-live-p dead) (< (float-time) deadline))
+      (accept-process-output nil 0.05))
+    (unwind-protect
+        (cl-letf (((symbol-function 'hive-mcp-cider-nrepl-launch-process)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'hive-mcp-cider-connection-arm-connect-timer)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'hive-mcp-cider-nrepl-port-open-p)
+                   (lambda (_port) nil)))
+          (hive-mcp-cider-sessions-register
+           "failed" (hive-mcp-cider-sessions-make-session
+                      7989 :process dead :status 'error
+                      :reason "SoftMaxHeapSize must be less than or equal to the maximum heap size"))
+          (hive-mcp-cider-sessions-register
+           "stale" (hive-mcp-cider-sessions-make-session 7987 :status 'stale))
+          (hive-mcp-cider--spawn-attempt 0 "failed" 'clj 7988 dir nil nil nil nil nil)
+          (should (eq 'starting (hive-mcp-cider-sessions-get-prop "failed" :status)))
+          (should (equal 7988 (hive-mcp-cider-sessions-get-prop "failed" :port)))
+          (should-not (hive-mcp-cider-sessions-get-prop "failed" :reason))
+          (hive-mcp-cider--spawn-attempt 0 "stale" 'clj 7986 dir nil nil nil nil nil)
+          (should (eq 'starting (hive-mcp-cider-sessions-get-prop "stale" :status))))
+      (hive-mcp-cider-sessions-clear-all)
+      (delete-directory dir t))))
+
+(ert-deftest hive-mcp-cider-test-spawn-refuses-a-live-session-name nil
+  "A spawn under the name of a session whose process is alive still signals."
+  (hive-mcp-cider-sessions-clear-all)
+  (let [dir (make-temp-file "hive-mcp-cider-live" t)
+        proc (start-process "hive-mcp-cider-live-test" nil "sleep" "30")]
+    (unwind-protect
+        (progn
+          (hive-mcp-cider-sessions-register
+           "live" (hive-mcp-cider-sessions-make-session 7985 :process proc :status 'starting))
+          (should-error (hive-mcp-cider--spawn-attempt 0 "live" 'clj 7984 dir nil nil nil nil nil))
+          (should (eq proc (hive-mcp-cider-sessions-get-prop "live" :process))))
+      (when (process-live-p proc) (delete-process proc))
+      (hive-mcp-cider-sessions-clear-all)
+      (delete-directory dir t))))

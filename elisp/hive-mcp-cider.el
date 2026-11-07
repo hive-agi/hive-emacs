@@ -76,6 +76,11 @@
   "Spawn a new CIDER session from a structured request plist.\nMCP entry point — named params prevent positional arg ordering bugs.\nPARAMS is a plist with keys :name, :repl-type, :port, :project-dir,\n:agent-id, :extra-args, :aliases, :extra-deps, :middleware.\nDelegates to spawn-session after destructuring."
   (hive-mcp-cider-spawn-session (plist-get params :name) (plist-get params :repl-type) (plist-get params :port) (plist-get params :project-dir) (plist-get params :agent-id) (plist-get params :extra-args) (plist-get params :aliases) (plist-get params :extra-deps) (plist-get params :middleware)))
 
+(defun hive-mcp-cider--reclaimable-p (session)
+  "Non-nil when SESSION may give its name to a new spawn: it settled as\n'error or 'stale and holds no live nREPL process."
+  (and (memq (plist-get session :status) '(error stale)) (not (let* ((p (plist-get session :process)))
+    (and (processp p) (process-live-p p))))))
+
 (defun hive-mcp-cider--spawn-attempt (attempt name repl-type port project-dir agent-id extra-args aliases extra-deps middleware)
   "Launch one try of session NAME; see `hive-mcp-cider-spawn-session'.\nATTEMPT counts the respawns so far. A requested PORT that is already open is\nnot used: the next free port is. When the process dies because its port was\nbound first by another JVM, the spawn retries on another port, at most\n`hive-mcp-cider-connection-spawn-port-retries' times; the retry replaces the\nfailed attempt's registry entry."
   (let* ((rtype (or repl-type 'clj))
@@ -83,6 +88,12 @@
         (dir (when source-dir
     (file-name-as-directory (expand-file-name source-dir)))))
     (when (equal attempt 0)
+    (let* ((old (hive-mcp-cider-sessions-lookup name)))
+    (when (and old (hive-mcp-cider--reclaimable-p old))
+    (let* ((timer (plist-get old :timer)))
+    (when (timerp timer)
+    (cancel-timer timer)))
+    (hive-mcp-cider-sessions-unregister name)))
     (hive-mcp-cider-sessions-register name (hive-mcp-cider-sessions-make-session nil :project-dir dir :repl-type rtype :status 'starting)))
     (condition-case err
     (let* ((the-port (if (and port (not (hive-mcp-cider-nrepl-port-open-p port))) port (hive-mcp-cider-sessions-find-available-port #'hive-mcp-cider-nrepl-port-open-p)))
