@@ -43,7 +43,7 @@
 (deftest the-port-param-wins-and-defaults-to-a-60s-deadline
   (let [direct-calls (atom [])
         out (run (timing-out-emacs (atom 0))
-                 (fn [port code opts] (swap! direct-calls conj [port opts]) {:ok "nil"})
+                 (fn [port _code opts] (swap! direct-calls conj [port opts]) {:ok "nil"})
                  {:code "nil" :directory "/wt" :port 7000})]
     (is (not (:error? out)) (:text out))
     (is (= [[7000 {:timeout-ms 60000}]] @direct-calls))))
