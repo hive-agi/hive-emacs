@@ -215,6 +215,150 @@
           (should (equal "/tmp/proj" (plist-get session :project-dir)))))
     (hive-mcp-cider-sessions-clear-all)))
 
+;; ============================================================================
+;; Port claims: a port is reserved at selection time, atomically
+;; ============================================================================
+
+(ert-deftest hive-mcp-cider-sessions-test-parallel-selections-distinct nil
+  "N selections that all request the same port, none of which has bound it
+yet, are handed N distinct ports, and each one is claimed when selected."
+  (hive-mcp-cider-sessions-clear-all)
+  (let [claims (make-temp-file "hive-mcp-cider-claims" t)
+        n 8]
+    (unwind-protect
+        (let [hive-mcp-cider-sessions-port-claim-dir claims
+              hive-mcp-cider-sessions-port-base 7940
+              hive-mcp-cider-sessions-port-max 7959
+              ports '()]
+          (dotimes [i n]
+            (push (hive-mcp-cider-sessions-reserve-port
+                    (format "par-%d" i) (lambda (_port) nil) 7940)
+                  ports))
+          (should (= n (length (delete-dups (copy-sequence ports)))))
+          (dolist (p ports)
+            (should (file-symlink-p (hive-mcp-cider-sessions-claim-path p))))
+          (dotimes [i n]
+            (hive-mcp-cider-sessions-release-port (nth ports (- n 1 i)) (format "par-%d" i)))
+          (should-not (directory-files claims nil "^[0-9]+$")))
+      (hive-mcp-cider-sessions-clear-all)
+      (delete-directory claims t))))
+
+(defn -claim-child-form [claims base max name go]
+  "Elisp a child Emacs evaluates: claim a port as NAME, print it, hold it until GO exists."
+  (format "(progn (require 'hive-mcp-cider-sessions) (setq hive-mcp-cider-sessions-port-claim-dir %S hive-mcp-cider-sessions-port-base %d hive-mcp-cider-sessions-port-max %d) (princ (format \"PORT=%%d\\n\" (hive-mcp-cider-sessions-reserve-port %S (lambda (_p) nil) %d))) (let ((deadline (+ (float-time) 60))) (while (and (not (file-exists-p %S)) (< (float-time) deadline)) (sleep-for 0.05))))"
+          claims base max name base go))
+
+(ert-deftest hive-mcp-cider-sessions-test-parallel-processes-distinct nil
+  "N Emacs processes selecting at the same time, all requesting the same port
+before anything binds it, are handed N distinct ports: the claim is atomic
+across processes, not only within one registry."
+  (let* [claims (make-temp-file "hive-mcp-cider-claims" t)
+         go (expand-file-name "go" claims)
+         libdir (file-name-directory (locate-library "hive-mcp-cider-sessions"))
+         emacs-bin (expand-file-name invocation-name invocation-directory)
+         n 6
+         procs '()]
+    (unwind-protect
+        (progn
+          (dotimes [i n]
+            (push (make-process
+                    :name (format "claim-child-%d" i)
+                    :buffer (generate-new-buffer (format " *claim-child-%d*" i))
+                    :command (list emacs-bin "-Q" "--batch" "-L" libdir "--eval"
+                                   (-claim-child-form claims 7960 7979
+                                                      (format "child-%d" i) go))
+                    :noquery t)
+                  procs))
+          (let [deadline (+ (float-time) 90)
+                printed (lambda (p)
+                          (with-current-buffer (process-buffer p)
+                            (save-excursion
+                              (goto-char (point-min))
+                              (when (re-search-forward "PORT=\\([0-9]+\\)" nil t)
+                                (string-to-number (match-string 1))))))]
+            (while (and (< (float-time) deadline)
+                        (not (cl-every printed procs))
+                        (cl-some #'process-live-p procs))
+              (accept-process-output nil 0.1))
+            (let [ports (mapcar printed procs)]
+              (should (cl-every #'integerp ports))
+              (should (= n (length (delete-dups (copy-sequence ports)))))
+              (should (cl-every (lambda (p) (and (<= 7960 p) (<= p 7979))) ports)))))
+      (write-region "" nil go nil 'silent)
+      (dolist (p procs)
+        (let [deadline (+ (float-time) 10)]
+          (while (and (process-live-p p) (< (float-time) deadline))
+            (accept-process-output nil 0.05)))
+        (when (process-live-p p) (delete-process p))
+        (when (buffer-live-p (process-buffer p)) (kill-buffer (process-buffer p))))
+      (delete-directory claims t))))
+
+(ert-deftest hive-mcp-cider-sessions-test-live-foreign-claim-skipped nil
+  "A port claimed by another live process is never handed out."
+  (hive-mcp-cider-sessions-clear-all)
+  (let [claims (make-temp-file "hive-mcp-cider-claims" t)
+        holder (start-process "hive-mcp-cider-claim-holder" nil "sleep" "30")]
+    (unwind-protect
+        (let [hive-mcp-cider-sessions-port-claim-dir claims
+              hive-mcp-cider-sessions-port-base 7940
+              hive-mcp-cider-sessions-port-max 7949]
+          (make-symbolic-link (format "%d:other" (process-id holder))
+                              (hive-mcp-cider-sessions-claim-path 7940))
+          (should (= 7941 (hive-mcp-cider-sessions-reserve-port
+                            "mine" (lambda (_port) nil) 7940))))
+      (when (process-live-p holder) (delete-process holder))
+      (hive-mcp-cider-sessions-clear-all)
+      (delete-directory claims t))))
+
+(ert-deftest hive-mcp-cider-sessions-test-dead-claim-taken-over nil
+  "A claim left by a process that no longer exists is taken over."
+  (hive-mcp-cider-sessions-clear-all)
+  (let [claims (make-temp-file "hive-mcp-cider-claims" t)]
+    (unwind-protect
+        (let [hive-mcp-cider-sessions-port-claim-dir claims
+              hive-mcp-cider-sessions-port-base 7940
+              hive-mcp-cider-sessions-port-max 7949]
+          (make-symbolic-link "999999999:ghost" (hive-mcp-cider-sessions-claim-path 7940))
+          (should (= 7940 (hive-mcp-cider-sessions-reserve-port
+                            "heir" (lambda (_port) nil) 7940)))
+          (should (equal (format "%d:heir" (emacs-pid))
+                         (file-symlink-p (hive-mcp-cider-sessions-claim-path 7940)))))
+      (hive-mcp-cider-sessions-clear-all)
+      (delete-directory claims t))))
+
+(ert-deftest hive-mcp-cider-sessions-test-unregister-releases-claim nil
+  "Unregistering a session releases the port it claimed."
+  (hive-mcp-cider-sessions-clear-all)
+  (let [claims (make-temp-file "hive-mcp-cider-claims" t)]
+    (unwind-protect
+        (let [hive-mcp-cider-sessions-port-claim-dir claims
+              hive-mcp-cider-sessions-port-base 7940
+              hive-mcp-cider-sessions-port-max 7949
+              port nil]
+          (hive-mcp-cider-sessions-register "gone" (list :status 'starting))
+          (setq port (hive-mcp-cider-sessions-reserve-port "gone" (lambda (_port) nil)))
+          (hive-mcp-cider-sessions-update-props "gone" :port port)
+          (should (file-symlink-p (hive-mcp-cider-sessions-claim-path port)))
+          (hive-mcp-cider-sessions-unregister "gone")
+          (should-not (file-symlink-p (hive-mcp-cider-sessions-claim-path port)))
+          (should (= port (hive-mcp-cider-sessions-reserve-port "next" (lambda (_port) nil)))))
+      (hive-mcp-cider-sessions-clear-all)
+      (delete-directory claims t))))
+
+(ert-deftest hive-mcp-cider-sessions-test-failed-session-frees-port nil
+  "A session that failed with a dead process no longer holds its port."
+  (should-not (hive-mcp-cider-sessions-port-holding-p (list :port 7940 :status 'error)))
+  (should (hive-mcp-cider-sessions-port-holding-p (list :port 7940 :status 'starting)))
+  (should (hive-mcp-cider-sessions-port-holding-p (list :port 7940 :status 'stale)))
+  (should-not (hive-mcp-cider-sessions-port-holding-p (list :status 'starting))))
+
+(ert-deftest hive-mcp-cider-sessions-test-parse-claim-owner nil
+  "Claim targets parse as (PID . NAME); anything else is nil."
+  (should (equal '(42 . "a:b") (hive-mcp-cider-sessions-parse-claim-owner "42:a:b")))
+  (should-not (hive-mcp-cider-sessions-parse-claim-owner "nope"))
+  (should-not (hive-mcp-cider-sessions-parse-claim-owner ":x"))
+  (should-not (hive-mcp-cider-sessions-parse-claim-owner nil)))
+
 (defn run-tests []
   "Run all named-session registry ERT tests in batch."
   (interactive)

@@ -25,8 +25,106 @@
   :group 'hive-mcp-cider
   :type 'integer)
 
+(defcustom hive-mcp-cider-sessions-port-claim-dir (expand-file-name "hive-mcp-cider-ports" temporary-file-directory)
+  "Directory holding one claim link per reserved spawn port.\nA claim is a symbolic link named after the port whose target is\n\"PID:SESSION\". Creating a link is atomic, so two selections, in this Emacs\nor in any other Emacs on the host, never claim the same port: a port is\nreserved when it is selected, not only once its nREPL binds it."
+  :group 'hive-mcp-cider
+  :type 'directory)
+
 (defvar hive-mcp-cider-sessions--registry (make-hash-table :test 'equal)
   "Registry of named CIDER sessions.\nKeys are session names (strings).\nValues are plists with :port, :process, :buffer, :agent-id, :project-dir,\n:repl-type, :status, :cider-buffer, :timer.")
+
+(defvar hive-mcp-cider-sessions--claims (make-hash-table :test 'eql)
+  "Port claims this Emacs holds: port -> session name.\nThe claim links in `hive-mcp-cider-sessions-port-claim-dir' are the shared\ntruth; this table is how this Emacs tells its own live claims from leftovers.")
+
+(defun hive-mcp-cider-sessions-claim-path (port)
+  "Path of the claim link for PORT."
+  (expand-file-name (number-to-string port) hive-mcp-cider-sessions-port-claim-dir))
+
+(defun hive-mcp-cider-sessions-claim-owner-string (name)
+  "Claim link target naming session NAME of this Emacs."
+  (format "%d:%s" (emacs-pid) name))
+
+(defun hive-mcp-cider-sessions-parse-claim-owner (target)
+  "TARGET of a claim link, \"PID:NAME\", as (PID . NAME); nil when off-format. Pure."
+  (when (stringp target)
+    (let* ((i (string-match ":" target)))
+    (when (and i (> i 0))
+    (let* ((pid (string-to-number (substring target 0 i))))
+    (when (> pid 0)
+    (cons pid (substring target (+ i 1)))))))))
+
+(defun hive-mcp-cider-sessions-pid-live-p (pid)
+  "Non-nil when PID names a live process on this host."
+  (and (integerp pid) (process-attributes pid) t))
+
+(defun hive-mcp-cider-sessions-port-holding-p (props)
+  "Non-nil when a session with PROPS still holds its :port.\nEvery session does, except a spawn that failed ('error) and whose nREPL\nprocess is dead: nothing will bind its port again. Pure but for the process."
+  (and (plist-get props :port) (not (and (eq (plist-get props :status) 'error) (not (let* ((p (plist-get props :process)))
+    (and (processp p) (process-live-p p)))))) t))
+
+(defun hive-mcp-cider-sessions-claim-stale-p (owner port)
+  "Non-nil when OWNER, the parsed claim link on PORT, no longer holds it.\nAn unreadable claim is stale, so is one whose PID is dead, and so is one of\nthis Emacs that its claim table does not record, or whose session now holds\nanother port or none."
+  (cond
+  ((null owner) t)
+  ((not (hive-mcp-cider-sessions-pid-live-p (car owner))) t)
+  ((equal (car owner) (emacs-pid)) (let* ((name (cdr owner))
+        (props (gethash name hive-mcp-cider-sessions--registry)))
+    (or (not (equal name (gethash port hive-mcp-cider-sessions--claims))) (and props (plist-get props :port) (or (not (eql port (plist-get props :port))) (not (hive-mcp-cider-sessions-port-holding-p props)))) nil)))
+  (t nil)))
+
+(defun hive-mcp-cider-sessions--make-claim (path owner)
+  "Create the claim link PATH -> OWNER atomically. t on success, nil when taken."
+  (condition-case nil
+    (progn
+  (make-symbolic-link owner path)
+  t)
+  (file-already-exists nil)))
+
+(defun hive-mcp-cider-sessions--take-over (path owner stale-target)
+  "Replace the stale claim link PATH, last read as STALE-TARGET, by OWNER.\nTwo selections may judge the same claim stale; the takeover therefore runs\nunder PATH.takeover, itself an atomic link, and only while PATH still reads\nSTALE-TARGET, so exactly one of them wins. A mutex left by a dead process is\nremoved and the port skipped this round. t when OWNER now holds PATH."
+  (let* ((mutex (format "%s.takeover" path)))
+    (if (hive-mcp-cider-sessions--make-claim mutex owner) (unwind-protect
+    (when (equal stale-target (file-symlink-p path))
+    (when stale-target
+    (delete-file path))
+    (hive-mcp-cider-sessions--make-claim path owner))
+  (ignore-errors (delete-file mutex))) (let* ((holder (hive-mcp-cider-sessions-parse-claim-owner (file-symlink-p mutex))))
+    (when (or (null holder) (not (hive-mcp-cider-sessions-pid-live-p (car holder))))
+    (ignore-errors (delete-file mutex)))
+    nil))))
+
+(defun hive-mcp-cider-sessions-claim-port (port name)
+  "Atomically claim PORT for session NAME, against every Emacs on this host.\nReturns non-nil when NAME holds PORT afterwards: the claim was created, NAME\nalready held it, or a stale claim was taken over. Returns nil when another\nlive session holds it. When the claim directory cannot be used at all, the\nreservation degrades to this Emacs's registry, with a message, rather than\nfailing the spawn."
+  (let* ((path (hive-mcp-cider-sessions-claim-path port))
+        (owner (hive-mcp-cider-sessions-claim-owner-string name))
+        (won (condition-case err
+    (progn
+  (make-directory hive-mcp-cider-sessions-port-claim-dir t)
+  (or (hive-mcp-cider-sessions--make-claim path owner) (let* ((target (file-symlink-p path))
+        (held (hive-mcp-cider-sessions-parse-claim-owner target)))
+    (cond
+  ((and held (equal (car held) (emacs-pid)) (equal (cdr held) name)) t)
+  ((hive-mcp-cider-sessions-claim-stale-p held port) (hive-mcp-cider-sessions--take-over path owner target))
+  (t nil)))))
+  (error (message "hive-mcp-cider: port claim %s unusable (%s); registry-only reservation" path (error-message-string err))
+      t))))
+    (when won
+    (puthash port name hive-mcp-cider-sessions--claims))
+    won))
+
+(defun hive-mcp-cider-sessions-release-port (port name)
+  "Drop the claim on PORT when session NAME of this Emacs holds it.\nReturns non-nil when a claim link was removed. Another owner's claim is left."
+  (when (integerp port)
+    (when (equal name (gethash port hive-mcp-cider-sessions--claims))
+    (remhash port hive-mcp-cider-sessions--claims))
+    (let* ((path (hive-mcp-cider-sessions-claim-path port))
+        (held (hive-mcp-cider-sessions-parse-claim-owner (file-symlink-p path))))
+    (when (and held (equal (car held) (emacs-pid)) (equal (cdr held) name))
+    (condition-case nil
+    (progn
+  (delete-file path)
+  t)
+  (error nil))))))
 
 (defun hive-mcp-cider-sessions-registry-has-name-p (name)
   "Return non-nil when NAME is present, including when its stored value is nil."
@@ -43,9 +141,10 @@
   props)
 
 (defun hive-mcp-cider-sessions-unregister (name)
-  "Remove session NAME from the registry. Returns removed plist or nil."
+  "Remove session NAME from the registry and release its port claim.\nReturns the removed plist or nil."
   (let* ((session (gethash name hive-mcp-cider-sessions--registry)))
     (remhash name hive-mcp-cider-sessions--registry)
+    (hive-mcp-cider-sessions-release-port (plist-get session :port) name)
     session))
 
 (defun hive-mcp-cider-sessions-lookup (name)
@@ -141,7 +240,9 @@
     promoted))
 
 (defun hive-mcp-cider-sessions-clear-all ()
-  "Remove all sessions from registry."
+  "Remove all sessions from registry, releasing every port claim they hold."
+  (maphash (lambda (name props)
+    (hive-mcp-cider-sessions-release-port (plist-get props :port) name)) hive-mcp-cider-sessions--registry)
   (clrhash hive-mcp-cider-sessions--registry))
 
 (defun hive-mcp-cider-sessions-count-sessions ()
@@ -152,14 +253,25 @@
   "Return list of all session names."
   (hash-table-keys hive-mcp-cider-sessions--registry))
 
-(defun hive-mcp-cider-sessions-find-available-port (port-check-fn)
-  "Find next available port in the session range.\nPORT-CHECK-FN is a predicate (port) -> bool that returns t if port is in use."
+(defun hive-mcp-cider-sessions-held-ports (&optional except-name)
+  "Ports held by registered sessions (see `port-holding-p'), other than\nEXCEPT-NAME's."
+  (let* ((ports '()))
+    (maphash (lambda (name props)
+    (when (and (not (equal name except-name)) (hive-mcp-cider-sessions-port-holding-p props))
+    (push (plist-get props :port) ports))) hive-mcp-cider-sessions--registry)
+    ports))
+
+(defun hive-mcp-cider-sessions-find-available-port (port-check-fn &optional name)
+  "Find next available port in the session range.\nPORT-CHECK-FN is a predicate (port) -> bool that returns t if port is in use.\nA port a registered session holds is skipped without probing. With NAME, the\nreturned port is also atomically claimed for session NAME (`claim-port'), so\nno other selection, in this Emacs or another, is handed it until released."
   (let* ((port hive-mcp-cider-sessions-port-base)
-        (used-ports (mapcar (lambda (name)
-    (plist-get (gethash name hive-mcp-cider-sessions--registry) :port)) (hash-table-keys hive-mcp-cider-sessions--registry))))
-    (while (and (<= port hive-mcp-cider-sessions-port-max) (or (member port used-ports) (funcall port-check-fn port)))
-    (setq port (1+ port)))
+        (used-ports (hive-mcp-cider-sessions-held-ports)))
+    (while (and (<= port hive-mcp-cider-sessions-port-max) (or (member port used-ports) (funcall port-check-fn port) (and name (not (hive-mcp-cider-sessions-claim-port port name)))))
+    (setq port (+ port 1)))
     (if (<= port hive-mcp-cider-sessions-port-max) port (error "No available ports in range %d-%d" hive-mcp-cider-sessions-port-base hive-mcp-cider-sessions-port-max))))
+
+(defun hive-mcp-cider-sessions-reserve-port (name port-check-fn &optional requested)
+  "Select and claim a port for session NAME; return it.\nREQUESTED is used when no other registered session holds it, PORT-CHECK-FN\nfinds it free and the claim succeeds; otherwise, and with no REQUESTED, the\nnext free port of the range is claimed (`find-available-port'). The claim is\nreleased by `release-port', `unregister' or `clear-all'."
+  (if (and (integerp requested) (not (member requested (hive-mcp-cider-sessions-held-ports name))) (not (funcall port-check-fn requested)) (hive-mcp-cider-sessions-claim-port requested name)) requested (hive-mcp-cider-sessions-find-available-port port-check-fn name)))
 
 (defun hive-mcp-cider-sessions-make-session (port &rest kvs)
   "Create a session plist with PORT and optional KVS overrides.\nDefaults: :process nil, :buffer nil, :agent-id nil, :project-dir nil,\n:repl-type 'clj, :status 'starting, :cider-buffer nil, :timer nil."

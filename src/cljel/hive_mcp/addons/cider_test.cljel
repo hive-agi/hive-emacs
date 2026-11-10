@@ -6,6 +6,15 @@
 (require 'transient)
 (require 'hive-mcp-cider)
 
+(defn -call-with-test-claims [thunk]
+  "Call THUNK with port claims in a private temp directory, removed afterwards,
+so a spawn test never touches the host's shared claim directory."
+  (let [dir (make-temp-file "hive-mcp-cider-test-claims" t)]
+    (unwind-protect
+        (let [hive-mcp-cider-sessions-port-claim-dir dir]
+          (funcall thunk))
+      (delete-directory dir t))))
+
 (ert-deftest hive-mcp-cider-test-kill-session-unknown-signals nil
   "Killing an unregistered session is a loud error, never a silent no-op."
   (hive-mcp-cider-sessions-clear-all)
@@ -50,9 +59,11 @@ never started; the retry timer is not armed."
                      (lambda (&rest _) nil))
                     ((symbol-function 'hive-mcp-cider-nrepl-port-open-p)
                      (lambda (_port) nil)))
-            (hive-mcp-cider-spawn-session-from-plist
-             (list :name "aliased" :repl-type 'clj :port 7991
-                   :project-dir dir :aliases '("test"))))
+            (-call-with-test-claims
+             (lambda ()
+               (hive-mcp-cider-spawn-session-from-plist
+                (list :name "aliased" :repl-type 'clj :port 7991
+                      :project-dir dir :aliases '("test"))))))
           (should (member "-M:test" argv))
           (should-not (member "-M:dev" argv))
           (should-not (member "-M" argv))
@@ -141,12 +152,16 @@ signalling that the session already exists."
                    (lambda (&rest _) nil))
                   ((symbol-function 'hive-mcp-cider-nrepl-port-open-p)
                    (lambda (_port) nil)))
-          (hive-mcp-cider--spawn-attempt 0 "retry" 'clj 7990 dir nil nil nil nil nil)
-          (should (= 7990 (hive-mcp-cider-sessions-get-prop "retry" :port)))
-          (hive-mcp-cider--spawn-attempt 1 "retry" 'clj nil dir nil nil nil nil nil)
-          (should (hive-mcp-cider-sessions-exists-p "retry"))
-          (should (eq 'starting (hive-mcp-cider-sessions-get-prop "retry" :status)))
-          (should-not (= 7990 (hive-mcp-cider-sessions-get-prop "retry" :port))))
+          (-call-with-test-claims
+           (lambda ()
+             (hive-mcp-cider--spawn-attempt 0 "retry" 'clj 7990 dir nil nil nil nil nil)
+             (should (= 7990 (hive-mcp-cider-sessions-get-prop "retry" :port)))
+             (hive-mcp-cider--spawn-attempt 1 "retry" 'clj nil dir nil nil nil nil nil)
+             (should (hive-mcp-cider-sessions-exists-p "retry"))
+             (should (eq 'starting (hive-mcp-cider-sessions-get-prop "retry" :status)))
+             (should-not (= 7990 (hive-mcp-cider-sessions-get-prop "retry" :port)))
+             (should-not (file-symlink-p (hive-mcp-cider-sessions-claim-path 7990)))
+             (hive-mcp-cider-sessions-clear-all))))
       (hive-mcp-cider-sessions-clear-all)
       (delete-directory dir t))))
 
@@ -176,12 +191,15 @@ replaces it instead of answering that the session already exists."
                       :reason "SoftMaxHeapSize must be less than or equal to the maximum heap size"))
           (hive-mcp-cider-sessions-register
            "stale" (hive-mcp-cider-sessions-make-session 7987 :status 'stale))
-          (hive-mcp-cider--spawn-attempt 0 "failed" 'clj 7988 dir nil nil nil nil nil)
-          (should (eq 'starting (hive-mcp-cider-sessions-get-prop "failed" :status)))
-          (should (equal 7988 (hive-mcp-cider-sessions-get-prop "failed" :port)))
-          (should-not (hive-mcp-cider-sessions-get-prop "failed" :reason))
-          (hive-mcp-cider--spawn-attempt 0 "stale" 'clj 7986 dir nil nil nil nil nil)
-          (should (eq 'starting (hive-mcp-cider-sessions-get-prop "stale" :status))))
+          (-call-with-test-claims
+           (lambda ()
+             (hive-mcp-cider--spawn-attempt 0 "failed" 'clj 7988 dir nil nil nil nil nil)
+             (should (eq 'starting (hive-mcp-cider-sessions-get-prop "failed" :status)))
+             (should (equal 7988 (hive-mcp-cider-sessions-get-prop "failed" :port)))
+             (should-not (hive-mcp-cider-sessions-get-prop "failed" :reason))
+             (hive-mcp-cider--spawn-attempt 0 "stale" 'clj 7986 dir nil nil nil nil nil)
+             (should (eq 'starting (hive-mcp-cider-sessions-get-prop "stale" :status)))
+             (hive-mcp-cider-sessions-clear-all))))
       (hive-mcp-cider-sessions-clear-all)
       (delete-directory dir t))))
 

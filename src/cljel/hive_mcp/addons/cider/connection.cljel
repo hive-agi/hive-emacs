@@ -462,7 +462,8 @@ Without this the retry timer polls a port that nobody will ever open and
 reports a 30-attempt timeout, hiding the real cause — a bad classpath, a
 missing alias, or an alias whose :main-opts hijacked the -m. The sentinel
 cancels the timer and records 'error with the process's own last output as
-:reason. A session that already settled 'connected is left alone.
+:reason, and releases the session's port claim: a dead nREPL binds nothing.
+A session that already settled 'connected is left alone.
 
 ON-PORT-IN-USE, when given, is called with no arguments instead of recording
 'error when the process died because its port was already bound (see
@@ -487,6 +488,8 @@ ON-PORT-IN-USE, when given, is called with no arguments instead of recording
                     (hive-mcp-cider-sessions-update-props name
                       :status 'error
                       :reason reason)
+                    (hive-mcp-cider-sessions-release-port
+                     (hive-mcp-cider-sessions-get-prop name :port) name)
                     (message "hive-mcp-cider: Session '%s' spawn failed — %s"
                              name reason)))))))))))
 
