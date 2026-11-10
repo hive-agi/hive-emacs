@@ -96,7 +96,12 @@
     (hive-mcp-cider-sessions-unregister name)))
     (hive-mcp-cider-sessions-register name (hive-mcp-cider-sessions-make-session nil :project-dir dir :repl-type rtype :status 'starting)))
     (condition-case err
-    (let* ((the-port (if (and port (not (hive-mcp-cider-nrepl-port-open-p port))) port (hive-mcp-cider-sessions-find-available-port #'hive-mcp-cider-nrepl-port-open-p)))
+    (let* ((prior-port (hive-mcp-cider-sessions-get-prop name :port))
+        (the-port (hive-mcp-cider-sessions-reserve-port name #'hive-mcp-cider-nrepl-port-open-p port))
+        (_ (progn
+  (hive-mcp-cider-sessions-update-props name :port the-port)
+  (when (and prior-port (not (eql prior-port the-port)))
+    (hive-mcp-cider-sessions-release-port prior-port name))))
         (process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir extra-args aliases extra-deps middleware))
         (timer (hive-mcp-cider-connection-arm-connect-timer name hive-mcp-cider-connection-spawn-initial-delay)))
     (hive-mcp-cider-sessions-update-props name :port the-port :process process :buffer (format "*nREPL-%s*" name) :agent-id agent-id :timer timer)
