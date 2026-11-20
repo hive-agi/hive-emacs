@@ -26,7 +26,8 @@
             [hive-emacs.lsp-bridge :as lsp-bridge]
             [hive-vessel.core :as vessel-core]
             [hive-emacs.daemon-liveness :as daemon-liveness]
-            [hive-emacs.claude-terminal :as claude-terminal]))
+            [hive-emacs.claude-terminal :as claude-terminal]
+            [hive-emacs.cider.admission :as admission]))
 
 ;; Copyright (C) 2024-2026 hive-agi contributors
 ;;
@@ -46,7 +47,9 @@
    :emacs/terminal-dispatch-fn :terminal-dispatch-fn
    :emacs/resolve-agent-context-fn :resolve-agent-context-fn
    :emacs/current-dir-fn :current-dir-fn
-   :emacs/capability-fn :capability-fn})
+   :emacs/capability-fn :capability-fn
+   :emacs/mem-available-fn :mem-available-fn
+   :tools/invoke :tools-invoke-fn})
 
 (defn- flatten-config
   [seed runtime-config]
@@ -97,6 +100,14 @@
    so a test cannot reach a live daemon by omission."
   [config]
   (or (:emacs/eval-fn config) ec/eval-elisp-with-timeout))
+
+(defn- configure-ram-gate!
+  [config ports]
+  (admission/configure!
+   {:min-ram-gb (or (:cider/spawn-min-ram-gb config)
+                    admission/default-minimum-gb)
+    :mem-available-fn (or (:mem-available-fn ports)
+                          admission/read-mem-available)}))
 
 (defn- ensure-elisp-loaded!
   [eval-fn]
@@ -176,6 +187,7 @@
           (let [ports (port-config config)
                 eval-fn (eval-fn-of config)
                 _ (runtime-ports/configure! ports)
+                _ (configure-ram-gate! config ports)
                 _ (daemon-store/ensure-default-daemon!)
                 heartbeat-started?
                 (boolean
@@ -221,6 +233,7 @@
             (log/info "hive-emacs initialized" metadata)
             {:success? true :errors [] :metadata metadata})
           (catch Exception e
+            (admission/reset!)
             (runtime-ports/clear!)
             (let [message (ex-message e)]
               (reset! state {:lifecycle :error :errors [message]})
@@ -235,6 +248,7 @@
     (retract-attention-block! (:runtime/ports @state))
     (retract-spawn-block! (:runtime/ports @state))
     (attention/reset-upkeep!)
+    (admission/reset!)
     (spawn/reset-watches!)
     (editor-port/unregister!)
     (editor-services/unregister!)
