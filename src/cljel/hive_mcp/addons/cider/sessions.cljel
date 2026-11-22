@@ -35,8 +35,8 @@ reserved when it is selected, not only once its nREPL binds it."
 (defvar hive-mcp-cider-sessions--registry (make-hash-table :test 'equal)
   "Registry of named CIDER sessions.
 Keys are session names (strings).
-Values are plists with :port, :process, :buffer, :agent-id, :project-dir,
-:repl-type, :status, :cider-buffer, :timer.")
+Values are plists with :port, :process, :buffer, :agent-id, :owner-id,
+:project-dir, :owned?, :repl-type, :status, :cider-buffer, :timer.")
 
 (defvar hive-mcp-cider-sessions--claims (make-hash-table :test 'eql)
   "Port claims this Emacs holds: port -> session name.
@@ -248,6 +248,8 @@ its project for scoped reuse; :reason carries why a failed session failed."
                                :status (enum-label status "unknown")
                                :reason (plist-get props :reason)
                                :agent-id (plist-get props :agent-id)
+                               :owner-id (plist-get props :owner-id)
+                               :owned? (if (plist-get props :owned?) t :json-false)
                                :project-dir (plist-get props :project-dir)
                                :cider-buffer (plist-get props :cider-buffer))
                          sessions))))
@@ -391,11 +393,12 @@ released by `release-port', `unregister' or `clear-all'."
 
 (defn make-session [port &rest kvs]
   "Create a session plist with PORT and optional KVS overrides.
-Defaults: :process nil, :buffer nil, :agent-id nil, :project-dir nil,
-:repl-type 'clj, :status 'starting, :cider-buffer nil, :timer nil."
+Defaults: :process nil, :buffer nil, :agent-id nil, :owner-id nil,
+:project-dir nil, :owned? nil, :repl-type 'clj, :status 'starting,
+:cider-buffer nil, :timer nil."
   (let [session (list :port port
                       :process nil :buffer nil
-                      :agent-id nil :project-dir nil
+                      :agent-id nil :owner-id nil :owned? nil :project-dir nil
                       :repl-type 'clj
                       :status 'starting
                       :cider-buffer nil :timer nil)]

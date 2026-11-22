@@ -63,6 +63,8 @@
                        :heartbeat-ms heartbeat-ms}
                 (string? (:reason raw)) (assoc :reason (:reason raw))
                 (string? (:agent-id raw)) (assoc :agent-id (:agent-id raw))
+                (string? (:owner-id raw)) (assoc :owner-id (:owner-id raw))
+                (contains? raw :owned?) (assoc :owned? (true? (:owned? raw)))
                 (string? (:project-dir raw)) (assoc :project-dir (:project-dir raw)))]
     (when (schema/valid? :hive-emacs/cider-spawn-state state)
       state)))

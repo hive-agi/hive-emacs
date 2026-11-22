@@ -19,7 +19,9 @@
    :terminal-dispatch-fn nil
    :resolve-agent-context-fn nil
    :current-dir-fn nil
-   :capability-fn nil})
+   :capability-fn nil
+   :mem-available-fn nil
+   :tools-invoke-fn nil})
 
 (defonce ^:private ports (atom empty-ports))
 
@@ -117,6 +119,19 @@
   []
   (when-let [f (:current-dir-fn @ports)]
     (f)))
+
+(defn shout!
+  "Send a hivemind shout through the host's registered-tool invocation port.
+   The addon never resolves a host namespace. Failures are deliberately not
+   allowed to block session admission or cleanup."
+  [agent-id event-type message]
+  (when-let [invoke (:tools-invoke-fn @ports)]
+    (try
+      (invoke "hivemind" {:command "shout"
+                          :agent_id agent-id
+                          :event_type event-type
+                          :message message})
+      (catch Exception _best-effort-notification nil))))
 
 (defn capability
   [capability-key]

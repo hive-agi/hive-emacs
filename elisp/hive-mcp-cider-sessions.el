@@ -31,7 +31,7 @@
   :type 'directory)
 
 (defvar hive-mcp-cider-sessions--registry (make-hash-table :test 'equal)
-  "Registry of named CIDER sessions.\nKeys are session names (strings).\nValues are plists with :port, :process, :buffer, :agent-id, :project-dir,\n:repl-type, :status, :cider-buffer, :timer.")
+  "Registry of named CIDER sessions.\nKeys are session names (strings).\nValues are plists with :port, :process, :buffer, :agent-id, :owner-id,\n:project-dir, :owned?, :repl-type, :status, :cider-buffer, :timer.")
 
 (defvar hive-mcp-cider-sessions--claims (make-hash-table :test 'eql)
   "Port claims this Emacs holds: port -> session name.\nThe claim links in `hive-mcp-cider-sessions-port-claim-dir' are the shared\ntruth; this table is how this Emacs tells its own live claims from leftovers.")
@@ -192,7 +192,7 @@
     (when (stringp name)
     (let* ((status (plist-get props :status))
         (rtype (plist-get props :repl-type)))
-    (push (list :name name :port (plist-get props :port) :repl-type (hive-mcp-cider-sessions-enum-label rtype "clj") :status (hive-mcp-cider-sessions-enum-label status "unknown") :reason (plist-get props :reason) :agent-id (plist-get props :agent-id) :project-dir (plist-get props :project-dir) :cider-buffer (plist-get props :cider-buffer)) sessions)))) hive-mcp-cider-sessions--registry)
+    (push (list :name name :port (plist-get props :port) :repl-type (hive-mcp-cider-sessions-enum-label rtype "clj") :status (hive-mcp-cider-sessions-enum-label status "unknown") :reason (plist-get props :reason) :agent-id (plist-get props :agent-id) :owner-id (plist-get props :owner-id) :owned? (if (plist-get props :owned?) t :json-false) :project-dir (plist-get props :project-dir) :cider-buffer (plist-get props :cider-buffer)) sessions)))) hive-mcp-cider-sessions--registry)
     (vconcat sessions)))
 
 (defun hive-mcp-cider-sessions-find-by-status (status)
@@ -274,8 +274,8 @@
   (if (and (integerp requested) (not (member requested (hive-mcp-cider-sessions-held-ports name))) (not (funcall port-check-fn requested)) (hive-mcp-cider-sessions-claim-port requested name)) requested (hive-mcp-cider-sessions-find-available-port port-check-fn name)))
 
 (defun hive-mcp-cider-sessions-make-session (port &rest kvs)
-  "Create a session plist with PORT and optional KVS overrides.\nDefaults: :process nil, :buffer nil, :agent-id nil, :project-dir nil,\n:repl-type 'clj, :status 'starting, :cider-buffer nil, :timer nil."
-  (let* ((session (list :port port :process nil :buffer nil :agent-id nil :project-dir nil :repl-type 'clj :status 'starting :cider-buffer nil :timer nil)))
+  "Create a session plist with PORT and optional KVS overrides.\nDefaults: :process nil, :buffer nil, :agent-id nil, :owner-id nil,\n:project-dir nil, :owned? nil, :repl-type 'clj, :status 'starting,\n:cider-buffer nil, :timer nil."
+  (let* ((session (list :port port :process nil :buffer nil :agent-id nil :owner-id nil :owned? nil :project-dir nil :repl-type 'clj :status 'starting :cider-buffer nil :timer nil)))
     (while kvs
     (setq session (plist-put session (car kvs) (cadr kvs)))
     (setq kvs (cddr kvs)))

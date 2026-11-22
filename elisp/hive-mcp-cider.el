@@ -73,15 +73,15 @@
   (hive-mcp-cider-sessions-list-all))
 
 (defun hive-mcp-cider-spawn-session-from-plist (params)
-  "Spawn a new CIDER session from a structured request plist.\nMCP entry point — named params prevent positional arg ordering bugs.\nPARAMS is a plist with keys :name, :repl-type, :port, :project-dir,\n:agent-id, :extra-args, :aliases, :extra-deps, :middleware.\nDelegates to spawn-session after destructuring."
-  (hive-mcp-cider-spawn-session (plist-get params :name) (plist-get params :repl-type) (plist-get params :port) (plist-get params :project-dir) (plist-get params :agent-id) (plist-get params :extra-args) (plist-get params :aliases) (plist-get params :extra-deps) (plist-get params :middleware)))
+  "Spawn a CIDER session; owner-id identifies the caller for admission hints."
+  (hive-mcp-cider-spawn-session (plist-get params :name) (plist-get params :repl-type) (plist-get params :port) (plist-get params :project-dir) (plist-get params :agent-id) (plist-get params :extra-args) (plist-get params :aliases) (plist-get params :extra-deps) (plist-get params :middleware) (plist-get params :owner-id)))
 
 (defun hive-mcp-cider--reclaimable-p (session)
   "Non-nil when SESSION may give its name to a new spawn: it settled as\n'error or 'stale and holds no live nREPL process."
   (and (memq (plist-get session :status) '(error stale)) (not (let* ((p (plist-get session :process)))
     (and (processp p) (process-live-p p))))))
 
-(defun hive-mcp-cider--spawn-attempt (attempt name repl-type port project-dir agent-id extra-args aliases extra-deps middleware)
+(defun hive-mcp-cider--spawn-attempt (attempt name repl-type port project-dir agent-id extra-args aliases extra-deps middleware &optional owner-id)
   "Launch one try of session NAME; see `hive-mcp-cider-spawn-session'.\nATTEMPT counts the respawns so far. A requested PORT that is already open is\nnot used: the next free port is. When the process dies because its port was\nbound first by another JVM, the spawn retries on another port, at most\n`hive-mcp-cider-connection-spawn-port-retries' times; the retry replaces the\nfailed attempt's registry entry."
   (let* ((rtype (or repl-type 'clj))
         (source-dir (or project-dir (hive-mcp-cider-nrepl-project-dir rtype)))
@@ -94,7 +94,7 @@
     (when (timerp timer)
     (cancel-timer timer)))
     (hive-mcp-cider-sessions-unregister name)))
-    (hive-mcp-cider-sessions-register name (hive-mcp-cider-sessions-make-session nil :project-dir dir :repl-type rtype :status 'starting)))
+    (hive-mcp-cider-sessions-register name (hive-mcp-cider-sessions-make-session nil :project-dir dir :owned? t :repl-type rtype :status 'starting)))
     (condition-case err
     (let* ((prior-port (hive-mcp-cider-sessions-get-prop name :port))
         (the-port (hive-mcp-cider-sessions-reserve-port name #'hive-mcp-cider-nrepl-port-open-p port))
@@ -104,10 +104,10 @@
     (hive-mcp-cider-sessions-release-port prior-port name))))
         (process (hive-mcp-cider-nrepl-launch-process name the-port rtype dir extra-args aliases extra-deps middleware))
         (timer (hive-mcp-cider-connection-arm-connect-timer name hive-mcp-cider-connection-spawn-initial-delay)))
-    (hive-mcp-cider-sessions-update-props name :port the-port :process process :buffer (format "*nREPL-%s*" name) :agent-id agent-id :timer timer)
+    (hive-mcp-cider-sessions-update-props name :port the-port :process process :buffer (format "*nREPL-%s*" name) :agent-id agent-id :owner-id owner-id :timer timer)
     (hive-mcp-cider-connection-watch-spawn-process name process (when (< attempt hive-mcp-cider-connection-spawn-port-retries)
     (lambda ()
-    (hive-mcp-cider--spawn-attempt (+ attempt 1) name repl-type nil dir agent-id extra-args aliases extra-deps middleware))))
+    (hive-mcp-cider--spawn-attempt (+ attempt 1) name repl-type nil dir agent-id extra-args aliases extra-deps middleware owner-id))))
     (when (and port (not (eql port the-port)))
     (message "hive-mcp-cider: port %s taken; session '%s' uses %d" port name the-port))
     (message "hive-mcp-cider: Spawning %s session '%s' on port %d..." (symbol-name rtype) name the-port)
@@ -115,10 +115,10 @@
   (error (hive-mcp-cider-sessions-unregister name)
       (signal (car err) (cdr err))))))
 
-(defun hive-mcp-cider-spawn-session (name &optional repl-type port project-dir agent-id extra-args aliases extra-deps middleware)
+(defun hive-mcp-cider-spawn-session (name &optional repl-type port project-dir agent-id extra-args aliases extra-deps middleware owner-id)
   "Spawn a new named CIDER session with its own nREPL server.\nNAME is the session identifier (e.g., \"agent-1\", \"task-render\").\nREPL-TYPE is one of 'clj (default), 'cljs, or 'cljel.\nPORT is the nREPL port (default: auto-assign from session range). A PORT that\nis already taken is replaced by the next free one, and a spawn that loses its\nport to another process during startup retries on another port.\nPROJECT-DIR is the directory to start nREPL in (default: current project).\nAGENT-ID optionally links this session to a swarm agent.\nEXTRA-ARGS is a list of raw clojure CLI args spliced after -Sdeps and\nbefore the -M flag (a raw -Sdeps there REPLACES the built-in one — the CLI\nkeeps only the last; merge-style layering is automatic via local.deps.edn\ndetection in `hive-mcp-cider-nrepl-local-deps-files').\nALIASES is a list of bare alias names (e.g. '(\"test\")) selecting the -M\nflag for this spawn, overriding `hive-mcp-cider-nrepl-launch-aliases'.\nEXTRA-DEPS is a list of deps EDN strings merged into the built-in -Sdeps,\nafter any auto-detected local deps (later entries win key-wise).\nMIDDLEWARE is a list of nREPL middleware symbol strings appended to the\nbuilt-in list."
   (interactive "sSession name: ")
-  (hive-mcp-cider--spawn-attempt 0 name repl-type port project-dir agent-id extra-args aliases extra-deps middleware))
+  (hive-mcp-cider--spawn-attempt 0 name repl-type port project-dir agent-id extra-args aliases extra-deps middleware owner-id))
 
 (defun hive-mcp-cider-connect-session (name host port &optional repl-type agent-id project-dir)
   "Connect to an existing nREPL server as a named session.\nNAME is the session identifier.\nHOST is the nREPL host (default \"localhost\").\nPORT is the nREPL port number.\nREPL-TYPE is one of \"clj\" (default), \"cljs\", or \"cljel\".\nAGENT-ID optionally links this session to a swarm agent.\nPROJECT-DIR (optional) labels the REPL buffer with the target project\nso cross-project sessions don't all collide under the current buffer's\nproject root.\n\nThe connect itself is deferred to the Emacs event loop (emacsclient is never\nblocked by CIDER's own prompts), but this call polls until the connection\nsettles — handshake complete and, for cljs/cljel, the REPL upgrade confirmed\nor ruled out. The returned :status and :repl-type are the settled ones, so a\ncljel target whose upgrade never confirmed reports clj rather than lying."
