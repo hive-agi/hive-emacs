@@ -55,6 +55,49 @@ and enables auto-loading for feature-triggered addons."
   :group 'hive-mcp)
 
 ;; ============================================================================
+;; GC floor
+;; ============================================================================
+;;
+;; Measured 2026-11-20 00:10-00:26 (card 20261120002307-19cf4206): gcmh had
+;; left both gc-cons-threshold and gcmh-low-cons-threshold at 800 KB. Decoding
+;; the hive stream allocates about 2.3 MB/s, so Emacs ran a full GC (about
+;; 0.33 s each) roughly three times per second: 95% of wall time in GC. The
+;; main loop read nothing from its sockets, and every cider spawn on the host
+;; waited 94 s and failed. Raising gcmh-low-cons-threshold to 32 MB (and
+;; gc-cons-threshold to 64 MB) made Emacs healthy again. gcmh drops
+;; gc-cons-threshold back to its LOW threshold on every idle, so the low one
+;; is the setting that matters.
+
+(defcustom hive-mcp-gc-cons-floor (* 32 1024 1024)
+  "Smallest `gcmh-low-cons-threshold' and `gc-cons-threshold' hive-mcp leaves.
+hive-mcp raises either one that is below this when it loads, and again
+when gcmh loads. It never lowers a larger value. nil disables the floor.
+
+Why, measured 2026-11-20: gcmh had left both thresholds at 800 KB. Decoding
+the hive stream allocates about 2.3 MB/s, so Emacs ran a full GC (about
+0.33 s) roughly three times per second, 95% of wall time. The main loop read
+nothing from its sockets and every cider spawn waited 94 s. A 32 MB low
+threshold made Emacs healthy again. gcmh returns to the LOW threshold on
+every idle, so that is the one that matters."
+  :type '(choice (const :tag "Off" nil) integer)
+  :group 'hive-mcp)
+
+(defn apply-gc-floor []
+  "Raise `gcmh-low-cons-threshold' and `gc-cons-threshold' to
+`hive-mcp-gc-cons-floor' when below it. Returns the floor applied, or nil."
+  (when (integerp hive-mcp-gc-cons-floor)
+    (when (and (boundp 'gcmh-low-cons-threshold)
+               (< gcmh-low-cons-threshold hive-mcp-gc-cons-floor))
+      (setq gcmh-low-cons-threshold hive-mcp-gc-cons-floor))
+    (when (< gc-cons-threshold hive-mcp-gc-cons-floor)
+      (setq gc-cons-threshold hive-mcp-gc-cons-floor))
+    hive-mcp-gc-cons-floor))
+
+(hive-mcp-apply-gc-floor)
+(with-eval-after-load 'gcmh
+  (hive-mcp-apply-gc-floor))
+
+;; ============================================================================
 ;; Require submodules
 ;; ============================================================================
 
