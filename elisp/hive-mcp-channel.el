@@ -26,23 +26,39 @@
   :group 'hive-mcp
   :prefix "hive-mcp-channel-")
 
-(defcustom hive-mcp-channel-type 'unix
-  "Channel transport type.\nUnix sockets are the default as they're more efficient for local IPC."
+(defconst hive-mcp-channel-default-host "127.0.0.1" "Host the hive-mcp channel server binds when HIVE_MCP_CHANNEL_HOST is unset.")
+
+(defconst hive-mcp-channel-default-port 9998 "Port the hive-mcp channel server listens on when HIVE_MCP_CHANNEL_PORT is unset.")
+
+(defun hive-mcp-channel--default-host ()
+  "Channel host: HIVE_MCP_CHANNEL_HOST when set and non-empty, else 127.0.0.1."
+  (let* ((host (getenv "HIVE_MCP_CHANNEL_HOST")))
+    (if (and host (not (string-empty-p host))) host hive-mcp-channel-default-host)))
+
+(defun hive-mcp-channel--default-port ()
+  "Channel port: HIVE_MCP_CHANNEL_PORT when it names a port number, else 9998."
+  (let* ((port (getenv "HIVE_MCP_CHANNEL_PORT"))
+        (n (when (and port (string-match-p "\\`[0-9]+\\'" port))
+    (string-to-number port))))
+    (if (and n (> n 0) (< n 65536)) n hive-mcp-channel-default-port)))
+
+(defcustom hive-mcp-channel-type 'tcp
+  "Channel transport type.\nTCP is the default: it is what the hive-mcp server starts (127.0.0.1:9998,\nsee `hive-mcp-channel-host' and `hive-mcp-channel-port').  The Unix socket\nis opt-in: choose `unix' only when a server listens on\n`hive-mcp-channel-socket-path'."
   :group 'hive-mcp-channel
-  :type '(choice (const :tag "Unix socket (recommended)" unix) (const :tag "TCP" tcp)))
+  :type '(choice (const :tag "TCP (default, what hive-mcp serves)" tcp) (const :tag "Unix socket (opt-in)" unix)))
 
 (defcustom hive-mcp-channel-socket-path "/tmp/hive-mcp-channel.sock"
-  "Path to Unix domain socket."
+  "Path to Unix domain socket.\nUsed only when `hive-mcp-channel-type' is `unix'."
   :group 'hive-mcp-channel
   :type 'string)
 
-(defcustom hive-mcp-channel-host "localhost"
-  "Host for TCP channel."
+(defcustom hive-mcp-channel-host (hive-mcp-channel--default-host)
+  "Host for TCP channel.\nDefaults to HIVE_MCP_CHANNEL_HOST, else 127.0.0.1 (the server's bind address)."
   :group 'hive-mcp-channel
   :type 'string)
 
-(defcustom hive-mcp-channel-port 9998
-  "Port for TCP channel.\nMust match HIVE_MCP_CHANNEL_PORT env var on the Clojure server (default: 9998)."
+(defcustom hive-mcp-channel-port (hive-mcp-channel--default-port)
+  "Port for TCP channel.\nDefaults to HIVE_MCP_CHANNEL_PORT, the variable the Clojure server reads,\nelse 9998."
   :group 'hive-mcp-channel
   :type 'integer)
 
@@ -112,6 +128,12 @@
   "Decode bencode STR to plist/alist."
   (if (hive-mcp-channel--bencode-available-p) (car (nrepl-bdecode-string str)) (hive-mcp-channel--bdecode-fallback str)))
 
+(define-error 'hive-mcp-channel-frame-error "Bencode frame error")
+
+(define-error 'hive-mcp-channel-incomplete-frame "Incomplete bencode frame" 'hive-mcp-channel-frame-error)
+
+(define-error 'hive-mcp-channel-malformed-frame "Malformed bencode frame" 'hive-mcp-channel-frame-error)
+
 (defun hive-mcp-channel--bencode-fallback (obj)
   "Encode OBJ to bencode string (fallback)."
   (cond
@@ -123,35 +145,55 @@
   (t (error "Cannot bencode: %S" obj))))
 
 (defun hive-mcp-channel--bdecode-fallback (str)
-  "Decode bencode STR (fallback).\nReturns (decoded-value . consumed-bytes)."
-  (let* ((pos 0))
-    (cl-labels ((decode-one nil (let* ((c (aref str pos)))
+  "Decode the bencode frame at the start of STR (fallback).\nReturns (decoded-value . consumed-bytes).\nSignals `hive-mcp-channel-incomplete-frame' when STR is a valid prefix of a\nframe (more bytes may complete it), and `hive-mcp-channel-malformed-frame'\nwhen no further bytes can make it valid.  The error data is the offset."
+  (let* ((pos 0)
+        (n (length str)))
+    (cl-labels ((need-more nil (signal 'hive-mcp-channel-incomplete-frame (list pos))) (malformed nil (signal 'hive-mcp-channel-malformed-frame (list pos))) (peek-byte nil (when (>= pos n)
+    (need-more)) (aref str pos)) (decode-one nil (let* ((c (peek-byte)))
     (cond
   ((equal c 105) (progn
-  (cl-incf pos)
-  (let* ((end (cl-position 101 str :start pos)))
-    (prog1 (string-to-number (substring str pos end)) (setq pos (1+ end))))))
-  ((and (>= c 48) (<= c 57)) (let* ((colon (cl-position 58 str :start pos)))
-    (let* ((len (string-to-number (substring str pos colon))))
-    (setq pos (1+ colon))
-    (prog1 (substring str pos (+ pos len)) (cl-incf pos len)))))
+  (setq pos (1+ pos))
+  (let* ((end (cl-position 101 str :start pos))
+        (digits (substring str pos end)))
+    (unless (string-match-p "\\`-?[0-9]*\\'" digits)
+    (malformed))
+    (unless end
+    (need-more))
+    (unless (string-match-p "\\`-?[0-9]+\\'" digits)
+    (malformed))
+    (prog1 (string-to-number digits) (setq pos (1+ end))))))
+  ((and (>= c 48) (<= c 57)) (let* ((colon (cl-position 58 str :start pos))
+        (digits (substring str pos colon)))
+    (unless (string-match-p "\\`[0-9]+\\'" digits)
+    (malformed))
+    (unless colon
+    (need-more))
+    (let* ((start (1+ colon))
+        (end (+ start (string-to-number digits))))
+    (when (> end n)
+    (need-more))
+    (setq pos end)
+    (substring str start end))))
   ((equal c 108) (progn
-  (cl-incf pos)
+  (setq pos (1+ pos))
   (let* ((items nil))
-    (while (not (equal (aref str pos) 101))
+    (while (not (equal (peek-byte) 101))
     (push (decode-one) items))
-    (cl-incf pos)
+    (setq pos (1+ pos))
     (nreverse items))))
   ((equal c 100) (progn
-  (cl-incf pos)
+  (setq pos (1+ pos))
   (let* ((pairs nil))
-    (while (not (equal (aref str pos) 101))
-    (let* ((key (decode-one))
-        (val (decode-one)))
-    (push (cons key val) pairs)))
-    (cl-incf pos)
+    (while (not (equal (peek-byte) 101))
+    (let* ((key-pos pos)
+        (key (decode-one)))
+    (unless (stringp key)
+    (setq pos key-pos)
+    (malformed))
+    (push (cons key (decode-one)) pairs)))
+    (setq pos (1+ pos))
     (nreverse pairs))))
-  (t (error "Invalid bencode at pos %d" pos)))))) (cons (decode-one) pos))))
+  (t (malformed)))))) (cons (decode-one) pos))))
 
 (defun hive-mcp-channel--process-filter (_proc str)
   "Process filter for channel receiving STR.\n_PROC is the process (unused, required by Emacs process API)."
@@ -163,17 +205,17 @@
     )))
 
 (defun hive-mcp-channel--try-decode-message ()
-  "Try to decode a complete bencode message from buffer.\nReturns t if a message was decoded, nil otherwise."
-  (condition-case nil
+  "Try to decode a complete bencode message from buffer.\nReturns t if a message was decoded, nil otherwise.\nAn incomplete frame stays buffered until more bytes arrive.  A malformed\nframe cannot be resynchronised in bencode, so the whole buffer is dropped\nand decoding restarts with the next bytes received."
+  (condition-case err
     (let* ((start (point))
-        (str (buffer-substring (point) (point-max)))
-        (result (hive-mcp-channel--bdecode-fallback str))
-        (msg (car result))
-        (consumed (cdr result)))
-    (delete-region start (+ start consumed))
-    (hive-mcp-channel--dispatch msg)
+        (result (hive-mcp-channel--bdecode-fallback (buffer-substring-no-properties start (point-max)))))
+    (delete-region start (+ start (cdr result)))
+    (hive-mcp-channel--dispatch (car result))
     t)
-  (error nil)))
+  (hive-mcp-channel-incomplete-frame nil)
+  (error (message "hive-mcp-channel: dropped %d buffered bytes: %s" (buffer-size) (error-message-string err))
+      (erase-buffer)
+      nil)))
 
 (defun hive-mcp-channel--sentinel (_proc event)
   "Sentinel for channel handling EVENT.\n_PROC is the process (unused, required by Emacs process API)."
@@ -197,7 +239,7 @@
 (defun hive-mcp-channel--dispatch (msg)
   "Dispatch MSG to registered handlers."
   (let* ((type-str (or (cdr (assoc "type" msg)) (cdr (assoc 'type msg))))
-        (type (when type-str
+        (type (when (stringp type-str)
     (intern (concat ":" type-str)))))
     (when type
     (let* ((handlers (gethash type hive-mcp-channel--handlers)))
