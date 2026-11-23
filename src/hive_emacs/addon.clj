@@ -9,6 +9,7 @@
             [hive-emacs.bridge-loader :as bridge]
             [hive-emacs.client :as ec]
             [hive-emacs.daemon-store :as daemon-store]
+            [hive-emacs.liveness :as liveness]
             [hive-emacs.dsl.ext-hooks :as ext-hooks]
             [hive-emacs.dsl.multi-hooks :as multi-hooks]
             [hive-emacs.runtime-ports :as runtime-ports]
@@ -109,6 +110,18 @@
     :mem-available-fn (or (:mem-available-fn ports)
                           admission/read-mem-available)}))
 
+(defn- install-liveness!
+  "Arm the Emacs liveness gate (hive-emacs.liveness) in front of every
+   emacsclient call. The probe port is `:emacs/liveness-probe-fn` when the
+   config injects one, else the real emacsclient probe, unless the config
+   injects its own `:emacs/eval-fn` (a test boundary), in which case the gate
+   stays disarmed so nothing probes a live Emacs by omission."
+  [config]
+  (if-let [probe-fn (or (:emacs/liveness-probe-fn config)
+                        (when-not (:emacs/eval-fn config) ec/probe-emacs!))]
+    (liveness/install! {:probe-fn probe-fn})
+    (liveness/uninstall!)))
+
 (defn- ensure-elisp-loaded!
   [eval-fn]
   (try
@@ -188,6 +201,7 @@
                 eval-fn (eval-fn-of config)
                 _ (runtime-ports/configure! ports)
                 _ (configure-ram-gate! config ports)
+                _ (install-liveness! config)
                 _ (daemon-store/ensure-default-daemon!)
                 heartbeat-started?
                 (boolean
@@ -234,6 +248,7 @@
             {:success? true :errors [] :metadata metadata})
           (catch Exception e
             (admission/reset!)
+            (liveness/uninstall!)
             (runtime-ports/clear!)
             (let [message (ex-message e)]
               (reset! state {:lifecycle :error :errors [message]})
@@ -249,6 +264,7 @@
     (retract-spawn-block! (:runtime/ports @state))
     (attention/reset-upkeep!)
     (admission/reset!)
+    (liveness/uninstall!)
     (spawn/reset-watches!)
     (editor-port/unregister!)
     (editor-services/unregister!)

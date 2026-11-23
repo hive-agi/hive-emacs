@@ -9,6 +9,7 @@
             [hive-dsl.result :as result]
             [hive-emacs.attention :as attention]
             [hive-emacs.config :as config]
+            [hive-emacs.liveness :as liveness]
             [hive-emacs.runtime-ports :as ports]
             [hive-weave.guarded :as guarded]
             [hive-weave.pool :as weave-pool]
@@ -314,6 +315,49 @@
     (reset! transport f)
     previous))
 
+(def probe-elisp
+  "What the liveness probe evaluates: as cheap as `t`, and it answers the pid
+   plus the GC counters the breaker turns into a GC-thrash verdict."
+  "(list (emacs-pid) gc-elapsed gcs-done)")
+
+(defn probe-argv
+  "The probe's command line. emacsclient's own -w timeout makes a server that
+   accepts the socket but never reads (a hung or GC-bound main loop) fail in
+   TIMEOUT-MS (\"Server not responding; timed out after N seconds\") instead
+   of blocking. Pure."
+  [path socket timeout-ms]
+  (cond-> [path]
+    socket (conj "-s" socket)
+    true   (conj "-w" (str (max 1 (long (Math/ceil (/ timeout-ms 1000.0)))))
+                 "--eval" probe-elisp)))
+
+(defn probe-emacs!
+  "The production liveness probe port (a hive-emacs.liveness ProbeResult).
+   This namespace is the only one that runs emacsclient. The probe runs
+   through the installed transport on its own thread, not on the bounded eval
+   pool (which a hang may already have filled), and never through the gate it
+   feeds."
+  []
+  (let [timeout-ms liveness/probe-timeout-ms
+        argv (probe-argv *emacsclient-path* *emacs-socket-name* timeout-ms)
+        run (future (@transport argv))
+        answer (deref run (+ timeout-ms 1000) ::timeout)]
+    (cond
+      (= ::timeout answer)
+      (do (future-cancel run)
+          {:ok? false :timed-out? true
+           :error (format "emacsclient probe did not return within %d ms" (+ timeout-ms 1000))})
+
+      (zero? (:exit answer))
+      ;; Emacs answered: it is alive even when the GC counters do not parse.
+      (assoc (liveness/parse-probe-output (:out answer)) :ok? true)
+
+      :else
+      (let [err (str/trim (str (:err answer)))]
+        {:ok? false
+         :timed-out? (boolean (re-find #"(?i)timed out|not responding" err))
+         :error err}))))
+
 (defn- execute-emacsclient
   [code timeout-ms]
   (guarded/guarded-await!
@@ -336,8 +380,8 @@
     :name "emacsclient-eval"
     :alert! #(ports/emit! :emacs/execution %)}))
 
-(defn eval-elisp-with-timeout
-  "Execute elisp code with a timeout. Returns immediately if the operation
+(defn- eval-elisp-admitted
+  "Execute elisp code with a timeout, once the liveness gate admitted it. Returns immediately if the operation
    takes longer than timeout-ms milliseconds.
    Clamps timeout-ms to *max-timeout-ms* (30s) as a hard ceiling.
 
@@ -354,7 +398,6 @@
    Returns a map with :success, :result or :error keys.
    On timeout, returns {:success false :error \"Timeout...\" :timed-out true}
    On circuit-open, returns {:success false :error \"Circuit breaker open...\" :circuit-open true}"
-  ([code] (eval-elisp-with-timeout code *default-timeout-ms*))
   ([code timeout-ms]
    ;; === CIRCUIT BREAKER GUARD ===
    ;; This check is the PRIMARY fix for the GC death spiral.
@@ -444,6 +487,23 @@
                (when half-open?
                  (trip-breaker! (:error response) :probe-failure)))
              response)))))))
+
+(defn eval-elisp-with-timeout
+  "Execute elisp code with a timeout (see `eval-elisp-admitted`).
+
+   LIVENESS GATE: before anything else, hive-emacs.liveness decides. While its
+   last probe (cached 10 s) found Emacs not answering, the call is refused at
+   once with {:success false :emacs-unresponsive true :error <names the pid,
+   the cause, seconds since the last good probe and the fallback>}; no
+   emacsclient is started and no timeout is waited out."
+  ([code] (eval-elisp-with-timeout code *default-timeout-ms*))
+  ([code timeout-ms]
+   (if-let [refusal (liveness/admit)]
+     (assoc refusal :duration-ms 0)
+     (let [response (eval-elisp-admitted code timeout-ms)]
+       (when (:timed-out response)
+         (liveness/invalidate!))
+       response))))
 
 (defn eval-elisp
   "Execute elisp code in running Emacs and return the result.
