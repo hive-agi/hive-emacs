@@ -54,6 +54,7 @@ hive_mcp/addons/workflow_ui.cljel
 hive_mcp/ai_bridge.cljel
 hive_mcp/api.cljel
 hive_mcp/channel.cljel
+hive_mcp/channel_test.cljel
 hive_mcp/channel_ws.cljel
 hive_mcp/config.cljel
 hive_mcp/config_adopt_test.cljel
