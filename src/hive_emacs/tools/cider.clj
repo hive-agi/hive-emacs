@@ -149,6 +149,14 @@
   [session-name]
   (when-not (str/blank? session-name) session-name))
 
+(defn- named-session
+  "The session PARAMS name, or nil: session_name, then name (the spawn's word
+   for it), then session. Every spelling routes to that session; none of them
+   may be dropped, because a dropped name sends the eval to the default
+   connection."
+  [{:keys [session_name session] spawn-name :name}]
+  (or (session-arg session_name) (session-arg spawn-name) (session-arg session)))
+
 (defn- current-directory
   "The caller's working directory, from the injected runtime port. Nil when no
    host configured one — a bare REPL or test has no request context. The port
@@ -495,18 +503,19 @@
 
 (defn handle-eval
   "Evaluate Clojure code via CIDER. mode selects silent (default) or explicit;
-   session_name (or name, the spawn's word for it) routes to a named session
-   instead, refusing an unknown name."
-  [{:keys [mode session_name] spawn-name :name :as params}]
-  (if-let [session (or (session-arg session_name) (session-arg spawn-name))]
+   session_name (or name, the spawn's word for it, or session) routes to a
+   named session instead, refusing an unknown name."
+  [{:keys [mode] :as params}]
+  (if-let [session (named-session params)]
     (eval-in-named-session session params)
     (handle-eval-common params (or mode "silent"))))
 
 (defn handle-eval-session
   "The eval-session verb: evaluate in a NAMED session, given as session_name
-   or name. A missing name is refused; there is no default connection here."
-  [{:keys [session_name] spawn-name :name :as params}]
-  (if-let [session (or (session-arg session_name) (session-arg spawn-name))]
+   name or session. A missing name is refused; there is no default connection
+   here."
+  [params]
+  (if-let [session (named-session params)]
     (eval-in-named-session session params)
     (tool/mcp-error "Error: eval-session requires 'session_name' (or 'name') naming a spawned or connected session")))
 
@@ -914,12 +923,12 @@
 
 (defn- subdomain-handler
   "Strip the \"<subdomain> \" prefix off :command before calling INNER.
-   Session identity accepts either :name or :session_name throughout CIDER."
+   Session identity accepts :session_name, :name or :session throughout CIDER."
   [subdomain-name inner]
   (fn [params]
     (let [full   (str (:command params))
           prefix (str subdomain-name " ")
-          session (or (not-empty (:session_name params)) (not-empty (:name params)))]
+          session (named-session params)]
       (inner (cond-> (assoc params :command (if (str/starts-with? full prefix)
                                               (subs full (count prefix))
                                               full))
