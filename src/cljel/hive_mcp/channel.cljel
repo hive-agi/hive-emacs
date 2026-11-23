@@ -133,6 +133,14 @@ Allows other init to complete first."
 (defvar hive-mcp-channel--message-queue nil
   "Queue of messages pending send (when disconnected).")
 
+(defvar hive-mcp-channel-max-frame-bytes (* 16 1024 1024)
+  "Largest bencode frame, in bytes, the channel accepts (default 16 MiB).
+A string whose declared length exceeds it is malformed as soon as its length
+prefix is read, and an incomplete frame whose buffered bytes exceed it is
+malformed too.  Either way the receive buffer is dropped and decoding restarts
+with the next bytes received, so a huge or bogus length cannot make the buffer
+grow without bound or stall the frames behind it.")
+
 (defvar hive-mcp-channel--degraded-mode nil
   "Non-nil when in graceful degradation mode (server unavailable).
 In this mode, messages are queued silently without reconnect attempts.
@@ -222,6 +230,9 @@ when no further bytes can make it valid.  The error data is the offset."
         n (length str)]
     (cl-labels
         ((need-more ()
+           ;; A frame still incomplete past the size cap can never be accepted.
+           (when (> n hive-mcp-channel-max-frame-bytes)
+             (malformed))
            (signal 'hive-mcp-channel-incomplete-frame (list pos)))
          (malformed ()
            (signal 'hive-mcp-channel-malformed-frame (list pos)))
@@ -250,6 +261,9 @@ when no further bytes can make it valid.  The error data is the offset."
                (let [colon (cl-position 58 str :start pos)  ;; 58 = ?:
                      digits (substring str pos colon)]
                  (unless (string-match-p "\\`[0-9]+\\'" digits)
+                   (malformed))
+                 ;; Refuse an oversize declared length before waiting for it.
+                 (when (> (string-to-number digits) hive-mcp-channel-max-frame-bytes)
                    (malformed))
                  (unless colon
                    (need-more))
@@ -300,27 +314,41 @@ _PROC is the process (unused, required by Emacs process API)."
     (while (and (not (eobp))
                 (hive-mcp-channel--try-decode-message)))))
 
+(defn- dict-p [value]
+  "Non-nil when VALUE is a decoded bencode dict: an alist with string keys."
+  (and (proper-list-p value)
+       (cl-every (lambda (pair) (and (consp pair) (stringp (car pair))))
+                 value)))
+
 (defn- try-decode-message []
   "Try to decode a complete bencode message from buffer.
-Returns t if a message was decoded, nil otherwise.
+Returns t if a frame was consumed, nil otherwise.
 An incomplete frame stays buffered until more bytes arrive.  A malformed
 frame cannot be resynchronised in bencode, so the whole buffer is dropped
-and decoding restarts with the next bytes received."
-  (condition-case err
-      (let [start (point)
-            result (hive-mcp-channel--bdecode-fallback
-                    (buffer-substring-no-properties start (point-max)))]
-        ;; Delete consumed bytes from buffer
-        (delete-region start (+ start (cdr result)))
-        ;; Dispatch the message
-        (hive-mcp-channel--dispatch (car result))
-        t)
-    (hive-mcp-channel-incomplete-frame nil)
-    (error
-     (message "hive-mcp-channel: dropped %d buffered bytes: %s"
-              (buffer-size) (error-message-string err))
-     (erase-buffer)
-     nil)))
+and decoding restarts with the next bytes received.  A frame that decodes
+but is not a dict is consumed (its bytes only) and ignored.  A dispatch
+error costs only its own frame: the bytes of later frames stay buffered."
+  (let [start (point)
+        result (condition-case err
+                   (hive-mcp-channel--bdecode-fallback
+                    (buffer-substring-no-properties start (point-max)))
+                 (hive-mcp-channel-incomplete-frame nil)
+                 (hive-mcp-channel-malformed-frame
+                  (message "hive-mcp-channel: dropped %d buffered bytes: %s"
+                           (buffer-size) (error-message-string err))
+                  (erase-buffer)
+                  nil))]
+    (when result
+      ;; Consume this frame's bytes before dispatch, so nothing a handler does
+      ;; can make the next frame be read twice or lost.
+      (delete-region start (+ start (cdr result)))
+      (if (hive-mcp-channel--dict-p (car result))
+          (condition-case err
+              (hive-mcp-channel--dispatch (car result))
+            (error (message "hive-mcp-channel: dispatch error: %s"
+                            (error-message-string err))))
+        (message "hive-mcp-channel: ignored a frame that is not a dict"))
+      t)))
 
 (defn- sentinel [_proc event]
   "Sentinel for channel handling EVENT.

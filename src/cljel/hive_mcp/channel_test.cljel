@@ -86,6 +86,73 @@ host and port, never a local socket."
       (when (buffer-live-p hive-mcp-channel--buffer)
         (kill-buffer hive-mcp-channel--buffer)))))
 
+(ert-deftest hive-mcp-channel-test-non-dict-frame-then-valid-frame-in-one-read nil
+  "A frame that decodes but is not a dict is consumed and ignored; the valid
+frame behind it in the same read is still delivered."
+  (dolist (junk (list "i1e" "3:abc" "l1:ae" "le"))
+    (let [seen nil
+          hive-mcp-channel--handlers (make-hash-table :test 'eq)
+          hive-mcp-channel--buffer nil]
+      (unwind-protect
+          (do
+            (hive-mcp-channel-on :ping (lambda (msg) (push msg seen)))
+            (hive-mcp-channel--process-filter nil (elisp-concat junk "d4:type4:pinge"))
+            (should (equal (list (list (cons "type" "ping"))) seen))
+            (should (= 0 (buffer-size hive-mcp-channel--buffer))))
+        (when (buffer-live-p hive-mcp-channel--buffer)
+          (kill-buffer hive-mcp-channel--buffer))))))
+
+(ert-deftest hive-mcp-channel-test-oversize-declared-length-is-malformed nil
+  "A declared string length above `hive-mcp-channel-max-frame-bytes' is
+malformed at once, with or without its colon."
+  (dolist (frame (list "99999999999:" "99999999999" "d4:type99999999999:ping"))
+    (should-error (hive-mcp-channel--bdecode-fallback frame)
+                  :type 'hive-mcp-channel-malformed-frame)))
+
+(ert-deftest hive-mcp-channel-test-oversize-frame-then-valid-frame-delivers nil
+  "An oversize declared length drops the buffer instead of growing it, and a
+valid frame in a later read is delivered.  An incomplete frame whose buffered
+size passes the limit is dropped too."
+  (let [seen nil
+        hive-mcp-channel--handlers (make-hash-table :test 'eq)
+        hive-mcp-channel--buffer nil]
+    (unwind-protect
+        (do
+          (hive-mcp-channel-on :ping (lambda (msg) (push msg seen)))
+          (hive-mcp-channel--process-filter nil "99999999999:abcdef")
+          (should (= 0 (buffer-size hive-mcp-channel--buffer)))
+          (hive-mcp-channel--process-filter nil "d4:type4:pinge")
+          (should (equal (list (list (cons "type" "ping"))) seen))
+          (should (= 0 (buffer-size hive-mcp-channel--buffer)))
+          (let [hive-mcp-channel-max-frame-bytes 32]
+            (hive-mcp-channel--process-filter nil "l")
+            (dotimes (_ 20)
+              (hive-mcp-channel--process-filter nil "4:pad!")
+              (should (<= (buffer-size hive-mcp-channel--buffer) 32))))
+          (hive-mcp-channel--process-filter nil "d4:type4:pinge")
+          (should (= 2 (length seen)))
+          (should (= 0 (buffer-size hive-mcp-channel--buffer))))
+      (when (buffer-live-p hive-mcp-channel--buffer)
+        (kill-buffer hive-mcp-channel--buffer)))))
+
+(ert-deftest hive-mcp-channel-test-handler-error-keeps-later-frame nil
+  "A handler that signals on frame 1 does not cost frame 2 of the same read."
+  (let [seen nil
+        hive-mcp-channel--handlers (make-hash-table :test 'eq)
+        hive-mcp-channel--buffer nil]
+    (unwind-protect
+        (do
+          (hive-mcp-channel-on :ping (lambda (msg)
+                                       (push msg seen)
+                                       (when (= 1 (length seen))
+                                         (error "handler boom"))))
+          (hive-mcp-channel--process-filter
+           nil "d4:type4:ping1:ni1eed4:type4:ping1:ni2ee")
+          (should (equal (list 2 1) (mapcar (lambda (m) (cdr (assoc "n" m))) seen)))
+          (should (= 0 (buffer-size hive-mcp-channel--buffer))))
+      (when (buffer-live-p hive-mcp-channel--buffer)
+        (kill-buffer hive-mcp-channel--buffer)))))
+
 (ert-deftest hive-mcp-channel-test-split-frame-waits-then-delivers nil
   "A frame split across two reads is delivered once, after the second read;
 two frames in one read are both delivered."
