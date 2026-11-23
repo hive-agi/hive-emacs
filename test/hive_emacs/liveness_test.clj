@@ -138,6 +138,32 @@
       (is (= :closed (:state (liveness/status)))))
     (is (= [:opened :closed] @transitions))))
 
+(deftest one-shout-per-transition-never-per-call
+  (let [answer (atom good)
+        now (atom t0)
+        shouts (atom [])]
+    (client/set-transport! (refuse-transport (atom [])))
+    (liveness/install! {:probe-fn (fn [] @answer)
+                        :now-fn #(deref now)
+                        :on-transition (liveness/shouting-transition
+                                        (fn [event-type message]
+                                          (swap! shouts conj [event-type message]))
+                                        #(deref now))})
+    (client/eval-elisp-with-timeout "t" 1000)
+    (reset! answer hung)
+    ;; Three probe windows of hang, many refused calls in each.
+    (dotimes [_ 3]
+      (swap! now + 10000)
+      (dotimes [_ 4] (client/eval-elisp-with-timeout "t" 1000)))
+    (reset! answer good)
+    (swap! now + 10000)
+    (dotimes [_ 4] (client/eval-elisp-with-timeout "t" 1000))
+    (is (= ["blocked" "progress"] (map first @shouts)))
+    (is (str/includes? (second (first @shouts)) "BREAKER OPEN"))
+    (is (str/includes? (second (first @shouts)) "pid 49094"))
+    (is (str/includes? (second (second @shouts)) "BREAKER CLOSED"))
+    (is (str/includes? (second (second @shouts)) "after 30 s"))))
+
 (deftest a-throwing-probe-counts-as-a-failed-probe
   (liveness/install! {:probe-fn #(throw (ex-info "boom" {}))
                       :now-fn (constantly t0)

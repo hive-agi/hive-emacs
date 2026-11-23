@@ -100,6 +100,7 @@
                       :state :closed
                       :failures 0
                       :opened-at nil
+                      :opened-at-before-close (:opened-at st)
                       :cause nil
                       :last-ok (assoc probe :at now)
                       :gc-fraction (or frac (when (= (:pid probe) (get-in st [:last-ok :pid]))
@@ -171,11 +172,38 @@
 
 (defonce ^:private probe-lock (java.util.concurrent.locks.ReentrantLock.))
 
+(defn transition-shout
+  "The one hivemind shout for TRANSITION (:opened | :closed) of ST at NOW:
+   {:event-type \"blocked\"|\"progress\" :message text}. Pure."
+  [transition st now]
+  (case transition
+    :opened {:event-type "blocked"
+             :message (str "EMACS LIVENESS BREAKER OPEN: " (refusal-message st now))}
+    :closed {:event-type "progress"
+             :message (let [down-s (when-let [at (:opened-at-before-close st)]
+                                     (quot (- now at) 1000))]
+                        (str "EMACS LIVENESS BREAKER CLOSED: Emacs (pid "
+                             (or (get-in st [:last-ok :pid]) "unknown")
+                             ") answers the liveness probe again"
+                             (when down-s (str " after " down-s " s"))
+                             "; emacsclient-backed verbs (cider spawn, eval, emacs ...) are admitted again."))}))
+
 (defn- log-transition
   [transition st]
   (if (= :opened transition)
     (log/warn "Emacs liveness breaker OPEN" (verdict st (System/currentTimeMillis)))
     (log/info "Emacs liveness breaker closed" (verdict st (System/currentTimeMillis)))))
+
+(defn shouting-transition
+  "An on-transition hook that logs TRANSITION and sends its one shout through
+   SHOUT-FN, (fn [event-type message]). It is called only on the two state
+   edges, so a hang costs one shout on open and one on close, never one per
+   refused call."
+  [shout-fn now-fn]
+  (fn [transition st]
+    (log-transition transition st)
+    (let [{:keys [event-type message]} (transition-shout transition st (now-fn))]
+      (shout-fn event-type message))))
 
 (defn install!
   "Arm the gate. PROBE-FN: (fn [] ProbeResult), the only way the gate reaches
