@@ -119,7 +119,14 @@
   [config]
   (if-let [probe-fn (or (:emacs/liveness-probe-fn config)
                         (when-not (:emacs/eval-fn config) ec/probe-emacs!))]
-    (liveness/install! {:probe-fn probe-fn})
+    (liveness/install!
+     {:probe-fn probe-fn
+      ;; One hivemind shout on open and one on close, through the host's
+      ;; tool-invocation port; never per refused call.
+      :on-transition (liveness/shouting-transition
+                      (fn [event-type message]
+                        (runtime-ports/shout! "hive-emacs" event-type message))
+                      #(System/currentTimeMillis))})
     (liveness/uninstall!)))
 
 (defn- ensure-elisp-loaded!
