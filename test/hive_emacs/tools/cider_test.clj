@@ -363,6 +363,34 @@
     (is (= :cider/unknown-session (:error r)))
     (is (str/includes? (:message r) "(none)"))))
 
+(deftest named-session-listing-honours-the-callers-bound
+  (let [seen (atom [])
+        eval-fn (fn
+                  ([code] (swap! seen conj [code nil]) {:success true :result "\"[{\\\"name\\\":\\\"crm\\\"}]\""})
+                  ([code ms]
+                   (swap! seen conj [code ms])
+                   (if (str/includes? code "list-sessions")
+                     {:success true :result "[{\"name\":\"crm\"}]"}
+                     {:success true :result "\"3\""})))]
+    (binding [cider/*eval-fn* eval-fn]
+      (cider/handle-eval-session {:session_name "crm" :code "(+ 1 2)" :timeout_ms 15000})
+      (let [[_ listing-ms] (first (filter #(str/includes? (first %) "list-sessions") @seen))]
+        (is (= 15000 listing-ms) "timeout_ms bounds the registry listing, not the 5 s default"))))
+  (is (= 15000 (cider/listing-timeout-ms {:timeout_ms 15000})))
+  (is (= 30000 (cider/listing-timeout-ms {:timeout 30})))
+  (is (= 15000 (cider/listing-timeout-ms {:timeout 30 :timeout_ms "15000"})))
+  (is (nil? (cider/listing-timeout-ms {}))))
+
+(deftest named-session-listing-timeout-names-the-step
+  (let [eval-fn (fn
+                  ([_] {:success false :error "Emacsclient call timed out after 5000ms" :timed-out true})
+                  ([_ _] {:success false :error "Emacsclient call timed out after 5000ms" :timed-out true}))]
+    (binding [cider/*eval-fn* eval-fn]
+      (let [r (cider/handle-eval-session {:session_name "crm" :code "(+ 1 2)"})
+            text (pr-str r)]
+        (is (str/includes? text "Listing the CIDER session registry"))
+        (is (str/includes? text "the eval was not sent"))))))
+
 (deftest eval-auto-spawns-when-no-session
   (let [sessions-json "[]"
         {:keys [calls eval-fn]}
