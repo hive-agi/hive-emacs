@@ -178,12 +178,15 @@
        (str/includes? (str/lower-case error) "cider not connected")))
 
 (defn- list-sessions*
-  "List CIDER sessions. Returns Result with session vector."
-  []
-  (result/let-ok [raw (elisp->result (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-list-sessions))]
-                 (result/try-effect* :cider/parse-sessions
-                                     (let [parsed (json/read-str raw :key-fn keyword)]
-                                       (if (vector? parsed) parsed (vec parsed))))))
+  "List CIDER sessions. Returns Result with session vector. TIMEOUT-MS bounds
+   the emacsclient call; nil means the client default."
+  ([] (list-sessions* nil))
+  ([timeout-ms]
+   (result/let-ok [raw (elisp->result (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-list-sessions)
+                                      timeout-ms)]
+                  (result/try-effect* :cider/parse-sessions
+                                      (let [parsed (json/read-str raw :key-fn keyword)]
+                                        (if (vector? parsed) parsed (vec parsed)))))))
 
 (defn- find-connected-session
   "Find a connected session. When project-dir is supplied, only matches
@@ -478,23 +481,51 @@
 
 (defn- in-named-session
   "Result of (F session-name) once the registry confirms SESSION-NAME resolves;
-   :cider/unknown-session otherwise, with F never called."
-  [session-name f]
-  (result/let-ok [sessions (list-sessions*)
-                  session (resolve-named-session sessions session-name)]
-                 (f session)))
+   :cider/unknown-session otherwise, with F never called.
+
+   The registry listing runs under the caller's bound TIMEOUT-MS (nil: the
+   client default), not the 5 s client default: friction 20261119234502
+   saw an eval given timeout_ms 15000 answer \"timed out after 5000ms\"
+   from this listing. A listing that times out says it was the listing, so
+   the caller knows the eval itself was never sent."
+  ([session-name f] (in-named-session session-name nil f))
+  ([session-name timeout-ms f]
+   (let [sessions (list-sessions* timeout-ms)]
+     (if (and (result/err? sessions) (:timed-out sessions))
+       (update sessions :message
+               #(str "Listing the CIDER session registry (to resolve '" session-name
+                     "') timed out; the eval was not sent. " %))
+       (result/let-ok [sessions sessions
+                       session (resolve-named-session sessions session-name)]
+                      (f session))))))
+
+(defn listing-timeout-ms
+  "The bound for the registry listing a named-session eval runs first: the
+   caller's timeout_ms, else its timeout (seconds), else nil (the client
+   default). Pure."
+  [{:keys [timeout timeout_ms]}]
+  (let [ms (cond-> timeout_ms (string? timeout_ms) parse-long)
+        s  (cond-> timeout (string? timeout) parse-long)]
+    (cond
+      (and (number? ms) (pos? ms)) (long ms)
+      (and (number? s) (pos? s))   (long (* 1000 s))
+      :else nil)))
 
 (defn- eval-in-named-session
   "Evaluate CODE in the session called SESSION-NAME and nowhere else. An
-   unknown name is refused before any eval is sent."
-  [session-name {:keys [code timeout]}]
-  (let [ec-timeout-ms (+ (* (or timeout 60) 1000) 2000)]
+   unknown name is refused before any eval is sent. The registry listing
+   that resolves the name honours the caller's bound (`listing-timeout-ms`)."
+  [session-name {:keys [code timeout] :as params}]
+  (let [ec-timeout-ms (+ (* (or timeout 60) 1000) 2000)
+        listing-ms (listing-timeout-ms params)]
     (result->mcp
      (try-result :cider/eval-failed
                  (fn []
-                   (binding [ec/*max-timeout-ms* (max ec/*max-timeout-ms* ec-timeout-ms)]
+                   (binding [ec/*max-timeout-ms* (max ec/*max-timeout-ms* ec-timeout-ms
+                                                      (or listing-ms 0))]
                      (in-named-session
                       session-name
+                      listing-ms
                       (fn [session]
                         (elisp->result
                           (el/require-and-call-text
