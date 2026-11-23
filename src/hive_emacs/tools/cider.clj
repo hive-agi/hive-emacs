@@ -12,6 +12,7 @@
             [clojure.string :as str]
             [hive-dsl.result :as result]
             [hive-emacs.client :as ec]
+            [hive-emacs.liveness :as liveness]
             [hive-emacs.elisp :as el]
             [hive-emacs.tools.support :as tool]
             [taoensso.timbre :as log]
@@ -856,6 +857,18 @@
                          (result/ok result)
                          (result/err :cider/elisp-failed {:message (str error)})))))))))
 
+(defn handle-liveness
+  "The Emacs liveness verdict as data: breaker state, pid, cause (gc-thrash,
+   busy, down), share of wall time in GC between the last good probes and
+   seconds since the last good probe. Probes first when the cached result
+   is older than 10 s; never waits more than the 3 s probe timeout."
+  [_]
+  (liveness/check!)
+  (tool/mcp-success
+   (json/write-str (or (liveness/status)
+                       {:state "disarmed"
+                        :note "hive-emacs initialized without the liveness gate"}))))
+
 (defn handle-reap
   "Reap only addon-owned JVM sessions whose project-dir no longer exists."
   [_]
@@ -912,6 +925,7 @@
     :inspect   (via-backend :inspect (backend-only :inspect))
     :restart   (via-backend :restart (backend-only :restart))}
    {:spawn        handle-spawn
+    :liveness     handle-liveness
     :reap         handle-reap
     :connect      handle-connect
     :sessions     handle-sessions
