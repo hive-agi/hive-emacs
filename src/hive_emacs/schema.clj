@@ -46,7 +46,9 @@
    [:terminal-dispatch-fn [:maybe ifn?]]
    [:resolve-agent-context-fn [:maybe ifn?]]
    [:current-dir-fn [:maybe ifn?]]
-   [:capability-fn [:maybe ifn?]]])
+   [:capability-fn [:maybe ifn?]]
+   [:mem-available-fn [:maybe ifn?]]
+   [:tools-invoke-fn [:maybe ifn?]]])
 
 (def DaemonStatus
   [:enum :active :stale :error :terminated])
@@ -139,7 +141,9 @@
    [:heartbeat-ms [:maybe nat-int?]]
    [:reason {:optional true} :string]
    [:agent-id {:optional true} :string]
-   [:project-dir {:optional true} :string]])
+   [:project-dir {:optional true} :string]
+   [:owned? {:optional true} :boolean]
+   [:owner-id {:optional true} :string]])
 
 (def CiderSpawnWatch
   "A spawn an agent asked for and has not been told the outcome of.

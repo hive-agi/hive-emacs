@@ -9,6 +9,7 @@
             [hive-emacs.bridge-loader :as bridge]
             [hive-emacs.client :as ec]
             [hive-emacs.daemon-store :as daemon-store]
+            [hive-emacs.liveness :as liveness]
             [hive-emacs.dsl.ext-hooks :as ext-hooks]
             [hive-emacs.dsl.multi-hooks :as multi-hooks]
             [hive-emacs.runtime-ports :as runtime-ports]
@@ -26,7 +27,8 @@
             [hive-emacs.lsp-bridge :as lsp-bridge]
             [hive-vessel.core :as vessel-core]
             [hive-emacs.daemon-liveness :as daemon-liveness]
-            [hive-emacs.claude-terminal :as claude-terminal]))
+            [hive-emacs.claude-terminal :as claude-terminal]
+            [hive-emacs.cider.admission :as admission]))
 
 ;; Copyright (C) 2024-2026 hive-agi contributors
 ;;
@@ -46,7 +48,9 @@
    :emacs/terminal-dispatch-fn :terminal-dispatch-fn
    :emacs/resolve-agent-context-fn :resolve-agent-context-fn
    :emacs/current-dir-fn :current-dir-fn
-   :emacs/capability-fn :capability-fn})
+   :emacs/capability-fn :capability-fn
+   :emacs/mem-available-fn :mem-available-fn
+   :tools/invoke :tools-invoke-fn})
 
 (defn- flatten-config
   [seed runtime-config]
@@ -97,6 +101,33 @@
    so a test cannot reach a live daemon by omission."
   [config]
   (or (:emacs/eval-fn config) ec/eval-elisp-with-timeout))
+
+(defn- configure-ram-gate!
+  [config ports]
+  (admission/configure!
+   {:min-ram-gb (or (:cider/spawn-min-ram-gb config)
+                    admission/default-minimum-gb)
+    :mem-available-fn (or (:mem-available-fn ports)
+                          admission/read-mem-available)}))
+
+(defn- install-liveness!
+  "Arm the Emacs liveness gate (hive-emacs.liveness) in front of every
+   emacsclient call. The probe port is `:emacs/liveness-probe-fn` when the
+   config injects one, else the real emacsclient probe, unless the config
+   injects its own `:emacs/eval-fn` (a test boundary), in which case the gate
+   stays disarmed so nothing probes a live Emacs by omission."
+  [config]
+  (if-let [probe-fn (or (:emacs/liveness-probe-fn config)
+                        (when-not (:emacs/eval-fn config) ec/probe-emacs!))]
+    (liveness/install!
+     {:probe-fn probe-fn
+      ;; One hivemind shout on open and one on close, through the host's
+      ;; tool-invocation port; never per refused call.
+      :on-transition (liveness/shouting-transition
+                      (fn [event-type message]
+                        (runtime-ports/shout! "hive-emacs" event-type message))
+                      #(System/currentTimeMillis))})
+    (liveness/uninstall!)))
 
 (defn- ensure-elisp-loaded!
   [eval-fn]
@@ -176,6 +207,8 @@
           (let [ports (port-config config)
                 eval-fn (eval-fn-of config)
                 _ (runtime-ports/configure! ports)
+                _ (configure-ram-gate! config ports)
+                _ (install-liveness! config)
                 _ (daemon-store/ensure-default-daemon!)
                 heartbeat-started?
                 (boolean
@@ -221,6 +254,8 @@
             (log/info "hive-emacs initialized" metadata)
             {:success? true :errors [] :metadata metadata})
           (catch Exception e
+            (admission/reset!)
+            (liveness/uninstall!)
             (runtime-ports/clear!)
             (let [message (ex-message e)]
               (reset! state {:lifecycle :error :errors [message]})
@@ -235,6 +270,8 @@
     (retract-attention-block! (:runtime/ports @state))
     (retract-spawn-block! (:runtime/ports @state))
     (attention/reset-upkeep!)
+    (admission/reset!)
+    (liveness/uninstall!)
     (spawn/reset-watches!)
     (editor-port/unregister!)
     (editor-services/unregister!)

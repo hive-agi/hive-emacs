@@ -318,7 +318,7 @@
     (mapconcat #'identity tail " | "))))))
 
 (defun hive-mcp-cider-connection-watch-spawn-process (name process &optional on-port-in-use)
-  "Fail session NAME fast if PROCESS dies before its nREPL port opens.\n\nWithout this the retry timer polls a port that nobody will ever open and\nreports a 30-attempt timeout, hiding the real cause — a bad classpath, a\nmissing alias, or an alias whose :main-opts hijacked the -m. The sentinel\ncancels the timer and records 'error with the process's own last output as\n:reason. A session that already settled 'connected is left alone.\n\nON-PORT-IN-USE, when given, is called with no arguments instead of recording\n'error when the process died because its port was already bound (see\n`hive-mcp-cider-connection-port-in-use-p'): the caller respawns elsewhere."
+  "Fail session NAME fast if PROCESS dies before its nREPL port opens.\n\nWithout this the retry timer polls a port that nobody will ever open and\nreports a 30-attempt timeout, hiding the real cause — a bad classpath, a\nmissing alias, or an alias whose :main-opts hijacked the -m. The sentinel\ncancels the timer and records 'error with the process's own last output as\n:reason, and releases the session's port claim: a dead nREPL binds nothing.\nA session that already settled 'connected is left alone.\n\nON-PORT-IN-USE, when given, is called with no arguments instead of recording\n'error when the process died because its port was already bound (see\n`hive-mcp-cider-connection-port-in-use-p'): the caller respawns elsewhere."
   (when (processp process)
     (set-process-sentinel process (lambda (proc event)
     (when (not (process-live-p proc))
@@ -331,6 +331,7 @@
   (message "hive-mcp-cider: Session '%s' lost its port to another process; retrying on another port" name)
   (funcall on-port-in-use)) (progn
   (hive-mcp-cider-sessions-update-props name :status 'error :reason reason)
+  (hive-mcp-cider-sessions-release-port (hive-mcp-cider-sessions-get-prop name :port) name)
   (message "hive-mcp-cider: Session '%s' spawn failed — %s" name reason)))))))))))
 
 (defun hive-mcp-cider-connection-try-connect-session (name)

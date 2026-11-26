@@ -42,6 +42,25 @@
   :group 'hive-mcp
   :type 'boolean)
 
+(defcustom hive-mcp-gc-cons-floor (* 32 1024 1024)
+  "Smallest `gcmh-low-cons-threshold' and `gc-cons-threshold' hive-mcp leaves.\nhive-mcp raises either one that is below this when it loads, and again\nwhen gcmh loads. It never lowers a larger value. nil disables the floor.\n\nWhy, measured 2026-11-20: gcmh had left both thresholds at 800 KB. Decoding\nthe hive stream allocates about 2.3 MB/s, so Emacs ran a full GC (about\n0.33 s) roughly three times per second, 95% of wall time. The main loop read\nnothing from its sockets and every cider spawn waited 94 s. A 32 MB low\nthreshold made Emacs healthy again. gcmh returns to the LOW threshold on\nevery idle, so that is the one that matters."
+  :group 'hive-mcp
+  :type '(choice (const :tag "Off" nil) integer))
+
+(defun hive-mcp-apply-gc-floor ()
+  "Raise `gcmh-low-cons-threshold' and `gc-cons-threshold' to\n`hive-mcp-gc-cons-floor' when below it. Returns the floor applied, or nil."
+  (when (integerp hive-mcp-gc-cons-floor)
+    (when (and (boundp 'gcmh-low-cons-threshold) (< gcmh-low-cons-threshold hive-mcp-gc-cons-floor))
+    (setq gcmh-low-cons-threshold hive-mcp-gc-cons-floor))
+    (when (< gc-cons-threshold hive-mcp-gc-cons-floor)
+    (setq gc-cons-threshold hive-mcp-gc-cons-floor))
+    hive-mcp-gc-cons-floor))
+
+(hive-mcp-apply-gc-floor)
+
+(with-eval-after-load 'gcmh
+  (hive-mcp-apply-gc-floor))
+
 (require 'hive-mcp-memory)
 
 (require 'hive-mcp-kanban)

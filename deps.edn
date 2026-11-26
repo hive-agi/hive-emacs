@@ -20,10 +20,10 @@
 
         ;; Host-neutral IAddon contract. hive-mcp consumes the same protocol;
         ;; hive-emacs never needs to compile against the host registry.
-        io.github.hive-agi/hive-addon {:mvn/version "1.1.10"}
+        io.github.hive-agi/hive-addon {:mvn/version "1.1.13"}
 
         ;; SPI ports (ICiderPort) — the contract the addon reifies.
-        io.github.hive-agi/hive-spi {:mvn/version "1.4.15"}
+        io.github.hive-agi/hive-spi {:mvn/version "1.4.18"}
 
         ;; The 0.1.5 desktop backend source is public; the Gitea Maven
         ;; artifact requires credentials unavailable to public PR builds.
@@ -63,5 +63,5 @@
    :main-opts ["-m" "cognitect.test-runner" "-d" "test-ansatz"]}
 
   :build
-  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.3.1"}}
+  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.3.3"}}
    :ns-default hive-build.api}}}

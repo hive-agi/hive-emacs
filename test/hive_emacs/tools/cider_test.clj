@@ -263,6 +263,24 @@
       (is (true? (:isError (cider/handle-eval {:code "1" :name "ghost"}))))
       (is (= ["spawned"] @received) "only the named session received an eval"))))
 
+(deftest eval-routes-the-session-param-to-that-session
+  ;; Witness for friction 20261119013041-350cf1d5: `cider eval session=<spawned>`
+  ;; dropped the name and evaluated in the default connection, the live host JVM.
+  (let [{:keys [received eval-fn]} (registry-stub ["coord" "spawned"])
+        eval-session (get cider/handlers :eval-session)]
+    (binding [cider/*eval-fn* eval-fn]
+      (is (= "ran-in:spawned" (:text (cider/handle-eval {:code "1" :session "spawned"}))))
+      (is (= "ran-in:spawned" (:text (eval-session {:code "1" :session "spawned"}))))
+      (is (= "ran-in:spawned"
+             (:text (cider/handle-cider-subdomain {:command "cider eval" :code "1" :session "spawned"}))))
+      (let [resp (cider/handle-eval {:code "1" :session "ghost"})]
+        (is (true? (:isError resp)))
+        (is (str/includes? (:text resp) "Unknown CIDER session 'ghost'")))
+      (is (true? (:isError (cider/handle-cider-subdomain
+                            {:command "cider doc" :symbol "map" :session "ghost"}))))
+      (is (= ["spawned" "spawned" "spawned"] @received)
+          "only the named session received an eval; never the default connection"))))
+
 (deftest eval-session-verb-without-a-name-is-refused
   (let [{:keys [calls eval-fn]} (registry-stub ["coord"])]
     (binding [cider/*eval-fn* eval-fn]
@@ -344,6 +362,34 @@
   (let [r (cider/resolve-named-session [] "x")]
     (is (= :cider/unknown-session (:error r)))
     (is (str/includes? (:message r) "(none)"))))
+
+(deftest named-session-listing-honours-the-callers-bound
+  (let [seen (atom [])
+        eval-fn (fn
+                  ([code] (swap! seen conj [code nil]) {:success true :result "\"[{\\\"name\\\":\\\"crm\\\"}]\""})
+                  ([code ms]
+                   (swap! seen conj [code ms])
+                   (if (str/includes? code "list-sessions")
+                     {:success true :result "[{\"name\":\"crm\"}]"}
+                     {:success true :result "\"3\""})))]
+    (binding [cider/*eval-fn* eval-fn]
+      (cider/handle-eval-session {:session_name "crm" :code "(+ 1 2)" :timeout_ms 15000})
+      (let [[_ listing-ms] (first (filter #(str/includes? (first %) "list-sessions") @seen))]
+        (is (= 15000 listing-ms) "timeout_ms bounds the registry listing, not the 5 s default"))))
+  (is (= 15000 (cider/listing-timeout-ms {:timeout_ms 15000})))
+  (is (= 30000 (cider/listing-timeout-ms {:timeout 30})))
+  (is (= 15000 (cider/listing-timeout-ms {:timeout 30 :timeout_ms "15000"})))
+  (is (nil? (cider/listing-timeout-ms {}))))
+
+(deftest named-session-listing-timeout-names-the-step
+  (let [eval-fn (fn
+                  ([_] {:success false :error "Emacsclient call timed out after 5000ms" :timed-out true})
+                  ([_ _] {:success false :error "Emacsclient call timed out after 5000ms" :timed-out true}))]
+    (binding [cider/*eval-fn* eval-fn]
+      (let [r (cider/handle-eval-session {:session_name "crm" :code "(+ 1 2)"})
+            text (pr-str r)]
+        (is (str/includes? text "Listing the CIDER session registry"))
+        (is (str/includes? text "the eval was not sent"))))))
 
 (deftest eval-auto-spawns-when-no-session
   (let [sessions-json "[]"

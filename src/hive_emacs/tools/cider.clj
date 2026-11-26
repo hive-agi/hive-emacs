@@ -12,6 +12,7 @@
             [clojure.string :as str]
             [hive-dsl.result :as result]
             [hive-emacs.client :as ec]
+            [hive-emacs.liveness :as liveness]
             [hive-emacs.elisp :as el]
             [hive-emacs.tools.support :as tool]
             [taoensso.timbre :as log]
@@ -28,7 +29,8 @@
             [hive-emacs.cider.eval-port :as eval-port]
             [hive-emacs.cider.heap :as heap]
             [hive-emacs.cider.heap-cap :as heap-cap]
-            [hive-emacs.cider.direct-eval :as direct-eval]))
+            [hive-emacs.cider.direct-eval :as direct-eval]
+            [hive-emacs.cider.admission :as admission]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: MIT
@@ -107,7 +109,9 @@
   [r]
   (if (result/ok? r)
     (tool/mcp-success (:ok r))
-    (tool/mcp-error (str "Error: " (or (:message r) (:error r))))))
+    (cond-> (tool/mcp-error (str "Error: " (or (:message r) (:error r))))
+      (keyword? (:error r)) (assoc :error (:error r))
+      (= :cider/insufficient-memory (:error r)) (merge (dissoc r :message :error)))))
 
 (defn with-waiting-prompt
   "Attach an impeding Emacs prompt, if any, to a spawn Result.
@@ -146,6 +150,14 @@
   [session-name]
   (when-not (str/blank? session-name) session-name))
 
+(defn- named-session
+  "The session PARAMS name, or nil: session_name, then name (the spawn's word
+   for it), then session. Every spelling routes to that session; none of them
+   may be dropped, because a dropped name sends the eval to the default
+   connection."
+  [{:keys [session_name session] spawn-name :name}]
+  (or (session-arg session_name) (session-arg spawn-name) (session-arg session)))
+
 (defn- current-directory
   "The caller's working directory, from the injected runtime port. Nil when no
    host configured one — a bare REPL or test has no request context. The port
@@ -166,12 +178,15 @@
        (str/includes? (str/lower-case error) "cider not connected")))
 
 (defn- list-sessions*
-  "List CIDER sessions. Returns Result with session vector."
-  []
-  (result/let-ok [raw (elisp->result (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-list-sessions))]
-                 (result/try-effect* :cider/parse-sessions
-                                     (let [parsed (json/read-str raw :key-fn keyword)]
-                                       (if (vector? parsed) parsed (vec parsed))))))
+  "List CIDER sessions. Returns Result with session vector. TIMEOUT-MS bounds
+   the emacsclient call; nil means the client default."
+  ([] (list-sessions* nil))
+  ([timeout-ms]
+   (result/let-ok [raw (elisp->result (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-list-sessions)
+                                      timeout-ms)]
+                  (result/try-effect* :cider/parse-sessions
+                                      (let [parsed (json/read-str raw :key-fn keyword)]
+                                        (if (vector? parsed) parsed (vec parsed)))))))
 
 (defn- find-connected-session
   "Find a connected session. When project-dir is supplied, only matches
@@ -186,6 +201,58 @@
                             (= target (norm (:project-dir s)))))
                (:name s)))
            sessions))))
+
+(defn- caller-id
+  [params]
+  (or (:_caller_id params) (:agent_id params)))
+
+(defn- ram-gate-refusal
+  "An admission Result before any spawn, or nil. The uninitialized addon
+   keeps its old behavior and needs no extra Emacs call in unit tests."
+  [project-dir params]
+  (when (admission/enabled?)
+    (let [sessions (list-sessions*)]
+      (when (result/err? sessions)
+        (log/warn "cider RAM gate could not list connected sessions"
+                  {:error (:error sessions)}))
+      (admission/check {:caller-id (caller-id params)
+                        :project-dir (admission/normalize-dir project-dir)
+                        :sessions (when (result/ok? sessions) (:ok sessions))}))))
+
+(def ^:dynamic *reap-fn*
+  "Injected orphan-reaper port; tests observe calls without reaching Emacs."
+  nil)
+
+(defn- reap-orphaned!
+  []
+  (try
+    (if *reap-fn*
+      (*reap-fn*)
+      (let [sessions (list-sessions*)]
+        (admission/reap!
+         {:sessions-fn #(if (result/ok? sessions) (:ok sessions) [])
+          :stop-fn (fn [session]
+                     (let [r (elisp->result
+                              (el/require-and-call 'hive-mcp-cider
+                                                   'hive-mcp-cider-kill-session
+                                                   (:name session)))]
+                       (result/ok? r)))
+          :shout-fn (fn [message]
+                      (log/info message)
+                      (rt-ports/shout! "hive-emacs" "progress" message))
+          :directory-exists-fn spawn-dir/*directory?*})))
+    (catch Exception e
+      (log/warn "cider orphan reaper failed; spawn continues"
+                {:error (ex-message e)}))))
+
+(defn- ensure-ready-to-spawn
+  "Reap orphaned owned sessions, then answer the RAM gate's refusal or nil.
+   A bare, uninitialized addon (no gate installed) skips both, so it makes
+   no extra Emacs call."
+  [project-dir params]
+  (when (or *reap-fn* (admission/enabled?))
+    (reap-orphaned!))
+  (ram-gate-refusal project-dir params))
 
 (defn- spawn-session-internal
   "Auto-connect spawn: name (+ optional project-dir), heap capped at 2g so an
@@ -237,39 +304,33 @@
                 (recur (inc attempt)))))))))
 
 (defn- spawn-and-wait*
-  "Spawn a session and wait for readiness. Returns Result with session name.
-   Waits up to `session-ready-max-attempts` polls; a session that is still
-   coming up when the budget runs out yields :cider/session-timeout, not a
-   kill, so it may reach connected afterwards. A session whose start is stuck
-   at an Emacs prompt yields :cider/blocked-on-prompt, naming the prompt and
-   how to answer it."
-  [session-name project-dir]
-  (if (spawn-session-internal session-name project-dir)
-    (let [readiness (wait-for-session-ready session-name session-ready-max-attempts)]
-      (cond
-        (= :ready readiness)
-        (result/ok session-name)
-
-        (:blocked readiness)
-        (result/err :cider/blocked-on-prompt
-                    {:message (str "Spawned session '" session-name "' is not connected: "
-                                   "Emacs is waiting for input.\n" (:blocked readiness))})
-
-        :else
-        (result/err :cider/session-timeout
-                    {:message (str "Spawned session '" session-name "' but it was not connected within "
-                                   (quot (* session-ready-poll-ms session-ready-max-attempts) 1000)
-                                   "s. It may still be starting; check with `code cider sessions`.")})))
-    (result/err :cider/spawn-failed
-                {:message (cond-> (str "Failed to spawn session '" session-name "'")
-                            (waiting-prompt) (str ".\n" (waiting-prompt)))})))
+  "Spawn a session and wait for readiness. Admission precedes the launch."
+  ([session-name project-dir] (spawn-and-wait* session-name project-dir nil))
+  ([session-name project-dir request-params]
+   (if-let [refusal (ensure-ready-to-spawn project-dir request-params)]
+     refusal
+     (if (spawn-session-internal session-name project-dir)
+       (let [readiness (wait-for-session-ready session-name session-ready-max-attempts)]
+         (cond
+           (= :ready readiness) (result/ok session-name)
+           (:blocked readiness)
+           (result/err :cider/blocked-on-prompt
+                       {:message (str "Spawned session '" session-name "' is not connected: "
+                                      "Emacs is waiting for input.\n" (:blocked readiness))})
+           :else
+           (result/err :cider/session-timeout
+                       {:message (str "Spawned session '" session-name "' but it was not connected within "
+                                      (quot (* session-ready-poll-ms session-ready-max-attempts) 1000)
+                                      "s. It may still be starting; check with `code cider sessions`.")})))
+       (result/err :cider/spawn-failed
+                   {:message (cond-> (str "Failed to spawn session '" session-name "'")
+                               (waiting-prompt) (str ".\n" (waiting-prompt)))})))))
 
 (defn- ensure-connected*
-  "Ensure CIDER is connected, auto-spawning a session if needed.
-   project-dir scopes session reuse (auto-<hash> per project); nil falls back
-   to the daemon's project root."
-  ([] (ensure-connected* nil))
-  ([project-dir]
+  "Ensure CIDER is connected, auto-spawning a session if needed."
+  ([] (ensure-connected* nil nil))
+  ([project-dir] (ensure-connected* project-dir nil))
+  ([project-dir request-params]
    (log/debug "ensure-cider-connected: checking sessions" {:project-dir project-dir})
    (result/let-ok [sessions (list-sessions*)]
                   (if-let [session (find-connected-session sessions project-dir)]
@@ -279,21 +340,22 @@
                                                     (.hashCode ^String project-dir)))]
                         (log/info "ensure-cider-connected: spawning session"
                                   {:name auto-name :project-dir project-dir})
-                        (spawn-and-wait* auto-name project-dir))
+                        (spawn-and-wait* auto-name project-dir request-params))
                       (let [fallback-dir (result/rescue nil (ec/project-root))]
                         (log/info "ensure-cider-connected: spawning 'auto' (legacy)"
                                   {:project-dir fallback-dir})
-                        (spawn-and-wait* "auto" fallback-dir)))))))
+                        (spawn-and-wait* "auto" fallback-dir request-params)))))))
 
 (defn- with-auto-connect*
   "Execute eval-thunk with auto-connect retry on 'not connected' errors."
-  ([eval-thunk] (with-auto-connect* eval-thunk nil))
-  ([eval-thunk project-dir]
+  ([eval-thunk] (with-auto-connect* eval-thunk nil nil))
+  ([eval-thunk project-dir] (with-auto-connect* eval-thunk project-dir nil))
+  ([eval-thunk project-dir request-params]
    (let [r (eval-thunk)]
      (if (result/ok? r)
        r
        (if (cider-not-connected-error? (:message r))
-         (result/let-ok [session (ensure-connected* project-dir)]
+         (result/let-ok [session (ensure-connected* project-dir request-params)]
                         (log/info "with-auto-connect: reconnected via session" session)
                         (eval-thunk))
          r)))))
@@ -390,7 +452,7 @@
                                       (eval-on-named-port port code timeout directory in-session)
 
                                       directory
-                                      (let [r (ensure-connected* directory)]
+                                      (let [r (ensure-connected* directory params)]
                                         (if (result/ok? r)
                                           (in-session (:ok r))
                                           (update r :message
@@ -419,23 +481,51 @@
 
 (defn- in-named-session
   "Result of (F session-name) once the registry confirms SESSION-NAME resolves;
-   :cider/unknown-session otherwise, with F never called."
-  [session-name f]
-  (result/let-ok [sessions (list-sessions*)
-                  session (resolve-named-session sessions session-name)]
-                 (f session)))
+   :cider/unknown-session otherwise, with F never called.
+
+   The registry listing runs under the caller's bound TIMEOUT-MS (nil: the
+   client default), not the 5 s client default: friction 20261119234502
+   saw an eval given timeout_ms 15000 answer \"timed out after 5000ms\"
+   from this listing. A listing that times out says it was the listing, so
+   the caller knows the eval itself was never sent."
+  ([session-name f] (in-named-session session-name nil f))
+  ([session-name timeout-ms f]
+   (let [sessions (list-sessions* timeout-ms)]
+     (if (and (result/err? sessions) (:timed-out sessions))
+       (update sessions :message
+               #(str "Listing the CIDER session registry (to resolve '" session-name
+                     "') timed out; the eval was not sent. " %))
+       (result/let-ok [sessions sessions
+                       session (resolve-named-session sessions session-name)]
+                      (f session))))))
+
+(defn listing-timeout-ms
+  "The bound for the registry listing a named-session eval runs first: the
+   caller's timeout_ms, else its timeout (seconds), else nil (the client
+   default). Pure."
+  [{:keys [timeout timeout_ms]}]
+  (let [ms (cond-> timeout_ms (string? timeout_ms) parse-long)
+        s  (cond-> timeout (string? timeout) parse-long)]
+    (cond
+      (and (number? ms) (pos? ms)) (long ms)
+      (and (number? s) (pos? s))   (long (* 1000 s))
+      :else nil)))
 
 (defn- eval-in-named-session
   "Evaluate CODE in the session called SESSION-NAME and nowhere else. An
-   unknown name is refused before any eval is sent."
-  [session-name {:keys [code timeout]}]
-  (let [ec-timeout-ms (+ (* (or timeout 60) 1000) 2000)]
+   unknown name is refused before any eval is sent. The registry listing
+   that resolves the name honours the caller's bound (`listing-timeout-ms`)."
+  [session-name {:keys [code timeout] :as params}]
+  (let [ec-timeout-ms (+ (* (or timeout 60) 1000) 2000)
+        listing-ms (listing-timeout-ms params)]
     (result->mcp
      (try-result :cider/eval-failed
                  (fn []
-                   (binding [ec/*max-timeout-ms* (max ec/*max-timeout-ms* ec-timeout-ms)]
+                   (binding [ec/*max-timeout-ms* (max ec/*max-timeout-ms* ec-timeout-ms
+                                                      (or listing-ms 0))]
                      (in-named-session
                       session-name
+                      listing-ms
                       (fn [session]
                         (elisp->result
                           (el/require-and-call-text
@@ -445,18 +535,19 @@
 
 (defn handle-eval
   "Evaluate Clojure code via CIDER. mode selects silent (default) or explicit;
-   session_name (or name, the spawn's word for it) routes to a named session
-   instead, refusing an unknown name."
-  [{:keys [mode session_name] spawn-name :name :as params}]
-  (if-let [session (or (session-arg session_name) (session-arg spawn-name))]
+   session_name (or name, the spawn's word for it, or session) routes to a
+   named session instead, refusing an unknown name."
+  [{:keys [mode] :as params}]
+  (if-let [session (named-session params)]
     (eval-in-named-session session params)
     (handle-eval-common params (or mode "silent"))))
 
 (defn handle-eval-session
   "The eval-session verb: evaluate in a NAMED session, given as session_name
-   or name. A missing name is refused; there is no default connection here."
-  [{:keys [session_name] spawn-name :name :as params}]
-  (if-let [session (or (session-arg session_name) (session-arg spawn-name))]
+   name or session. A missing name is refused; there is no default connection
+   here."
+  [params]
+  (if-let [session (named-session params)]
     (eval-in-named-session session params)
     (tool/mcp-error "Error: eval-session requires 'session_name' (or 'name') naming a spawned or connected session")))
 
@@ -729,28 +820,9 @@
      r)))
 
 (defn handle-spawn
-  "Spawn a new named CIDER session with its own nREPL server, in project_dir
-   (or directory). Full CLI surface: extra_args (raw, pre--M), aliases (-M
-   selection), extra_deps (EDN strings or a map merged into -Sdeps), middleware
-   (appended). local.deps.edn in the project dir is always auto-detected.
-
-   With no aliases named, those of :dev, :test and :nrepl that the project's
-   deps.edn declares are composed (hive-emacs.cider.alias-compose), so the
-   REPL lands with the project's test/ on its classpath; aliases [\"none\"]
-   ask for a plain -M launch.
-
-   A spawn always names a heap ceiling (hive-emacs.cider.heap-cap): the
-   caller's -Xmx, else an alias's, else the default. An -Xmx in extra_args is
-   paired with a SoftMaxHeapSize and an -Xms no larger than it
-   (hive-emacs.cider.heap), so an alias's own soft heap cannot stop the JVM
-   from booting; contradictory explicit values are refused here, before Emacs
-   is asked to start anything.
-
-   An ok answers \"starting\" and is also WATCHED: the session's outcome
-   arrives on a later tool response of the caller that asked (the
-   transport's _caller_id) as the ---CIDER-SPAWN--- block. An emacsclient
-   timeout is watched too, since Emacs may still run the spawn; any other err,
-   a missing directory included, short-circuits the watch."
+  "Spawn a new named CIDER session. Before Emacs receives a launch request,
+   reap owned JVMs of deleted projects and enforce the configured MemAvailable
+   floor. A refusal returns structured :error/:connected_sessions fields."
   [{:keys [name agent_id repl_type port extra_args aliases extra_deps middleware] :as params}]
   (log/info "cider-spawn" {:name name :repl_type repl_type :agent_id agent_id :port port
                            :aliases aliases})
@@ -764,11 +836,16 @@
                       (heap-cap/for-project project_dir repl_type
                                             (spawn-list-param extra_args)
                                             launch-aliases)
-                      (spawn-list-param extra_args)))]
+                      (spawn-list-param extra_args)))
+        admission (when (and (not (str/blank? name))
+                             (result/ok? dir)
+                             (not (:error heap-args)))
+                    (ensure-ready-to-spawn project_dir params))]
     (cond
       (str/blank? name) (tool/mcp-error "Error: spawn requires a non-blank 'name'")
       (result/err? dir) (result->mcp dir)
       (:error heap-args) (tool/mcp-error (:error heap-args))
+      admission (result->mcp admission)
       :else
       (let [owner (:_caller_id params)
             port  (cond-> port (string? port) parse-long)
@@ -779,6 +856,7 @@
                      :port       port
                      :project-dir project_dir
                      :agent-id   agent_id
+                     :owner-id   owner
                      :extra-args (:ok heap-args)
                      :aliases    launch-aliases
                      :extra-deps (extra-deps-param extra_deps)
@@ -809,6 +887,23 @@
                        (if success
                          (result/ok result)
                          (result/err :cider/elisp-failed {:message (str error)})))))))))
+
+(defn handle-liveness
+  "The Emacs liveness verdict as data: breaker state, pid, cause (gc-thrash,
+   busy, down), share of wall time in GC between the last good probes and
+   seconds since the last good probe. Probes first when the cached result
+   is older than 10 s; never waits more than the 3 s probe timeout."
+  [_]
+  (liveness/check!)
+  (tool/mcp-success
+   (json/write-str (or (liveness/status)
+                       {:state "disarmed"
+                        :note "hive-emacs initialized without the liveness gate"}))))
+
+(defn handle-reap
+  "Reap only addon-owned JVM sessions whose project-dir no longer exists."
+  [_]
+  (tool/mcp-success (reap-orphaned!)))
 
 (defn handle-sessions
   "List all active CIDER sessions with their status and ports."
@@ -861,6 +956,8 @@
     :inspect   (via-backend :inspect (backend-only :inspect))
     :restart   (via-backend :restart (backend-only :restart))}
    {:spawn        handle-spawn
+    :liveness     handle-liveness
+    :reap         handle-reap
     :connect      handle-connect
     :sessions     handle-sessions
     :kill-session handle-kill-session
@@ -871,12 +968,12 @@
 
 (defn- subdomain-handler
   "Strip the \"<subdomain> \" prefix off :command before calling INNER.
-   Session identity accepts either :name or :session_name throughout CIDER."
+   Session identity accepts :session_name, :name or :session throughout CIDER."
   [subdomain-name inner]
   (fn [params]
     (let [full   (str (:command params))
           prefix (str subdomain-name " ")
-          session (or (not-empty (:session_name params)) (not-empty (:name params)))]
+          session (named-session params)]
       (inner (cond-> (assoc params :command (if (str/starts-with? full prefix)
                                               (subs full (count prefix))
                                               full))
@@ -895,7 +992,7 @@
             :description (str "REPL operations (hive.emacs addon). Verbs: eval (silent|explicit), doc, info, "
                               "complete, apropos, status, load-file, inspect, restart, spawn "
                               "(extra_args/aliases/extra_deps/middleware; local.deps.edn auto-detected), "
-                              "connect, sessions, kill-session, kill-all, eval-session (session_name or name; "
+                              "reap, connect, sessions, kill-session, kill-all, eval-session (session_name or name; "
                               "an unknown session is refused, never replaced by the default connection). "
                               "backend selects the transport for the verb group above: cider (default, nREPL) "
                               "or slynk (a Common Lisp image over SLY); inspect and restart are slynk-only, "
