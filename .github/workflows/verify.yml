@@ -14,22 +14,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout hive-emacs
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
 
       - name: Setup Clojure
-        uses: DeLaGuardo/setup-clojure@12.5
+        uses: DeLaGuardo/setup-clojure@13.7.0
         with:
-          cli: latest
+          cli: 1.12.7.1681
           # Pinned: a kondo release can add findings to an unchanged tree and
           # gate merges. Bump deliberately, after linting locally at the new
           # version with the dependency pass (a cold local lint is a false green).
-          clj-kondo: '2026.10.20'
+          clj-kondo: '2026.10.26'
+
+      # Caches the resolved dependency tree across runs, keyed on the files
+      # that declare it.
+      - name: Cache Maven and gitlibs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'bb.edn') }}
+          restore-keys: |
+            deps-${{ runner.os }}-
 
       # The macro configs kondo needs live in the dependency jars, and
       # .clj-kondo/imports/ is gitignored, so a fresh checkout has none of
@@ -59,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout hive-emacs
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Read the pinned clojure-elisp compiler
         id: clel
@@ -68,23 +80,33 @@ jobs:
           echo "clojure-elisp $(bash scripts/clel-pin.sh version)"
 
       - name: Checkout clojure-elisp
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: BuddhiLW/clojure-elisp
           ref: ${{ steps.clel.outputs.sha }}
           path: .cache/clojure-elisp
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
 
       - name: Setup Clojure
-        uses: DeLaGuardo/setup-clojure@12.5
+        uses: DeLaGuardo/setup-clojure@13.7.0
         with:
-          cli: latest
-          bb: latest
+          cli: 1.12.7.1681
+          bb: 1.13.230
+
+      - name: Cache Maven and gitlibs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'bb.edn') }}
+          restore-keys: |
+            deps-${{ runner.os }}-
 
       - name: Install Emacs
         run: |
